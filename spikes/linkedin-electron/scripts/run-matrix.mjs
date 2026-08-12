@@ -45,8 +45,8 @@ export function validateMatrix(record) {
     if (field(record, label)?.toLowerCase() !== "yes") errors.push(`${label} must be yes`);
   }
   for (const label of ["Federated redirects or popups", "Passkey route"] ) {
-    if (!/^(human-operable|visibly unsupported)$/i.test(field(record, label) ?? "")) {
-      errors.push(`${label} must be human-operable or visibly unsupported`);
+    if (!/^(human-operable|visibly unsupported|not encountered)$/i.test(field(record, label) ?? "")) {
+      errors.push(`${label} must be human-operable, visibly unsupported, or not encountered`);
     }
   }
   if (!field(record, "Environment")) errors.push("Missing environment evidence");
