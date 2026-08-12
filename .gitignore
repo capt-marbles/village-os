@@ -4,5 +4,6 @@ release/
 .wrangler/
 .vite/
 coverage/
+*.tsbuildinfo
 *.log
 .DS_Store
