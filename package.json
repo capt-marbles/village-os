@@ -16,7 +16,7 @@
     "format:check": "prettier --check .",
     "lint": "oxlint --deny-warnings apps packages scripts",
     "typecheck": "tsc -b",
-    "test": "node --test scripts/*.test.mjs && vitest run --exclude 'spikes/**' --exclude 'scripts/**' --passWithNoTests",
+    "test": "node --test scripts/*.test.mjs && vitest run --config vitest.config.ts",
     "audit:provenance": "node scripts/audit-provenance.mjs",
     "audit:licenses": "node scripts/audit-licenses.mjs",
     "audit:assets": "node scripts/audit-assets.mjs",
