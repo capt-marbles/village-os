@@ -125,16 +125,23 @@ function createLinkedInWindow(): void {
     if (!linkedin.webContents.isDestroyed()) linkedin.webContents.close();
   });
 
-  Menu.setApplicationMenu(Menu.buildFromTemplate([{
-    label: "Compatibility Spike",
-    submenu: [{
-      label: "Confirm signed in (owner)",
-      click: () => {
-        const result = verifyAuthentication(linkedin.webContents.getURL(), true);
-        window.setTitle(`Village internal spike — auth ${result.status} (${result.predicateVersion})`);
-      },
-    }],
-  }]));
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { role: "appMenu" },
+    // Keep normal OS-mediated editing available to the human operator. These
+    // roles act on the focused remote field and never expose clipboard content
+    // to Village's main process, renderer, logs, or model context.
+    { role: "editMenu" },
+    {
+      label: "Compatibility Spike",
+      submenu: [{
+        label: "Confirm signed in (owner)",
+        click: () => {
+          const result = verifyAuthentication(linkedin.webContents.getURL(), true);
+          window.setTitle(`Village internal spike — auth ${result.status} (${result.predicateVersion})`);
+        },
+      }],
+    },
+  ]));
 
   void linkedin.webContents.loadURL(LINKEDIN_LOGIN_URL);
 }
