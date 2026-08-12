@@ -1,0 +1,23 @@
+{
+  "name": "@village/linkedin-electron-spike",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Disposable internal compatibility spike; not for distribution",
+  "main": "dist/main.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsx --test test/*.test.ts",
+    "start": "npm run build && electron .",
+    "matrix:validate": "node scripts/run-matrix.mjs results/template.md",
+    "fixture": "node scripts/owned-fixture.mjs",
+    "package:dir": "npm run build && electron-builder --dir --config electron-builder.yml"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "electron": "43.4.0",
+    "electron-builder": "^26.0.12",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}
