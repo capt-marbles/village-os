@@ -1,6 +1,7 @@
 # LinkedIn / Electron U0 go/no-go decision
 
-Decision: **PENDING — U0 is not complete and U1-U8 must not begin.**
+Decision: **GO RECOMMENDED — product-owner approval pending. U1-U8 must not begin
+until that approval is recorded.**
 
 The numerical thresholds and blank comparison matrix are predeclared in `spikes/linkedin-electron/results/template.md`. A human operator must run the opt-in matrix without automation, credential/cookie logging, challenge bypass, terms acceptance on behalf of another person, or debugger/CDP attachment to LinkedIn.
 
@@ -8,7 +9,18 @@ Technical scope is an internal, model-free, disposable compatibility package. It
 
 Terms review is unresolved and requires a written review of then-current LinkedIn terms before any distribution. Technical success cannot change that status.
 
-Final conclusion: pending (`go`, `revise`, or `no-go`)
+Technical conclusion: GO recommended for continued internal implementation. A
+human password plus mobile-2FA sign-in succeeded, the session persisted across
+three of three normal restarts, the final restart required no Keychain prompt,
+and normal Chrome on the same representative account/network showed no challenge
+or failure. The packaged Electron result was therefore no worse than Chrome in
+the observed comparison.
+
+This is not evidence that all LinkedIn accounts, routes, networks, or future
+site changes are compatible. It does not authorize distribution or automated
+LinkedIn activity.
+
+Final conclusion: pending product-owner approval (`go`, `revise`, or `no-go`)
 
 Approved by: pending
 
