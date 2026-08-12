@@ -40,8 +40,8 @@ Terms-review status: unresolved; internal technical test only
 ## Manual comparison
 
 | Anonymized run | Normal Chrome | Packaged Electron (no debugger) | Owned fixture CDP (never LinkedIn) | password plus 2FA | federated redirects or popups | passkey | challenge incidence | failure rate | deny-policy compatibility | restart retention | local-IP observation | Notes (no secrets) |
-|---|---|---|---|---|---|---|---:|---:|---|---|---|---|
-| pending | pending | pending | pending | pending | pending | pending | pending | pending | pending | pending | pending | pending |
+| -------------- | ------------- | ------------------------------- | ---------------------------------- | ----------------- | ----------------------------- | ------- | ------------------: | -----------: | ------------------------- | ----------------- | -------------------- | ------------------ |
+| pending        | pending       | pending                         | pending                            | pending           | pending                       | pending |             pending |      pending | pending                   | pending           | pending              | pending            |
 
 ## Auth-route classification
 

@@ -14,7 +14,8 @@ const server = createServer((request, response) => {
   response.writeHead(request.url === "/auth" ? 200 : 404, {
     "content-type": "text/html; charset=utf-8",
     "cache-control": "no-store",
-    "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'none'; frame-ancestors 'none'",
+    "content-security-policy":
+      "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'none'; frame-ancestors 'none'",
   });
   response.end(request.url === "/auth" ? body : "Not found");
 });

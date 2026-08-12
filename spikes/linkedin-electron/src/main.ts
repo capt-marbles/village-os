@@ -26,7 +26,14 @@ import {
 } from "./policy.js";
 
 const execFileAsync = promisify(execFile);
-const profileRoot = path.join(app.getPath("appData"), "Village LinkedIn Compatibility Spike", "profiles", "local-principal", "local-device", "linkedin");
+const profileRoot = path.join(
+  app.getPath("appData"),
+  "Village LinkedIn Compatibility Spike",
+  "profiles",
+  "local-principal",
+  "local-device",
+  "linkedin",
+);
 app.setPath("userData", profileRoot);
 
 function describeRoute(url: string): string {
@@ -48,14 +55,24 @@ async function protectProfile(): Promise<void> {
   await mkdir(profileRoot, { recursive: true, mode: profileDirectoryMode });
   await chmod(profileRoot, profileDirectoryMode);
   // macOS-recognized exclusions. Failure is fail-closed because R30 requires a declared posture.
-  await execFileAsync("/usr/bin/xattr", ["-w", "com.apple.metadata:com_apple_backup_excludeItem", "com.apple.backupd", profileRoot]);
-  await writeFile(path.join(profileRoot, ".metadata_never_index"), "", { mode: 0o600 });
+  await execFileAsync("/usr/bin/xattr", [
+    "-w",
+    "com.apple.metadata:com_apple_backup_excludeItem",
+    "com.apple.backupd",
+    profileRoot,
+  ]);
+  await writeFile(path.join(profileRoot, ".metadata_never_index"), "", {
+    mode: 0o600,
+  });
 }
 
 async function createOwnedFixtureWindow(rawUrl: string): Promise<void> {
   const decision = decideDebuggerTarget(rawUrl);
   if (decision.action === "deny") {
-    dialog.showErrorBox("Debugger blocked", "Debugger/CDP is restricted to the Village-owned loopback fixture.");
+    dialog.showErrorBox(
+      "Debugger blocked",
+      "Debugger/CDP is restricted to the Village-owned loopback fixture.",
+    );
     app.quit();
     return;
   }
@@ -63,7 +80,12 @@ async function createOwnedFixtureWindow(rawUrl: string): Promise<void> {
     width: 900,
     height: 700,
     title: "Village owned fixture — CDP compatibility only",
-    webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true },
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webSecurity: true,
+    },
   });
   fixture.webContents.on("will-navigate", (event, url) => {
     if (decideDebuggerTarget(url).action === "deny") event.preventDefault();
@@ -72,17 +94,28 @@ async function createOwnedFixtureWindow(rawUrl: string): Promise<void> {
   await fixture.loadURL(rawUrl);
   fixture.webContents.debugger.attach("1.3");
   fixture.on("closed", () => {
-    if (fixture.webContents.debugger.isAttached()) fixture.webContents.debugger.detach();
+    if (fixture.webContents.debugger.isAttached())
+      fixture.webContents.debugger.detach();
   });
 }
 
-function installDenyPolicy(linkedinSession: Electron.Session, window: BaseWindow): void {
-  linkedinSession.setPermissionRequestHandler((_webContents, permission, callback) => {
-    const decision = decidePermission(permission);
-    window.setTitle(`Village internal spike — blocked ${decision.action === "deny" ? decision.reason : permission}`);
-    callback(false);
-  });
-  linkedinSession.setPermissionCheckHandler((_webContents, permission) => decidePermission(permission).action === "allow");
+function installDenyPolicy(
+  linkedinSession: Electron.Session,
+  window: BaseWindow,
+): void {
+  linkedinSession.setPermissionRequestHandler(
+    (_webContents, permission, callback) => {
+      const decision = decidePermission(permission);
+      window.setTitle(
+        `Village internal spike — blocked ${decision.action === "deny" ? decision.reason : permission}`,
+      );
+      callback(false);
+    },
+  );
+  linkedinSession.setPermissionCheckHandler(
+    (_webContents, permission) =>
+      decidePermission(permission).action === "allow",
+  );
   linkedinSession.on("will-download", (event) => {
     event.preventDefault();
     window.setTitle("Village internal spike — downloads blocked");
@@ -90,10 +123,22 @@ function installDenyPolicy(linkedinSession: Electron.Session, window: BaseWindow
 }
 
 function createLinkedInWindow(): void {
-  const window = new BaseWindow({ width: 1180, height: 820, title: "Village internal spike — Human sign-in" });
-  const linkedin = new WebContentsView({ webPreferences: remoteWebPreferences });
+  const window = new BaseWindow({
+    width: 1180,
+    height: 820,
+    title: "Village internal spike — Human sign-in",
+  });
+  const linkedin = new WebContentsView({
+    webPreferences: remoteWebPreferences,
+  });
   window.contentView.addChildView(linkedin);
-  const resize = () => linkedin.setBounds({ x: 0, y: 0, width: window.getBounds().width, height: window.getBounds().height });
+  const resize = () =>
+    linkedin.setBounds({
+      x: 0,
+      y: 0,
+      width: window.getBounds().width,
+      height: window.getBounds().height,
+    });
   resize();
   window.on("resize", resize);
 
@@ -113,41 +158,59 @@ function createLinkedInWindow(): void {
   linkedin.webContents.on("will-redirect", enforceNavigation);
   linkedin.webContents.setWindowOpenHandler(({ url }) => {
     const decision = decidePopup(url);
-    window.setTitle(`Village internal spike — blocked ${decision.action === "deny" ? decision.reason : "popup"}`);
+    window.setTitle(
+      `Village internal spike — blocked ${decision.action === "deny" ? decision.reason : "popup"}`,
+    );
     return { action: "deny" };
   });
-  linkedin.webContents.on("did-navigate", (_event, url) => window.setTitle(`Village internal spike — ${describeRoute(url)}`));
+  linkedin.webContents.on("did-navigate", (_event, url) =>
+    window.setTitle(`Village internal spike — ${describeRoute(url)}`),
+  );
   linkedin.webContents.on("did-fail-load", (_event, code, description) => {
-    window.setTitle(`Village internal spike — load failed (${code}: ${description})`);
+    window.setTitle(
+      `Village internal spike — load failed (${code}: ${description})`,
+    );
   });
   window.on("closed", () => {
     // BaseWindow does not destroy child WebContentsView contents automatically.
     if (!linkedin.webContents.isDestroyed()) linkedin.webContents.close();
   });
 
-  Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { role: "appMenu" },
-    // Keep normal OS-mediated editing available to the human operator. These
-    // roles act on the focused remote field and never expose clipboard content
-    // to Village's main process, renderer, logs, or model context.
-    { role: "editMenu" },
-    {
-      label: "Compatibility Spike",
-      submenu: [{
-        label: "Confirm signed in (owner)",
-        click: () => {
-          const result = verifyAuthentication(linkedin.webContents.getURL(), true);
-          window.setTitle(`Village internal spike — auth ${result.status} (${result.predicateVersion})`);
-        },
-      }],
-    },
-  ]));
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([
+      { role: "appMenu" },
+      // Keep normal OS-mediated editing available to the human operator. These
+      // roles act on the focused remote field and never expose clipboard content
+      // to Village's main process, renderer, logs, or model context.
+      { role: "editMenu" },
+      {
+        label: "Compatibility Spike",
+        submenu: [
+          {
+            label: "Confirm signed in (owner)",
+            click: () => {
+              const result = verifyAuthentication(
+                linkedin.webContents.getURL(),
+                true,
+              );
+              window.setTitle(
+                `Village internal spike — auth ${result.status} (${result.predicateVersion})`,
+              );
+            },
+          },
+        ],
+      },
+    ]),
+  );
 
   void linkedin.webContents.loadURL(LINKEDIN_LOGIN_URL);
 }
 
 app.whenReady().then(async () => {
-  const posture = evaluateProfilePosture({ encryptionAvailable: safeStorage.isEncryptionAvailable(), platform: process.platform });
+  const posture = evaluateProfilePosture({
+    encryptionAvailable: safeStorage.isEncryptionAvailable(),
+    platform: process.platform,
+  });
   if (!posture.ok) {
     dialog.showErrorBox("Profile protection unavailable", posture.warning);
     app.quit();
@@ -156,7 +219,10 @@ app.whenReady().then(async () => {
   try {
     await protectProfile();
   } catch {
-    dialog.showErrorBox("Profile protection failed", "Could not apply private permissions and backup/indexing exclusions; LinkedIn view will not open.");
+    dialog.showErrorBox(
+      "Profile protection failed",
+      "Could not apply private permissions and backup/indexing exclusions; LinkedIn view will not open.",
+    );
     app.quit();
     return;
   }

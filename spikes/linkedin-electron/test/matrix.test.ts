@@ -6,7 +6,9 @@ test("rejects an unapproved or incomplete compatibility record", () => {
   const result = validateMatrix("# record\nConclusion: pending\n");
   assert.equal(result.ok, false);
   assert.ok(result.errors.some((error: string) => error.includes("approval")));
-  assert.ok(result.errors.some((error: string) => error.includes("restart retention")));
+  assert.ok(
+    result.errors.some((error: string) => error.includes("restart retention")),
+  );
 });
 
 test("accepts a fully populated approved go record", () => {
@@ -62,9 +64,15 @@ test("rejects headings-only evidence and numerical threshold misses", () => {
   ].join("\n");
   const result = validateMatrix(record);
   assert.equal(result.ok, false);
-  assert.ok(result.errors.some((error: string) => error.includes("Restart retention")));
-  assert.ok(result.errors.some((error: string) => error.includes("challenge rate")));
-  assert.ok(result.errors.some((error: string) => error.includes("Policy exceptions")));
+  assert.ok(
+    result.errors.some((error: string) => error.includes("Restart retention")),
+  );
+  assert.ok(
+    result.errors.some((error: string) => error.includes("challenge rate")),
+  );
+  assert.ok(
+    result.errors.some((error: string) => error.includes("Policy exceptions")),
+  );
 });
 
 test("rejects a route without a recorded supported disposition", () => {
@@ -93,5 +101,9 @@ test("rejects a route without a recorded supported disposition", () => {
   ].join("\n");
   const result = validateMatrix(record);
   assert.equal(result.ok, false);
-  assert.ok(result.errors.some((error: string) => error.includes("Federated redirects")));
+  assert.ok(
+    result.errors.some((error: string) =>
+      error.includes("Federated redirects"),
+    ),
+  );
 });
