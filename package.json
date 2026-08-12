@@ -1,0 +1,39 @@
+{
+  "name": "village",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A self-hostable, local-first agent workspace",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@10.33.2",
+  "engines": {
+    "node": ">=24.15.0 <25",
+    "pnpm": ">=10.33.2 <11"
+  },
+  "scripts": {
+    "build": "pnpm -r --if-present build",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "oxlint --deny-warnings apps packages scripts",
+    "typecheck": "tsc -b",
+    "test": "node --test scripts/*.test.mjs && vitest run --exclude 'spikes/**' --exclude 'scripts/**' --passWithNoTests",
+    "audit:provenance": "node scripts/audit-provenance.mjs",
+    "audit:licenses": "node scripts/audit-licenses.mjs",
+    "audit:assets": "node scripts/audit-assets.mjs",
+    "audit:boundaries": "node scripts/audit-boundaries.mjs",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm audit:provenance && pnpm audit:licenses && pnpm audit:assets && pnpm audit:boundaries && pnpm build"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260812.1",
+    "@types/node": "24.10.13",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.1",
+    "oxlint": "1.78.0",
+    "prettier": "3.9.6",
+    "typescript": "5.9.3",
+    "vite": "8.2.1",
+    "vitest": "4.1.0",
+    "wrangler": "4.122.0"
+  }
+}
