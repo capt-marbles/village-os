@@ -1,6 +1,6 @@
 # LinkedIn / Electron compatibility matrix — 2026-08-12
 
-Status: **GO RECOMMENDED — product-owner approval pending**
+Status: **GO — approved for continued internal implementation**
 
 ## Machine-validated summary
 
@@ -41,6 +41,6 @@ confirmed the existing session was signed in with no challenge or failure. The
 Electron run therefore measured 0 percentage points worse for challenge and
 failure incidence in this representative comparison.
 
-Conclusion: pending
-Approved by: pending
-Approval date: pending
+Conclusion: go
+Approved by: Andrew Walker, product owner
+Approval date: 2026-08-12

@@ -1,7 +1,6 @@
 # LinkedIn / Electron U0 go/no-go decision
 
-Decision: **GO RECOMMENDED — product-owner approval pending. U1-U8 must not begin
-until that approval is recorded.**
+Decision: **GO — approved for continued internal implementation.**
 
 The numerical thresholds and blank comparison matrix are predeclared in `spikes/linkedin-electron/results/template.md`. A human operator must run the opt-in matrix without automation, credential/cookie logging, challenge bypass, terms acceptance on behalf of another person, or debugger/CDP attachment to LinkedIn.
 
@@ -20,11 +19,11 @@ This is not evidence that all LinkedIn accounts, routes, networks, or future
 site changes are compatible. It does not authorize distribution or automated
 LinkedIn activity.
 
-Final conclusion: pending product-owner approval (`go`, `revise`, or `no-go`)
+Final conclusion: go
 
-Approved by: pending
+Approved by: Andrew Walker, product owner
 
-Approval date: pending
+Approval date: 2026-08-12
 
 ## Human-run procedure
 
