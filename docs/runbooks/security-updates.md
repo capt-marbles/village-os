@@ -4,7 +4,7 @@ Village alpha supports Electron major 43 on macOS. A dependency upgrade to anoth
 
 ## Release prerequisites
 
-The distributable configuration requires hardened runtime, ASAR integrity validation, app-only ASAR loading, encrypted cookies, disabled Node CLI/environment escape hatches, Developer ID signing, and Apple notarization. It publishes the `alpha` channel from the pinned HTTPS update endpoint.
+The distributable configuration requires hardened runtime, ASAR integrity validation, app-only ASAR loading, encrypted cookies, disabled Node CLI/environment escape hatches, Developer ID signing, and Apple notarization. Automatic publication is disabled until a main-process updater routes every downloaded candidate through the pinned endpoint, signer, checksum, product, channel, and downgrade policy.
 
 Before packaging, provide signing material through Electron Builder's supported `CSC_LINK` or `CSC_NAME` mechanism, one supported Apple notarization credential set, and `VILLAGE_RELEASE_SIGNER_SHA256` with the reviewed certificate fingerprint. Run:
 
@@ -48,4 +48,4 @@ For each candidate release, archive evidence for the source commit, dependency a
 - Target a signed replacement within 72 hours when credentials and upstream fixes are available.
 - If those targets cannot be met, disable update publication and tell alpha users to stop using the affected build. These are operational targets, not a guaranteed public SLA.
 
-Rollback means withdrawing the bad manifest, keeping downgrade protection enabled, and publishing a strictly newer corrected version. Never direct users to bypass signing, Gatekeeper, signer checks, or monotonic-version enforcement.
+Once automatic updates are enabled, rollback means withdrawing the bad manifest, keeping downgrade protection enabled, and publishing a strictly newer corrected version. Never direct users to bypass signing, Gatekeeper, signer checks, or monotonic-version enforcement.

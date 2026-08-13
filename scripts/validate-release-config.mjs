@@ -45,6 +45,11 @@ export function validateReleaseFiles({
     ["appId", releaseConfig.appId, "com.village.desktop"],
     ["productName", releaseConfig.productName, "Village"],
     ["electronVersion", releaseConfig.electronVersion, "43.2.0"],
+    [
+      "electronFuses.resetAdHocDarwinSignature",
+      releaseConfig.electronFuses?.resetAdHocDarwinSignature,
+      true,
+    ],
     ["electronFuses.runAsNode", releaseConfig.electronFuses?.runAsNode, false],
     [
       "electronFuses.enableCookieEncryption",
@@ -78,13 +83,7 @@ export function validateReleaseFiles({
     ],
     ["mac.hardenedRuntime", releaseConfig.mac?.hardenedRuntime, true],
     ["mac.notarize", releaseConfig.mac?.notarize, true],
-    ["publish.provider", releaseConfig.publish?.provider, "generic"],
-    [
-      "publish.url",
-      releaseConfig.publish?.url,
-      "https://updates.village.run/desktop/alpha",
-    ],
-    ["publish.channel", releaseConfig.publish?.channel, "alpha"],
+    ["publish", releaseConfig.publish, null],
   ];
   for (const [field, actual, expected] of expectedRelease) {
     if (actual !== expected)

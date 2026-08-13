@@ -3,6 +3,7 @@ productName: Village
 electronVersion: 43.2.0
 asar: true
 electronFuses:
+  resetAdHocDarwinSignature: true
   runAsNode: false
   enableCookieEncryption: true
   enableNodeOptionsEnvironmentVariable: false
@@ -26,7 +27,4 @@ mac:
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
 artifactName: village-${version}-${arch}.${ext}
-publish:
-  provider: generic
-  url: https://updates.village.run/desktop/alpha
-  channel: alpha
+publish: null

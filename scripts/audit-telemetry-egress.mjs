@@ -60,11 +60,13 @@ export async function auditTelemetryEgress() {
     ]),
   );
   for (const [relative, source] of sources) {
-    if (telemetryModules.includes(relative)) {
-      errors.push(...auditTelemetrySource(source, relative));
-    }
-    if (thirdPartyTelemetry.test(source))
-      errors.push(`${relative} imports a forbidden telemetry SDK`);
+    const sourceErrors = auditTelemetrySource(source, relative).filter(
+      (error) =>
+        telemetryModules.includes(relative) ||
+        error.includes("outbound transport") ||
+        error.includes("telemetry SDK"),
+    );
+    errors.push(...sourceErrors);
   }
   return [...new Set(errors)];
 }

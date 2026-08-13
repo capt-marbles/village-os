@@ -29,6 +29,7 @@ test("static release config requires Electron 43, hardened fuses and a separate 
     productName: "Village",
     electronVersion: "43.2.0",
     electronFuses: {
+      resetAdHocDarwinSignature: true,
       runAsNode: false,
       enableCookieEncryption: true,
       enableNodeOptionsEnvironmentVariable: false,
@@ -38,11 +39,7 @@ test("static release config requires Electron 43, hardened fuses and a separate 
       grantFileProtocolExtraPrivileges: false,
     },
     mac: { hardenedRuntime: true, notarize: true },
-    publish: {
-      provider: "generic",
-      url: "https://updates.village.run/desktop/alpha",
-      channel: "alpha",
-    },
+    publish: null,
   };
   const e2eConfig = {
     extends: "./electron-builder.yml",
