@@ -10,6 +10,10 @@ const now = "2026-08-12T18:00:00.000Z";
 beforeEach(async () => {
   await applyD1Migrations(env.VILLAGE_DB, env.TEST_MIGRATIONS!);
   await env.VILLAGE_DB.batch([
+    env.VILLAGE_DB.prepare("DELETE FROM authenticated_quota_usage"),
+    env.VILLAGE_DB.prepare("DELETE FROM authenticated_principal_quota_usage"),
+  ]);
+  await env.VILLAGE_DB.batch([
     env.VILLAGE_DB.prepare(
       "INSERT OR IGNORE INTO principals (principal_id, created_at) VALUES (?, ?)",
     ).bind(principalId, now),
@@ -33,7 +37,11 @@ describe("authenticated protocol quotas", () => {
           "connections",
           now,
         ),
-      ).toMatchObject({ ok: true, usage: count, limit: 30 });
+      ).toMatchObject({
+        ok: true,
+        usage: { device: count, principal: count },
+        limit: { device: 30, principal: 30 },
+      });
     }
     expect(
       await consumeAuthenticatedQuota(
@@ -43,7 +51,12 @@ describe("authenticated protocol quotas", () => {
         "connections",
         now,
       ),
-    ).toEqual({ ok: false, code: "AUTHENTICATED_QUOTA_EXCEEDED" });
+    ).toMatchObject({
+      ok: false,
+      code: "AUTHENTICATED_QUOTA_EXCEEDED",
+      retryAfterMs: expect.any(Number),
+      retryAt: "2026-08-12T18:01:00.000Z",
+    });
 
     for (let count = 1; count <= 120; count += 1) {
       expect(
@@ -54,7 +67,11 @@ describe("authenticated protocol quotas", () => {
           "commands",
           now,
         ),
-      ).toMatchObject({ ok: true, usage: count, limit: 120 });
+      ).toMatchObject({
+        ok: true,
+        usage: { device: count, principal: count },
+        limit: { device: 120, principal: 120 },
+      });
     }
     expect(
       await consumeAuthenticatedQuota(
@@ -64,6 +81,58 @@ describe("authenticated protocol quotas", () => {
         "commands",
         now,
       ),
-    ).toEqual({ ok: false, code: "AUTHENTICATED_QUOTA_EXCEEDED" });
+    ).toMatchObject({ ok: false, code: "AUTHENTICATED_QUOTA_EXCEEDED" });
+  });
+
+  it("enforces a shared principal budget across devices and bounds replay, notification, and retained-record classes", async () => {
+    const secondDeviceId = "dev_01J00000000000000000000004";
+    await env.VILLAGE_DB.prepare(
+      `INSERT INTO devices
+       (principal_id, device_id, public_key, credential_status, protocol_version,
+        last_accepted_sequence, created_at)
+       VALUES (?, ?, '{}', 'ACTIVE', 1, 0, ?)`,
+    )
+      .bind(principalId, secondDeviceId, now)
+      .run();
+    await env.VILLAGE_DB.prepare(
+      `INSERT INTO authenticated_principal_quota_usage
+       (principal_id, window_started_at, connections, commands, replays, notifications, retained_records)
+       VALUES (?, ?, 30, 0, 0, 0, 0)`,
+    )
+      .bind(principalId, "2026-08-12T18:00:00.000Z")
+      .run();
+
+    await expect(
+      consumeAuthenticatedQuota(
+        env.VILLAGE_DB,
+        principalId,
+        secondDeviceId,
+        "connections",
+        now,
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: "AUTHENTICATED_QUOTA_EXCEEDED",
+      retryAt: "2026-08-12T18:01:00.000Z",
+    });
+
+    for (const kind of [
+      "replays",
+      "notifications",
+      "retainedRecords",
+    ] as const) {
+      await expect(
+        consumeAuthenticatedQuota(
+          env.VILLAGE_DB,
+          principalId,
+          deviceId,
+          kind,
+          now,
+        ),
+      ).resolves.toMatchObject({
+        ok: true,
+        usage: { device: 1, principal: 1 },
+      });
+    }
   });
 });
