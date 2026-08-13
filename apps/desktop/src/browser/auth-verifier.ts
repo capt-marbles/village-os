@@ -1,4 +1,5 @@
 import {
+  OWNED_FIXTURE_ORIGIN,
   verificationResultSchema,
   type VerificationResult,
 } from "@village/contracts";
@@ -43,12 +44,19 @@ export function verifyAuthentication(
   if (input.site === "LINKEDIN") {
     status = linkedInRoute === "SIGN_IN" ? "not_authenticated" : "unknown";
   } else {
-    status =
-      input.fixturePredicate === "AUTHENTICATED"
+    let fixtureOriginMatches = false;
+    try {
+      fixtureOriginMatches = new URL(input.url).origin === OWNED_FIXTURE_ORIGIN;
+    } catch {
+      // Invalid or partial locations cannot support authentication evidence.
+    }
+    status = fixtureOriginMatches
+      ? input.fixturePredicate === "AUTHENTICATED"
         ? "authenticated"
         : input.fixturePredicate === "NOT_AUTHENTICATED"
           ? "not_authenticated"
-          : "unknown";
+          : "unknown"
+      : "unknown";
   }
   return verificationResultSchema.parse({
     status,

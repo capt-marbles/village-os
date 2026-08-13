@@ -139,5 +139,17 @@ describe("LinkedIn human-only policy", () => {
         }),
       ).toEqual({ status, predicateVersion: "fixture-auth-v1" });
     }
+
+    for (const url of ["https://attacker.invalid/account", "not a url"]) {
+      expect(
+        verifyAuthentication({
+          site: "OWNED_FIXTURE",
+          url,
+          predicateVersion: "fixture-auth-v1",
+          debuggerAttached: false,
+          fixturePredicate: "AUTHENTICATED",
+        }),
+      ).toEqual({ status: "unknown", predicateVersion: "fixture-auth-v1" });
+    }
   });
 });
