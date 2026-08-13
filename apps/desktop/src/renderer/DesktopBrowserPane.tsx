@@ -76,13 +76,19 @@ export function DesktopBrowserPane({
   useEffect(() => {
     if (!activeBridge) return;
     let active = true;
+    let hasCanonicalSnapshot = false;
     const publish = (next: BrowserUiSnapshot) => {
       if (!active) return;
-      setSnapshot((current) =>
-        Date.parse(next.lastUpdatedAt) >= Date.parse(current.lastUpdatedAt)
+      setSnapshot((current) => {
+        if (!hasCanonicalSnapshot) {
+          hasCanonicalSnapshot = true;
+          return next;
+        }
+        return Date.parse(next.lastUpdatedAt) >=
+          Date.parse(current.lastUpdatedAt)
           ? next
-          : current,
-      );
+          : current;
+      });
     };
     const unsubscribe = activeBridge.subscribeBrowserUiState(publish);
     void activeBridge
