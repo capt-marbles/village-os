@@ -7,7 +7,13 @@ import {
   jobIdSchema,
   principalIdSchema,
 } from "./ids.js";
-import { browserObservationSchema } from "./redaction.js";
+import { verificationStatusSchema } from "./browser.js";
+import {
+  browserObservationSchema,
+  canonicalOriginSchema,
+  predicateIdSchema,
+} from "./redaction.js";
+import { humanGateReasonSchema } from "./secrets.js";
 
 const sessionOpenCommandSchema = z.strictObject({
   capability: z.literal("SESSION_OPEN"),
@@ -41,17 +47,7 @@ const secretFillCommandSchema = z.strictObject({
 
 const humanGateCommandSchema = z.strictObject({
   capability: z.literal("REQUEST_HUMAN_GATE"),
-  reason: z.enum([
-    "CREDENTIAL",
-    "TWO_FACTOR",
-    "CAPTCHA",
-    "PASSKEY",
-    "PASSWORD_RESET",
-    "FEDERATED_IDENTITY",
-    "TERMS_OR_CONSENT",
-    "SECURITY_WARNING",
-    "UNKNOWN_CHALLENGE",
-  ]),
+  reason: humanGateReasonSchema,
 });
 
 const checkpointCommandSchema = z.strictObject({
@@ -65,7 +61,7 @@ const checkpointCommandSchema = z.strictObject({
 
 const verifyCommandSchema = z.strictObject({
   capability: z.literal("VERIFY_AUTHENTICATION"),
-  predicateVersion: z.string().regex(/^[a-z0-9-]{1,64}$/),
+  predicateVersion: predicateIdSchema,
 });
 
 export const browserCommandSchema = z.discriminatedUnion("capability", [
@@ -79,32 +75,45 @@ export const browserCommandSchema = z.discriminatedUnion("capability", [
   verifyCommandSchema,
 ]);
 
-export const signedCommandEnvelopeSchema = z
-  .strictObject({
-    protocolVersion: z.literal(1),
-    principalId: principalIdSchema,
-    deviceId: deviceIdSchema,
-    jobId: jobIdSchema,
-    browserSessionId: browserSessionIdSchema,
-    actionId: actionIdSchema,
-    leaseEpoch: z.number().int().positive(),
-    sequence: z.number().int().positive(),
-    issuedAt: instantSchema,
-    expiresAt: instantSchema,
-    command: browserCommandSchema,
-    signature: z.string().regex(/^[A-Za-z0-9_-]{8,2048}$/),
-  })
-  .superRefine((envelope, context) => {
-    const lifetime =
-      Date.parse(envelope.expiresAt) - Date.parse(envelope.issuedAt);
-    if (lifetime <= 0 || lifetime > 60_000) {
-      context.addIssue({
-        code: "custom",
-        message: "expiresAt must follow issuedAt",
-        path: ["expiresAt"],
-      });
-    }
-  });
+const authenticatedEnvelopeBinding = {
+  protocolVersion: z.literal(1),
+  principalId: principalIdSchema,
+  deviceId: deviceIdSchema,
+  jobId: jobIdSchema,
+  browserSessionId: browserSessionIdSchema,
+  actionId: actionIdSchema,
+  leaseEpoch: z.number().int().positive(),
+  sequence: z.number().int().positive(),
+  issuedAt: instantSchema,
+  expiresAt: instantSchema,
+  signature: z.string().regex(/^[A-Za-z0-9_-]{8,2048}$/),
+};
+
+function boundedAuthenticatedEnvelope<Shape extends z.ZodRawShape>(
+  payload: Shape,
+) {
+  return z
+    .strictObject({ ...authenticatedEnvelopeBinding, ...payload })
+    .superRefine((envelope, context) => {
+      const temporal = envelope as unknown as {
+        issuedAt: string;
+        expiresAt: string;
+      };
+      const lifetime =
+        Date.parse(temporal.expiresAt) - Date.parse(temporal.issuedAt);
+      if (lifetime <= 0 || lifetime > 60_000) {
+        context.addIssue({
+          code: "custom",
+          message: "Envelope lifetime must be between 1ms and 60s",
+          path: ["expiresAt"],
+        });
+      }
+    });
+}
+
+export const signedCommandEnvelopeSchema = boundedAuthenticatedEnvelope({
+  command: browserCommandSchema,
+});
 
 export const commandResultSchema = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("ACCEPTED") }),
@@ -120,48 +129,99 @@ export const commandResultSchema = z.discriminatedUnion("status", [
   }),
   z.strictObject({
     status: z.literal("VERIFICATION"),
-    verification: z.enum([
-      "authenticated",
-      "confirmed_by_user",
-      "not_authenticated",
-      "unknown",
-    ]),
-    predicateVersion: z.string().regex(/^[a-z0-9-]{1,64}$/),
+    verification: verificationStatusSchema,
+    predicateVersion: predicateIdSchema,
   }),
 ]);
 
-export const signedResultEnvelopeSchema = z
-  .strictObject({
-    protocolVersion: z.literal(1),
-    principalId: principalIdSchema,
-    deviceId: deviceIdSchema,
-    jobId: jobIdSchema,
-    browserSessionId: browserSessionIdSchema,
-    actionId: actionIdSchema,
-    leaseEpoch: z.number().int().positive(),
-    sequence: z.number().int().positive(),
-    issuedAt: instantSchema,
-    expiresAt: instantSchema,
-    result: commandResultSchema,
-    signature: z.string().regex(/^[A-Za-z0-9_-]{8,2048}$/),
-  })
-  .superRefine((envelope, context) => {
-    const lifetime =
-      Date.parse(envelope.expiresAt) - Date.parse(envelope.issuedAt);
-    if (lifetime <= 0 || lifetime > 60_000) {
-      context.addIssue({
-        code: "custom",
-        message: "expiresAt must follow issuedAt",
-        path: ["expiresAt"],
-      });
-    }
-  });
+export const signedResultEnvelopeSchema = boundedAuthenticatedEnvelope({
+  result: commandResultSchema,
+});
 
 export type BrowserCommand = z.infer<typeof browserCommandSchema>;
 export type SignedCommandEnvelope = z.infer<typeof signedCommandEnvelopeSchema>;
 export type SignedResultEnvelope = z.infer<typeof signedResultEnvelopeSchema>;
 
 export type Site = "OWNED_FIXTURE" | "LINKEDIN";
+
+const capabilitySchema = browserCommandSchema.options[0].shape.capability
+  .or(browserCommandSchema.options[1].shape.capability)
+  .or(browserCommandSchema.options[2].shape.capability)
+  .or(browserCommandSchema.options[3].shape.capability)
+  .or(browserCommandSchema.options[4].shape.capability)
+  .or(browserCommandSchema.options[5].shape.capability)
+  .or(browserCommandSchema.options[6].shape.capability)
+  .or(browserCommandSchema.options[7].shape.capability);
+
+export const commandCapabilityPolicySchema = z.strictObject({
+  capability: capabilitySchema,
+  approvalClass: z.enum(["AUTOMATIC", "OWNER_APPROVAL", "OWNER_ONLY"]),
+  preconditions: z
+    .array(
+      z.enum(["ACTIVE_LEASE", "EXACT_SITE", "OWNED_FIXTURE", "OWNER_PRESENT"]),
+    )
+    .max(8),
+  postconditions: z
+    .array(
+      z.enum(["NONE", "ORIGIN_MATCHES", "FACTS_BOUNDED", "RECEIPT_REQUIRED"]),
+    )
+    .max(8),
+  budget: z.strictObject({
+    maxArgumentBytes: z.number().int().positive().max(4096),
+    maxCallsPerMinute: z.number().int().positive().max(600),
+  }),
+});
+
+export const siteCommandPolicySchema = z.strictObject({
+  site: z.enum(["OWNED_FIXTURE", "LINKEDIN"]),
+  allowedOrigins: z.array(canonicalOriginSchema).min(1).max(4),
+  capabilities: z.array(commandCapabilityPolicySchema).min(1).max(16),
+});
+
+const allCapabilities = browserCommandSchema.options.map(
+  (option) => option.shape.capability.value,
+);
+const linkedInCapabilities = allCapabilities.filter(
+  (capability) =>
+    capability !== "FIXTURE_INPUT" && capability !== "REQUEST_SECRET_FILL",
+);
+
+function capabilityPolicy(capability: (typeof allCapabilities)[number]) {
+  const ownerOnly =
+    capability === "REQUEST_HUMAN_GATE" || capability === "REQUEST_SECRET_FILL";
+  return {
+    capability,
+    approvalClass: ownerOnly ? "OWNER_ONLY" : "AUTOMATIC",
+    preconditions: [
+      "ACTIVE_LEASE",
+      "EXACT_SITE",
+      ...(capability === "FIXTURE_INPUT" || capability === "REQUEST_SECRET_FILL"
+        ? (["OWNED_FIXTURE"] as const)
+        : []),
+    ],
+    postconditions: [
+      capability === "OBSERVE" ? "FACTS_BOUNDED" : "RECEIPT_REQUIRED",
+    ],
+    budget: { maxArgumentBytes: 512, maxCallsPerMinute: 120 },
+  } as const;
+}
+
+const siteCommandPolicies = {
+  OWNED_FIXTURE: siteCommandPolicySchema.parse({
+    site: "OWNED_FIXTURE",
+    allowedOrigins: ["https://fixture.village.test"],
+    capabilities: allCapabilities.map(capabilityPolicy),
+  }),
+  LINKEDIN: siteCommandPolicySchema.parse({
+    site: "LINKEDIN",
+    allowedOrigins: ["https://www.linkedin.com"],
+    capabilities: linkedInCapabilities.map(capabilityPolicy),
+  }),
+};
+
+export function commandPolicyFor(site: Site) {
+  return siteCommandPolicies[site];
+}
 export type SiteCommandAuthorization =
   | { ok: true }
   | {
@@ -176,6 +236,14 @@ export function authorizeSiteCommand(
   const parsed = browserCommandSchema.safeParse(candidate);
   if (!parsed.success) return { ok: false, code: "SITE_CAPABILITY_DENIED" };
   const command = parsed.data;
+  const policy = commandPolicyFor(site);
+  if (
+    !policy.capabilities.some(
+      (entry) => entry.capability === command.capability,
+    )
+  ) {
+    return { ok: false, code: "SITE_CAPABILITY_DENIED" };
+  }
   if (
     command.capability === "NAVIGATE" &&
     ((site === "LINKEDIN" && command.destination !== "LINKEDIN_SIGN_IN") ||

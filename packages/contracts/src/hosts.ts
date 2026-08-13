@@ -38,6 +38,46 @@ export const siteExecutionPolicySchema = z.strictObject({
   requiredCapabilities: z.array(hostCapabilitySchema).max(8),
 });
 
+export const siteExecutionPolicies = {
+  OWNED_FIXTURE: siteExecutionPolicySchema.parse({
+    site: "OWNED_FIXTURE",
+    eligibleTrustClasses: ["LOCAL_TRUSTED"],
+    eligibleNetworkClasses: ["USER_NETWORK"],
+    requiredCapabilities: [
+      "VISIBLE_BROWSER",
+      "LOCAL_PROFILE",
+      "HUMAN_TAKEOVER",
+    ],
+  }),
+  LINKEDIN: siteExecutionPolicySchema.parse({
+    site: "LINKEDIN",
+    eligibleTrustClasses: ["LOCAL_TRUSTED"],
+    eligibleNetworkClasses: ["USER_NETWORK"],
+    requiredCapabilities: [
+      "VISIBLE_BROWSER",
+      "LOCAL_PROFILE",
+      "HUMAN_TAKEOVER",
+    ],
+  }),
+} as const;
+
+export function isHostEligibleForSite(
+  host: ExecutionHost,
+  site: keyof typeof siteExecutionPolicies,
+): boolean {
+  const parsed = executionHostSchema.safeParse(host);
+  if (!parsed.success) return false;
+  const policy = siteExecutionPolicies[site];
+  return (
+    parsed.data.connection === "ONLINE" &&
+    policy.eligibleTrustClasses.includes(parsed.data.trustClass as never) &&
+    policy.eligibleNetworkClasses.includes(parsed.data.networkClass as never) &&
+    policy.requiredCapabilities.every((capability) =>
+      parsed.data.capabilities.includes(capability),
+    )
+  );
+}
+
 export const authenticatedQuotaPolicySchema = z.strictObject({
   maxConnectionsPerPrincipal: z.number().int().positive().max(128),
   maxConnectionsPerDevice: z.number().int().positive().max(32),

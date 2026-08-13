@@ -49,4 +49,53 @@ describe("job ledger", () => {
       code: "NON_MONOTONIC_SEQUENCE",
     });
   });
+
+  it("replays distinct predicate and owner-confirmed authentication evidence", () => {
+    const hostAvailable = {
+      ...created,
+      eventId: "evt_01J00000000000000000000003",
+      sequence: 2,
+      type: "BROWSER_HOST_AVAILABLE",
+      payload: {
+        browserSessionId: "brs_01J00000000000000000000000",
+      },
+    } as const;
+    const verificationStarted = {
+      ...created,
+      eventId: "evt_01J00000000000000000000004",
+      sequence: 3,
+      type: "VERIFICATION_STARTED",
+      payload: {},
+    } as const;
+    const automatic = {
+      ...created,
+      eventId: "evt_01J00000000000000000000005",
+      sequence: 4,
+      type: "JOB_SUCCEEDED",
+      payload: {
+        evidence: "PREDICATE_AUTHENTICATED",
+        predicateVersion: "fixture-auth-v1",
+      },
+    } as const;
+    const ownerConfirmed = {
+      ...automatic,
+      payload: {
+        evidence: "OWNER_CONFIRMED",
+        confirmationVersion: "owner-confirmation-v1",
+      },
+    } as const;
+
+    expect(
+      replayJobEvents([created, hostAvailable, verificationStarted, automatic]),
+    ).toMatchObject({ ok: true, job: { state: "SUCCEEDED" } });
+    expect(
+      replayJobEvents([
+        created,
+        hostAvailable,
+        verificationStarted,
+        ownerConfirmed,
+      ]),
+    ).toMatchObject({ ok: true, job: { state: "SUCCEEDED" } });
+    expect(automatic.payload).not.toEqual(ownerConfirmed.payload);
+  });
 });

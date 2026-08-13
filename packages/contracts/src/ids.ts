@@ -19,5 +19,8 @@ export const nodeIdSchema = villageId("nod");
 export const operationAuthorizationIdSchema = villageId("opa");
 export const stepUpAuthorizationIdSchema = villageId("stp");
 export const pairingIdSchema = villageId("par");
+export const checkpointIdSchema = villageId("chk");
+export const browserStepIdSchema = villageId("bsp");
+export const receiptIdSchema = villageId("rcp");
 
 export const instantSchema = z.iso.datetime({ offset: true });

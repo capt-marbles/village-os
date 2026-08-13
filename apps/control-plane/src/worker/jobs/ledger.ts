@@ -104,10 +104,21 @@ export function applyJobEvent(
         return { ok: false, code: "ILLEGAL_EVENT" };
       state = "RUNNING_USER";
       break;
+    case "SECRET_BROKER_ACCEPTED":
+      if (job.state !== "WAITING_FOR_SECRET")
+        return { ok: false, code: "ILLEGAL_EVENT" };
+      state = "RUNNING_AGENT";
+      activeHumanGateId = null;
+      break;
+    case "SECRET_BROKER_DECLINED":
+      if (job.state !== "WAITING_FOR_SECRET")
+        return { ok: false, code: "ILLEGAL_EVENT" };
+      state = "WAITING_FOR_USER";
+      break;
     case "AGENT_CONTROL_RECONCILED":
       if (job.state !== "RUNNING_USER")
         return { ok: false, code: "ILLEGAL_EVENT" };
-      state = "RUNNING_AGENT";
+      state = "VERIFYING";
       activeHumanGateId = null;
       break;
     case "VERIFICATION_STARTED":
@@ -115,6 +126,17 @@ export function applyJobEvent(
         return { ok: false, code: "ILLEGAL_EVENT" };
       state = "VERIFYING";
       activeHumanGateId = null;
+      break;
+    case "VERIFICATION_RECONCILED":
+      if (job.state !== "VERIFYING")
+        return { ok: false, code: "ILLEGAL_EVENT" };
+      state = "RUNNING_AGENT";
+      break;
+    case "VERIFICATION_UNKNOWN":
+      if (job.state !== "VERIFYING")
+        return { ok: false, code: "ILLEGAL_EVENT" };
+      state = "WAITING_FOR_USER";
+      activeHumanGateId = event.payload.humanGateId;
       break;
     case "JOB_SUCCEEDED":
       if (job.state !== "VERIFYING")

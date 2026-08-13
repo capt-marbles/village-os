@@ -1,9 +1,15 @@
 import { z } from "zod";
 import {
   actionIdSchema,
+  browserStepIdSchema,
   browserSessionIdSchema,
+  deviceIdSchema,
   instantSchema,
+  jobIdSchema,
+  principalIdSchema,
+  receiptIdSchema,
 } from "./ids.js";
+import { predicateIdSchema } from "./redaction.js";
 
 export const actionPhaseSchema = z.enum([
   "ACCEPTED",
@@ -26,6 +32,44 @@ export const browserActionSchema = z.strictObject({
     "NOT_SATISFIED",
     "UNKNOWN",
   ]),
+});
+
+export const browserStepSchema = z.strictObject({
+  stepId: browserStepIdSchema,
+  principalId: principalIdSchema,
+  deviceId: deviceIdSchema,
+  jobId: jobIdSchema,
+  browserSessionId: browserSessionIdSchema,
+  ordinal: z.number().int().positive().max(10_000),
+  capability: z.enum([
+    "SESSION_OPEN",
+    "NAVIGATE",
+    "OBSERVE",
+    "FIXTURE_INPUT",
+    "REQUEST_SECRET_FILL",
+    "REQUEST_HUMAN_GATE",
+    "CHECKPOINT",
+    "VERIFY_AUTHENTICATION",
+  ]),
+  state: z.enum(["PENDING", "ACTIVE", "COMPLETED", "WAITING", "FAILED"]),
+  createdAt: instantSchema,
+});
+
+export const actionReceiptSchema = z.strictObject({
+  receiptId: receiptIdSchema,
+  principalId: principalIdSchema,
+  deviceId: deviceIdSchema,
+  jobId: jobIdSchema,
+  browserSessionId: browserSessionIdSchema,
+  actionId: actionIdSchema,
+  stepId: browserStepIdSchema,
+  outcome: z.enum([
+    "POSTCONDITION_SATISFIED",
+    "POSTCONDITION_NOT_SATISFIED",
+    "OUTCOME_UNKNOWN",
+  ]),
+  predicateIds: z.array(predicateIdSchema).max(16),
+  recordedAt: instantSchema,
 });
 
 export type ActionPhase = z.infer<typeof actionPhaseSchema>;

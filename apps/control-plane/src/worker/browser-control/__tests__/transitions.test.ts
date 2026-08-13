@@ -60,6 +60,7 @@ describe("browser control transitions", () => {
       acceptBrowserCommand(
         requested.state,
         oldCommand,
+        "OWNED_FIXTURE",
         "2026-08-12T18:00:05.000Z",
       ),
     ).toEqual({
@@ -78,6 +79,26 @@ describe("browser control transitions", () => {
     ).toEqual({
       ok: false,
       code: "ILLEGAL_TRANSITION",
+    });
+  });
+
+  it("turns host loss during takeover quiescence into an offline resumable state", () => {
+    const requested = transitionBrowserControl(initial, {
+      type: "ONLINE_TAKEOVER_REQUESTED",
+    });
+    if (!requested.ok) throw new Error("takeover request unexpectedly failed");
+
+    const lost = transitionBrowserControl(requested.state, {
+      type: "HOST_WENT_OFFLINE",
+    });
+    expect(lost).toMatchObject({
+      ok: true,
+      state: {
+        connection: "OFFLINE",
+        controller: "USER",
+        automationBlocked: true,
+        takeover: "OFFLINE_MARKED",
+      },
     });
   });
 
@@ -127,6 +148,7 @@ describe("browser control transitions", () => {
       acceptBrowserCommand(
         reconnected.state,
         oldCommand,
+        "OWNED_FIXTURE",
         "2026-08-12T18:00:05.000Z",
       ),
     ).toEqual({
@@ -180,6 +202,7 @@ describe("browser control transitions", () => {
     const accepted = acceptBrowserCommand(
       initial,
       oldCommand,
+      "OWNED_FIXTURE",
       "2026-08-12T18:00:05.000Z",
     );
     expect(accepted).toMatchObject({
@@ -192,6 +215,7 @@ describe("browser control transitions", () => {
       acceptBrowserCommand(
         accepted.state,
         oldCommand,
+        "OWNED_FIXTURE",
         "2026-08-12T18:00:05.000Z",
       ),
     ).toEqual({
@@ -199,7 +223,12 @@ describe("browser control transitions", () => {
       code: "REPLAYED_SEQUENCE",
     });
     expect(
-      acceptBrowserCommand(initial, oldCommand, "2026-08-12T18:00:10.000Z"),
+      acceptBrowserCommand(
+        initial,
+        oldCommand,
+        "OWNED_FIXTURE",
+        "2026-08-12T18:00:10.000Z",
+      ),
     ).toEqual({
       ok: false,
       code: "EXPIRED",
@@ -208,6 +237,7 @@ describe("browser control transitions", () => {
       acceptBrowserCommand(
         initial,
         { ...oldCommand, deviceId: "dev_01J00000000000000000000001" },
+        "OWNED_FIXTURE",
         "2026-08-12T18:00:05.000Z",
       ),
     ).toEqual({ ok: false, code: "IDENTITY_MISMATCH" });
@@ -215,6 +245,7 @@ describe("browser control transitions", () => {
       acceptBrowserCommand(
         initial,
         { ...oldCommand, jobId: "job_01J00000000000000000000001" },
+        "OWNED_FIXTURE",
         "2026-08-12T18:00:05.000Z",
       ),
     ).toEqual({ ok: false, code: "IDENTITY_MISMATCH" });
@@ -222,6 +253,7 @@ describe("browser control transitions", () => {
       acceptBrowserCommand(
         { ...initial, leaseExpiresAt: "2026-08-12T18:00:04.000Z" },
         oldCommand,
+        "OWNED_FIXTURE",
         "2026-08-12T18:00:05.000Z",
       ),
     ).toEqual({ ok: false, code: "LEASE_EXPIRED" });
@@ -233,6 +265,7 @@ describe("browser control transitions", () => {
           issuedAt: "2026-08-12T18:00:06.000Z",
           expiresAt: "2026-08-12T18:00:16.000Z",
         },
+        "OWNED_FIXTURE",
         "2026-08-12T18:00:05.000Z",
       ),
     ).toEqual({ ok: false, code: "NOT_YET_VALID" });
@@ -240,11 +273,30 @@ describe("browser control transitions", () => {
       acceptBrowserCommand(
         initial,
         { ...oldCommand, unexpected: true },
+        "OWNED_FIXTURE",
         "2026-08-12T18:00:05.000Z",
       ),
     ).toEqual({
       ok: false,
       code: "INVALID_ENVELOPE",
     });
+  });
+
+  it("enforces site policy inside command acceptance", () => {
+    expect(
+      acceptBrowserCommand(
+        initial,
+        {
+          ...oldCommand,
+          command: {
+            capability: "FIXTURE_INPUT",
+            field: "IDENTIFIER",
+            value: "fixture-user",
+          },
+        },
+        "LINKEDIN",
+        "2026-08-12T18:00:05.000Z",
+      ),
+    ).toEqual({ ok: false, code: "SITE_CAPABILITY_DENIED" });
   });
 });

@@ -1,8 +1,10 @@
 import {
   browserControlStateSchema,
+  authorizeSiteCommand,
   signedCommandEnvelopeSchema,
   type BrowserControlState,
   type SignedCommandEnvelope,
+  type Site,
 } from "@village/contracts";
 
 export type BrowserControlEvent =
@@ -61,9 +63,10 @@ export function transitionBrowserControl(
         state: {
           ...state,
           connection: "OFFLINE",
-          controller: "NONE",
+          controller: state.takeover === "QUIESCING" ? "USER" : "NONE",
           leaseExpiresAt: null,
           automationBlocked: true,
+          takeover: state.takeover === "QUIESCING" ? "OFFLINE_MARKED" : "NONE",
         },
       };
     case "OFFLINE_TAKEOVER_REQUESTED":
@@ -157,18 +160,23 @@ export type CommandAcceptance =
         | "LEASE_EXPIRED"
         | "EXPIRED"
         | "NOT_YET_VALID"
-        | "REPLAYED_SEQUENCE";
+        | "REPLAYED_SEQUENCE"
+        | "SITE_CAPABILITY_DENIED"
+        | "DESTINATION_SITE_MISMATCH";
     };
 
 export function acceptBrowserCommand(
   current: BrowserControlState,
   candidate: unknown,
+  site: Site,
   now: string,
 ): CommandAcceptance {
   const state = browserControlStateSchema.parse(current);
   const parsed = signedCommandEnvelopeSchema.safeParse(candidate);
   if (!parsed.success) return { ok: false, code: "INVALID_ENVELOPE" };
   const envelope = parsed.data;
+  const siteAuthorization = authorizeSiteCommand(site, envelope.command);
+  if (!siteAuthorization.ok) return siteAuthorization;
   if (
     envelope.principalId !== state.principalId ||
     envelope.deviceId !== state.deviceId ||

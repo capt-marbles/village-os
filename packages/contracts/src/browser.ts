@@ -7,6 +7,7 @@ import {
   jobIdSchema,
   principalIdSchema,
 } from "./ids.js";
+import { predicateIdSchema } from "./redaction.js";
 
 export const controllerSchema = z.enum(["NONE", "AGENT", "USER"]);
 export const connectionStateSchema = z.enum(["ONLINE", "OFFLINE", "ABSENT"]);
@@ -120,22 +121,26 @@ export const browserSessionSchema = z
     }
   });
 
-export const verificationResultSchema = z.discriminatedUnion("status", [
+export const verificationStatusSchema = z.enum([
+  "authenticated",
+  "confirmed_by_user",
+  "not_authenticated",
+  "unknown",
+]);
+
+export const verificationResultSchema = z.strictObject({
+  status: verificationStatusSchema,
+  predicateVersion: predicateIdSchema,
+});
+
+export const authenticationEvidenceSchema = z.discriminatedUnion("evidence", [
   z.strictObject({
-    status: z.literal("authenticated"),
-    predicateVersion: z.string().min(1).max(64),
+    evidence: z.literal("PREDICATE_AUTHENTICATED"),
+    predicateVersion: predicateIdSchema,
   }),
   z.strictObject({
-    status: z.literal("confirmed_by_user"),
-    predicateVersion: z.string().min(1).max(64),
-  }),
-  z.strictObject({
-    status: z.literal("not_authenticated"),
-    predicateVersion: z.string().min(1).max(64),
-  }),
-  z.strictObject({
-    status: z.literal("unknown"),
-    predicateVersion: z.string().min(1).max(64),
+    evidence: z.literal("OWNER_CONFIRMED"),
+    confirmationVersion: predicateIdSchema,
   }),
 ]);
 

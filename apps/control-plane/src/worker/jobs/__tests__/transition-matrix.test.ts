@@ -37,6 +37,16 @@ const events = {
     type: "USER_CONTROL_ACKNOWLEDGED",
     payload: {},
   },
+  SECRET_BROKER_ACCEPTED: {
+    ...baseEvent,
+    type: "SECRET_BROKER_ACCEPTED",
+    payload: {},
+  },
+  SECRET_BROKER_DECLINED: {
+    ...baseEvent,
+    type: "SECRET_BROKER_DECLINED",
+    payload: {},
+  },
   AGENT_CONTROL_RECONCILED: {
     ...baseEvent,
     type: "AGENT_CONTROL_RECONCILED",
@@ -47,7 +57,24 @@ const events = {
     type: "VERIFICATION_STARTED",
     payload: {},
   },
-  JOB_SUCCEEDED: { ...baseEvent, type: "JOB_SUCCEEDED", payload: {} },
+  VERIFICATION_RECONCILED: {
+    ...baseEvent,
+    type: "VERIFICATION_RECONCILED",
+    payload: {},
+  },
+  VERIFICATION_UNKNOWN: {
+    ...baseEvent,
+    type: "VERIFICATION_UNKNOWN",
+    payload: { humanGateId: "hgt_01J00000000000000000000000" },
+  },
+  JOB_SUCCEEDED: {
+    ...baseEvent,
+    type: "JOB_SUCCEEDED",
+    payload: {
+      evidence: "PREDICATE_AUTHENTICATED",
+      predicateVersion: "linkedin-auth-v1",
+    },
+  },
   JOB_FAILED: {
     ...baseEvent,
     type: "JOB_FAILED",
@@ -78,6 +105,8 @@ const allowed: Record<JobState, ReadonlySet<keyof typeof events>> = {
   WAITING_FOR_SECRET: new Set([
     "BROWSER_HOST_UNAVAILABLE",
     "USER_CONTROL_ACKNOWLEDGED",
+    "SECRET_BROKER_ACCEPTED",
+    "SECRET_BROKER_DECLINED",
     "JOB_FAILED",
     "JOB_CANCELED",
   ]),
@@ -96,6 +125,8 @@ const allowed: Record<JobState, ReadonlySet<keyof typeof events>> = {
   ]),
   VERIFYING: new Set([
     "BROWSER_HOST_UNAVAILABLE",
+    "VERIFICATION_RECONCILED",
+    "VERIFICATION_UNKNOWN",
     "JOB_SUCCEEDED",
     "JOB_FAILED",
     "JOB_CANCELED",

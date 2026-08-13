@@ -3,9 +3,6 @@ import { z } from "zod";
 export const observationContractStatus =
   "PROVISIONAL_UNTIL_U7_BENCHMARK" as const;
 
-const boundedKeySchema = z.string().regex(/^[a-z][a-zA-Z0-9.-]{0,63}$/);
-const boundedStateSchema = z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/);
-
 export const canonicalOriginSchema = z
   .string()
   .max(255)
@@ -23,33 +20,77 @@ export const canonicalOriginSchema = z
     }
   }, "Expected an exact HTTPS origin without path, query, fragment, or credentials");
 
+export const predicateIdSchema = z.string().regex(/^[a-z0-9-]{1,64}$/);
+
+export const observationFactSchema = z.discriminatedUnion("id", [
+  z.strictObject({
+    id: z.literal("AUTH_STATE"),
+    value: z.enum(["SIGNED_OUT", "POSSIBLY_AUTHENTICATED", "UNKNOWN"]),
+  }),
+  z.strictObject({
+    id: z.literal("HUMAN_GATE"),
+    value: z.enum([
+      "NONE",
+      "CREDENTIAL",
+      "TWO_FACTOR",
+      "CAPTCHA",
+      "PASSKEY",
+      "PASSWORD_RESET",
+      "FEDERATED_IDENTITY",
+      "TERMS_OR_CONSENT",
+      "SECURITY_WARNING",
+      "UNKNOWN_CHALLENGE",
+    ]),
+  }),
+  z.strictObject({
+    id: z.literal("ACTION_POSTCONDITION"),
+    value: z.enum(["SATISFIED", "NOT_SATISFIED", "UNKNOWN"]),
+  }),
+  z.strictObject({
+    id: z.literal("VISIBLE_APPROVED_FIELD_COUNT"),
+    value: z.number().int().nonnegative().max(64),
+  }),
+  z.strictObject({
+    id: z.literal("APPROVED_ACTION_AVAILABLE"),
+    value: z.boolean(),
+  }),
+]);
+
 export const browserObservationSchema = z
   .strictObject({
     schemaVersion: z.literal(1),
     source: z.literal("BROWSER_UNTRUSTED"),
     canonicalOrigin: canonicalOriginSchema,
-    predicateIds: z.array(z.string().regex(/^[a-z0-9-]{1,64}$/)).max(16),
-    flags: z.record(boundedKeySchema, z.boolean()),
-    states: z.record(boundedKeySchema, boundedStateSchema),
-    counts: z.record(
-      boundedKeySchema,
-      z.number().int().nonnegative().max(10_000),
-    ),
+    predicateIds: z.array(predicateIdSchema).max(16),
+    facts: z.array(observationFactSchema).max(16),
   })
   .superRefine((observation, context) => {
-    for (const [name, values] of [
-      ["flags", observation.flags],
-      ["states", observation.states],
-      ["counts", observation.counts],
-    ] as const) {
-      if (Object.keys(values).length > 32) {
-        context.addIssue({
-          code: "custom",
-          path: [name],
-          message: `${name} exceeds 32 facts`,
-        });
-      }
+    const ids = observation.facts.map((fact) => fact.id);
+    if (new Set(ids).size !== ids.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["facts"],
+        message: "Observation fact identifiers must be unique",
+      });
     }
   });
+
+export const browserTaintPolicySchema = z.strictObject({
+  source: z.literal("BROWSER_UNTRUSTED"),
+  mayGrantAuthority: z.literal(false),
+  mayWidenDestinations: z.literal(false),
+  mayApproveSecrets: z.literal(false),
+  mayAlterPolicy: z.literal(false),
+  rawPageContentMayLeaveHost: z.literal(false),
+});
+
+export const browserTaintPolicy = browserTaintPolicySchema.parse({
+  source: "BROWSER_UNTRUSTED",
+  mayGrantAuthority: false,
+  mayWidenDestinations: false,
+  mayApproveSecrets: false,
+  mayAlterPolicy: false,
+  rawPageContentMayLeaveHost: false,
+});
 
 export type BrowserObservation = z.infer<typeof browserObservationSchema>;

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   browserSessionIdSchema,
+  checkpointIdSchema,
   deviceIdSchema,
   humanGateIdSchema,
   instantSchema,
@@ -49,7 +50,7 @@ export const jobSchema = z
   });
 
 export const checkpointSchema = z.strictObject({
-  checkpointId: z.string().regex(/^chk_[0-9A-HJKMNP-TV-Z]{26}$/),
+  checkpointId: checkpointIdSchema,
   principalId: principalIdSchema,
   jobId: jobIdSchema,
   jobVersion: z.number().int().positive(),

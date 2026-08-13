@@ -7,6 +7,8 @@ import {
   jobIdSchema,
   principalIdSchema,
 } from "./ids.js";
+import { authenticationEvidenceSchema } from "./browser.js";
+import { humanGateReasonSchema } from "./secrets.js";
 
 const base = {
   eventId: eventIdSchema,
@@ -38,22 +40,22 @@ export const jobEventSchema = z.discriminatedUnion("type", [
     type: z.literal("HUMAN_GATE_RAISED"),
     payload: z.strictObject({
       humanGateId: humanGateIdSchema,
-      reason: z.enum([
-        "CREDENTIAL",
-        "TWO_FACTOR",
-        "CAPTCHA",
-        "PASSKEY",
-        "PASSWORD_RESET",
-        "FEDERATED_IDENTITY",
-        "TERMS_OR_CONSENT",
-        "SECURITY_WARNING",
-        "UNKNOWN_CHALLENGE",
-      ]),
+      reason: humanGateReasonSchema,
     }),
   }),
   z.strictObject({
     ...base,
     type: z.literal("USER_CONTROL_ACKNOWLEDGED"),
+    payload: emptyPayload,
+  }),
+  z.strictObject({
+    ...base,
+    type: z.literal("SECRET_BROKER_ACCEPTED"),
+    payload: emptyPayload,
+  }),
+  z.strictObject({
+    ...base,
+    type: z.literal("SECRET_BROKER_DECLINED"),
     payload: emptyPayload,
   }),
   z.strictObject({
@@ -68,8 +70,18 @@ export const jobEventSchema = z.discriminatedUnion("type", [
   }),
   z.strictObject({
     ...base,
-    type: z.literal("JOB_SUCCEEDED"),
+    type: z.literal("VERIFICATION_RECONCILED"),
     payload: emptyPayload,
+  }),
+  z.strictObject({
+    ...base,
+    type: z.literal("VERIFICATION_UNKNOWN"),
+    payload: z.strictObject({ humanGateId: humanGateIdSchema }),
+  }),
+  z.strictObject({
+    ...base,
+    type: z.literal("JOB_SUCCEEDED"),
+    payload: authenticationEvidenceSchema,
   }),
   z.strictObject({
     ...base,
