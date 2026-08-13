@@ -1,12 +1,40 @@
 import {
   canonicalCommandEnvelopeBytes,
+  canonicalResultEnvelopeBytes,
   signedCommandEnvelopeSchema,
+  signedResultEnvelopeSchema,
 } from "@village/contracts";
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   const buffer = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(buffer).set(bytes);
   return buffer;
+}
+
+export async function verifyResultEnvelope(
+  candidate: unknown,
+  publicJwk: JsonWebKey,
+): Promise<boolean> {
+  const parsed = signedResultEnvelopeSchema.safeParse(candidate);
+  if (!parsed.success) return false;
+  try {
+    const key = await crypto.subtle.importKey(
+      "jwk",
+      publicJwk,
+      "Ed25519",
+      false,
+      ["verify"],
+    );
+    const { signature, ...unsigned } = parsed.data;
+    return crypto.subtle.verify(
+      "Ed25519",
+      key,
+      decodeBase64Url(signature),
+      canonicalResultEnvelopeBytes(unsigned),
+    );
+  } catch {
+    return false;
+  }
 }
 
 function decodeBase64Url(value: string): ArrayBuffer {

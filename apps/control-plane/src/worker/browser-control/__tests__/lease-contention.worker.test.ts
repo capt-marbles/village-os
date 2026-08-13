@@ -1,5 +1,9 @@
 import { env } from "cloudflare:workers";
-import { evictDurableObject, runInDurableObject } from "cloudflare:test";
+import {
+  evictDurableObject,
+  runDurableObjectAlarm,
+  runInDurableObject,
+} from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import type { BrowserControlState } from "@village/contracts";
 import type { BrowserSessionCoordinator } from "../session-coordinator.js";
@@ -111,6 +115,83 @@ describe("BrowserSessionCoordinator lease contention", () => {
     expect(await stub.snapshot(principalId)).toMatchObject({
       ok: true,
       control: { leaseEpoch: 1, controller: "AGENT" },
+    });
+  });
+
+  it("fences an expired connector and resumes once with a fresh epoch", async () => {
+    const continuitySessionId = "brs_01J00000000000000000000001" as const;
+    const stub = env.BROWSER_SESSION_COORDINATOR.getByName(continuitySessionId);
+    const issuedAt = new Date(Date.now() + 60_000).toISOString();
+    const expiresAt = new Date(Date.parse(issuedAt) + 30_000).toISOString();
+    await stub.initialize({
+      principalId,
+      browserSessionId: continuitySessionId,
+      site: "OWNED_FIXTURE",
+      initializedAt: issuedAt,
+      control: { ...initial, browserSessionId: continuitySessionId },
+    });
+    await stub.claimAgentLease({
+      principalId,
+      deviceId,
+      connectionId: "connector-a",
+      now: issuedAt,
+      expiresAt,
+    });
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await stub.snapshot(principalId)).toMatchObject({
+      control: {
+        controller: "NONE",
+        connection: "OFFLINE",
+        leaseEpoch: 1,
+        automationBlocked: true,
+      },
+      eventSequence: 3,
+    });
+    expect(
+      await stub.renewAgentLease({
+        principalId,
+        deviceId,
+        connectionId: "connector-a",
+        leaseEpoch: 1,
+        now: expiresAt,
+        expiresAt: new Date(Date.parse(expiresAt) + 30_000).toISOString(),
+      }),
+    ).toEqual({ ok: false, code: "IDENTITY_MISMATCH" });
+
+    const reconnectedAt = new Date(Date.parse(expiresAt) + 1_000).toISOString();
+    expect(
+      await stub.hostReconnected(principalId, deviceId, reconnectedAt),
+    ).toEqual({ ok: true });
+    const resumed = await stub.claimAgentLease({
+      principalId,
+      deviceId,
+      connectionId: "connector-b",
+      now: reconnectedAt,
+      expiresAt: new Date(Date.parse(reconnectedAt) + 30_000).toISOString(),
+    });
+    expect(resumed).toMatchObject({ ok: true, leaseEpoch: 2 });
+
+    const firstPage = await stub.eventsAfter(principalId, 0, 2);
+    const secondPage = await stub.eventsAfter(principalId, 2, 100);
+    expect(firstPage).toMatchObject({
+      ok: true,
+      events: [{ sequence: 1 }, { sequence: 2 }],
+      latestSequence: 5,
+    });
+    expect(secondPage).toMatchObject({
+      ok: true,
+      events: [{ sequence: 3 }, { sequence: 4 }, { sequence: 5 }],
+      latestSequence: 5,
+    });
+    expect(await stub.cancel(principalId, reconnectedAt)).toEqual({ ok: true });
+    expect(await stub.snapshot(principalId)).toMatchObject({
+      control: {
+        controller: "NONE",
+        leaseEpoch: 3,
+        automationBlocked: true,
+      },
+      eventSequence: 6,
     });
   });
 });

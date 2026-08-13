@@ -1,9 +1,13 @@
 import {
   canonicalCommandEnvelopeBytes,
+  canonicalResultEnvelopeBytes,
   signedCommandEnvelopeSchema,
+  signedResultEnvelopeSchema,
   type BrowserCommand,
   type SignedCommandEnvelope,
+  type SignedResultEnvelope,
   type UnsignedCommandEnvelope,
+  type UnsignedResultEnvelope,
 } from "@village/contracts";
 
 function encodeBase64Url(bytes: Uint8Array): string {
@@ -36,6 +40,21 @@ export async function signCommandEnvelope(
     canonicalCommandEnvelopeBytes(envelope),
   );
   return signedCommandEnvelopeSchema.parse({
+    ...envelope,
+    signature: encodeBase64Url(new Uint8Array(signature)),
+  });
+}
+
+export async function signResultEnvelope(
+  envelope: UnsignedResultEnvelope,
+  privateKey: CryptoKey,
+): Promise<SignedResultEnvelope> {
+  const signature = await crypto.subtle.sign(
+    "Ed25519",
+    privateKey,
+    canonicalResultEnvelopeBytes(envelope),
+  );
+  return signedResultEnvelopeSchema.parse({
     ...envelope,
     signature: encodeBase64Url(new Uint8Array(signature)),
   });
