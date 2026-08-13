@@ -58,6 +58,7 @@ function parseVault(raw: string): StoredVault {
   if (
     typeof candidate !== "object" ||
     candidate === null ||
+    !hasOnlyKeys(candidate, ["schemaVersion", "secrets"]) ||
     (candidate as { schemaVersion?: unknown }).schemaVersion !== 1 ||
     typeof (candidate as { secrets?: unknown }).secrets !== "object" ||
     (candidate as { secrets?: unknown }).secrets === null ||
@@ -75,6 +76,12 @@ function parseVault(raw: string): StoredVault {
     if (
       typeof secret !== "object" ||
       secret === null ||
+      !hasOnlyKeys(secret, [
+        "version",
+        "encryptedBlob",
+        "protectionBackend",
+        "updatedAt",
+      ]) ||
       !Number.isSafeInteger(secret.version) ||
       secret.version < 1 ||
       typeof secret.encryptedBlob !== "string" ||
@@ -89,6 +96,14 @@ function parseVault(raw: string): StoredVault {
     }
   }
   return { schemaVersion: 1, secrets };
+}
+
+function hasOnlyKeys(value: object, expectedKeys: readonly string[]): boolean {
+  const actualKeys = Object.keys(value);
+  return (
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every((key) => expectedKeys.includes(key))
+  );
 }
 
 export class SecretVault {

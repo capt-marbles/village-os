@@ -227,6 +227,19 @@ describe("SecretVault", () => {
       ).rejects.toThrow("SECRET_VAULT_PERMISSIONS_TOO_BROAD");
     }
   });
+
+  it("rejects persisted records containing unknown fields", async () => {
+    const context = await setup();
+    const stored = JSON.parse(await readFile(context.path, "utf8")) as {
+      secrets: Record<string, Record<string, unknown>>;
+    };
+    stored.secrets.sec_fixture_primary!.plaintext = "must-not-be-preserved";
+    await writeFile(context.path, JSON.stringify(stored), { mode: 0o600 });
+
+    await expect(
+      context.vault.configured("sec_fixture_primary"),
+    ).rejects.toThrow("SECRET_VAULT_CORRUPT");
+  });
 });
 
 describe("one-use credential broker", () => {
@@ -287,6 +300,37 @@ describe("one-use credential broker", () => {
       ok: false,
       code: "AUTHORIZATION_EXPIRED",
     });
+  });
+
+  it("aborts a destination write when authorization expires in flight", async () => {
+    const context = await setup();
+    let attemptedWrite = false;
+    const broker = new CredentialBroker(
+      context.vault,
+      {
+        inspectApprovedFixtureField: async () => ({
+          ...context.binding,
+          approved: true,
+          visible: true,
+          enabled: true,
+          obscured: false,
+        }),
+        writeApprovedFixtureField: async (_request, signal) => {
+          await new Promise<void>((resolve) => {
+            signal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          if (!signal.aborted) attemptedWrite = true;
+        },
+      },
+      { confirmCredentialUse: async () => true },
+      Date.now,
+    );
+    const consent = await broker.authorize(context.binding, 25);
+
+    await expect(
+      broker.fill(consent.authorizationId, context.binding),
+    ).resolves.toEqual({ ok: false, code: "AUTHORIZATION_EXPIRED" });
+    expect(attemptedWrite).toBe(false);
   });
 
   it("bounds abandoned authorization retention", async () => {

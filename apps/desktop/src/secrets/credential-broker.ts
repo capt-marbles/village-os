@@ -205,9 +205,13 @@ export class CredentialBroker {
             current = await this.runDestination(
               authorization.binding.browserSessionId,
               lifecycleGeneration,
+              authorization.expiresAt,
               (signal) => this.destination.inspectApprovedFixtureField(signal),
             );
           } catch (error) {
+            if (this.isAuthorizationExpiry(error)) {
+              return { ok: false, code: "AUTHORIZATION_EXPIRED" } as const;
+            }
             if (this.isLifecycleInvalidation(error)) {
               return { ok: false, code: "AUTHORIZATION_INVALIDATED" } as const;
             }
@@ -229,6 +233,7 @@ export class CredentialBroker {
             await this.runDestination(
               authorization.binding.browserSessionId,
               lifecycleGeneration,
+              authorization.expiresAt,
               (signal) =>
                 this.destination.writeApprovedFixtureField(
                   {
@@ -244,6 +249,9 @@ export class CredentialBroker {
             );
             return { ok: true } as const;
           } catch (error) {
+            if (this.isAuthorizationExpiry(error)) {
+              return { ok: false, code: "AUTHORIZATION_EXPIRED" } as const;
+            }
             if (this.isLifecycleInvalidation(error)) {
               return { ok: false, code: "AUTHORIZATION_INVALIDATED" } as const;
             }
@@ -322,11 +330,19 @@ export class CredentialBroker {
   private async runDestination<T>(
     browserSessionId: string,
     lifecycleGeneration: number,
+    expiresAt: number,
     operation: (signal: AbortSignal) => Promise<T>,
   ): Promise<T> {
     if (lifecycleGeneration !== this.lifecycleGeneration(browserSessionId)) {
       throw new Error("CREDENTIAL_USE_INVALIDATED");
     }
+    const expiresInMs = expiresAt - this.now();
+    if (expiresInMs <= 0) throw new Error("AUTHORIZATION_EXPIRED");
+    const timeoutMs = Math.min(this.destinationTimeoutMs, expiresInMs);
+    const timeoutError =
+      expiresInMs <= this.destinationTimeoutMs
+        ? "AUTHORIZATION_EXPIRED"
+        : "CREDENTIAL_DESTINATION_TIMEOUT";
     const controller = new AbortController();
     const active =
       this.activeDestinations.get(browserSessionId) ??
@@ -350,9 +366,10 @@ export class CredentialBroker {
         }),
         new Promise<never>((_resolve, reject) => {
           timeout = setTimeout(() => {
-            controller.abort();
-            reject(new Error("CREDENTIAL_DESTINATION_TIMEOUT"));
-          }, this.destinationTimeoutMs);
+            const error = new Error(timeoutError);
+            controller.abort(error);
+            reject(error);
+          }, timeoutMs);
         }),
       ]);
     } finally {
@@ -366,6 +383,10 @@ export class CredentialBroker {
     return (
       error instanceof Error && error.message === "CREDENTIAL_USE_INVALIDATED"
     );
+  }
+
+  private isAuthorizationExpiry(error: unknown): boolean {
+    return error instanceof Error && error.message === "AUTHORIZATION_EXPIRED";
   }
 
   private purge(): void {
