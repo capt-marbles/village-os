@@ -75,6 +75,9 @@ export const browserCommandSchema = z.discriminatedUnion("capability", [
   verifyCommandSchema,
 ]);
 
+/** JSON Schema advertised to model providers; local Zod parsing remains authoritative. */
+export const browserCommandJsonSchema = z.toJSONSchema(browserCommandSchema);
+
 const authenticatedEnvelopeBinding = {
   protocolVersion: z.literal(1),
   principalId: principalIdSchema,
@@ -142,7 +145,72 @@ export type BrowserCommand = z.infer<typeof browserCommandSchema>;
 export type SignedCommandEnvelope = z.infer<typeof signedCommandEnvelopeSchema>;
 export type SignedResultEnvelope = z.infer<typeof signedResultEnvelopeSchema>;
 
-export type Site = "OWNED_FIXTURE" | "LINKEDIN";
+export const siteSchema = z.enum(["OWNED_FIXTURE", "LINKEDIN"]);
+export type Site = z.infer<typeof siteSchema>;
+
+export const browserSiteActionSchema = z.enum([
+  "OPEN_SIGN_IN",
+  "HUMAN_TAKEOVER",
+  "VERIFY_AUTHENTICATION",
+  "OWNER_CONFIRMED_SIGN_OUT",
+  "FORGET_SESSION",
+  "AUTOMATED_INPUT",
+  "SCRAPE",
+  "MESSAGE",
+  "POST",
+  "REACT",
+  "CONNECT",
+  "FIXTURE_INPUT",
+  "REQUEST_SECRET_FILL",
+  "RAW_CDP",
+]);
+
+export type BrowserSiteAction = z.infer<typeof browserSiteActionSchema>;
+export type BrowserSiteActionAuthorization =
+  | { ok: true }
+  | {
+      ok: false;
+      code:
+        | "LINKEDIN_HUMAN_ONLY"
+        | "STEP_UP_LIFECYCLE_REQUIRED"
+        | "SITE_CAPABILITY_DENIED";
+    };
+
+const linkedInHumanActions = new Set<BrowserSiteAction>([
+  "OPEN_SIGN_IN",
+  "HUMAN_TAKEOVER",
+  "VERIFY_AUTHENTICATION",
+  "OWNER_CONFIRMED_SIGN_OUT",
+]);
+
+export function authorizeBrowserSiteAction(
+  site: unknown,
+  action: unknown,
+): BrowserSiteActionAuthorization {
+  const parsedSite = siteSchema.safeParse(site);
+  const parsedAction = browserSiteActionSchema.safeParse(action);
+  if (!parsedSite.success || !parsedAction.success) {
+    return { ok: false, code: "SITE_CAPABILITY_DENIED" };
+  }
+  if (parsedAction.data === "FORGET_SESSION") {
+    return { ok: false, code: "STEP_UP_LIFECYCLE_REQUIRED" };
+  }
+  if (parsedSite.data === "LINKEDIN") {
+    return linkedInHumanActions.has(parsedAction.data)
+      ? { ok: true }
+      : { ok: false, code: "LINKEDIN_HUMAN_ONLY" };
+  }
+  return new Set<BrowserSiteAction>([
+    "OPEN_SIGN_IN",
+    "HUMAN_TAKEOVER",
+    "VERIFY_AUTHENTICATION",
+    "OWNER_CONFIRMED_SIGN_OUT",
+    "FIXTURE_INPUT",
+    "REQUEST_SECRET_FILL",
+  ]).has(parsedAction.data)
+    ? { ok: true }
+    : { ok: false, code: "SITE_CAPABILITY_DENIED" };
+}
 
 const capabilitySchema = browserCommandSchema.options[0].shape.capability
   .or(browserCommandSchema.options[1].shape.capability)
@@ -181,16 +249,10 @@ export const siteCommandPolicySchema = z.strictObject({
 const allCapabilities = browserCommandSchema.options.map(
   (option) => option.shape.capability.value,
 );
-const linkedInCapabilities = allCapabilities.filter(
-  (capability) =>
-    capability !== "FIXTURE_INPUT" && capability !== "REQUEST_SECRET_FILL",
-);
-
 export const OWNED_FIXTURE_ORIGIN = "https://fixture.village.test" as const;
 
 function capabilityPolicy(capability: (typeof allCapabilities)[number]) {
-  const ownerOnly =
-    capability === "REQUEST_HUMAN_GATE" || capability === "REQUEST_SECRET_FILL";
+  const ownerOnly = capability === "REQUEST_SECRET_FILL";
   return {
     capability,
     approvalClass: ownerOnly ? "OWNER_ONLY" : "AUTOMATIC",
@@ -217,7 +279,7 @@ const siteCommandPolicies = {
   LINKEDIN: siteCommandPolicySchema.parse({
     site: "LINKEDIN",
     allowedOrigins: ["https://www.linkedin.com"],
-    capabilities: linkedInCapabilities.map(capabilityPolicy),
+    capabilities: allCapabilities.map(capabilityPolicy),
   }),
 };
 
@@ -228,40 +290,50 @@ export type SiteCommandAuthorization =
   | { ok: true }
   | {
       ok: false;
-      code: "SITE_CAPABILITY_DENIED" | "DESTINATION_SITE_MISMATCH";
+      code:
+        | "SITE_CAPABILITY_DENIED"
+        | "DESTINATION_SITE_MISMATCH"
+        | "OWNER_APPROVAL_REQUIRED";
     };
+
+export interface SiteCommandAuthorizationContext {
+  ownerPresent?: boolean;
+}
 
 export function authorizeSiteCommand(
   site: Site,
   candidate: unknown,
+  context: SiteCommandAuthorizationContext = {},
 ): SiteCommandAuthorization {
   const parsed = browserCommandSchema.safeParse(candidate);
   if (!parsed.success) return { ok: false, code: "SITE_CAPABILITY_DENIED" };
   const command = parsed.data;
+  if (site === "LINKEDIN") {
+    return { ok: false, code: "SITE_CAPABILITY_DENIED" };
+  }
   const policy = commandPolicyFor(site);
-  if (
-    !policy.capabilities.some(
-      (entry) => entry.capability === command.capability,
-    )
-  ) {
+  const capabilityPolicy = policy.capabilities.find(
+    (entry) => entry.capability === command.capability,
+  );
+  if (!capabilityPolicy) {
     return { ok: false, code: "SITE_CAPABILITY_DENIED" };
   }
   if (
+    JSON.stringify(command).length > capabilityPolicy.budget.maxArgumentBytes
+  ) {
+    return { ok: false, code: "SITE_CAPABILITY_DENIED" };
+  }
+  if (capabilityPolicy.approvalClass !== "AUTOMATIC" && !context.ownerPresent) {
+    return { ok: false, code: "OWNER_APPROVAL_REQUIRED" };
+  }
+  if (
     command.capability === "NAVIGATE" &&
-    ((site === "LINKEDIN" && command.destination !== "LINKEDIN_SIGN_IN") ||
-      (site === "OWNED_FIXTURE" && command.destination !== "FIXTURE_SIGN_IN"))
+    command.destination !== "FIXTURE_SIGN_IN"
   ) {
     return { ok: false, code: "DESTINATION_SITE_MISMATCH" };
   }
   if (command.capability === "SESSION_OPEN" && command.site !== site) {
     return { ok: false, code: "DESTINATION_SITE_MISMATCH" };
-  }
-  if (
-    site === "LINKEDIN" &&
-    (command.capability === "FIXTURE_INPUT" ||
-      command.capability === "REQUEST_SECRET_FILL")
-  ) {
-    return { ok: false, code: "SITE_CAPABILITY_DENIED" };
   }
   return { ok: true };
 }

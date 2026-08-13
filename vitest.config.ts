@@ -10,6 +10,9 @@ export default defineConfig({
       "@village/ui": fileURLToPath(
         new URL("./packages/ui/src/index.ts", import.meta.url),
       ),
+      "@village/test-auth-site/variants": fileURLToPath(
+        new URL("./packages/test-auth-site/src/variants.tsx", import.meta.url),
+      ),
     },
   },
   test: {

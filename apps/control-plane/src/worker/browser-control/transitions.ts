@@ -162,7 +162,8 @@ export type CommandAcceptance =
         | "NOT_YET_VALID"
         | "REPLAYED_SEQUENCE"
         | "SITE_CAPABILITY_DENIED"
-        | "DESTINATION_SITE_MISMATCH";
+        | "DESTINATION_SITE_MISMATCH"
+        | "OWNER_APPROVAL_REQUIRED";
     };
 
 export function acceptBrowserCommand(
