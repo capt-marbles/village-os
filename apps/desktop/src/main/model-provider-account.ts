@@ -176,7 +176,11 @@ export class ModelProviderAccountController {
     >["errorCode"],
   ): ModelProviderAccountSnapshot {
     this.activeLoginId = undefined;
-    return this.update({ provider: "CHATGPT", state: "UNAVAILABLE", errorCode });
+    return this.update({
+      provider: "CHATGPT",
+      state: "UNAVAILABLE",
+      errorCode,
+    });
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {

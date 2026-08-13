@@ -1,4 +1,4 @@
-import { app, protocol } from "electron";
+import { app, protocol, shell } from "electron";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +24,8 @@ import { PairingDeepLinkInbox } from "./pairing-deep-link.js";
 import { createPairingWindow } from "./pairing-window.js";
 import { installGlobalSecurityPolicy } from "./security.js";
 import { verifyMacOsOwnerPresence } from "./step-up-auth.js";
+import { createCodexAppServerProvider } from "../model-provider/codex-app-server.js";
+import { ModelProviderAccountController } from "./model-provider-account.js";
 
 registerVillageScheme(protocol);
 installGlobalSecurityPolicy(app);
@@ -106,6 +108,10 @@ export async function startVillageRuntime(
     initialUrl: "https://www.linkedin.com/login",
     userDataPath: app.getPath("userData"),
     preloadPath,
+    modelProviderAccount: new ModelProviderAccountController(
+      createCodexAppServerProvider(),
+      (url) => shell.openExternal(url),
+    ),
     verifyStepUp: () => verifyMacOsOwnerPresence(),
     // LinkedIn authentication is human-only: Village never persists a
     // LinkedIn credential reference. Keeping this required callback in the

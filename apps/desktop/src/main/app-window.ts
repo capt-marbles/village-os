@@ -28,6 +28,7 @@ import { ControlTransferGate } from "./control-transfer-gate.js";
 import { BrowserControlTransfer } from "./browser-control-transfer.js";
 import { isTrustedVillageSender, trustedWebPreferences } from "./security.js";
 import { CrashReporter } from "./crash-reporting.js";
+import type { ModelProviderAccountController } from "./model-provider-account.js";
 
 export interface VillageAppWindowOptions {
   principalId: string;
@@ -41,6 +42,7 @@ export interface VillageAppWindowOptions {
   verifyStepUp?: (binding: SessionErasureBinding) => Promise<boolean>;
   /** Site-scoped credential reference cleanup registered by the vault owner. */
   revokeCredentialReferences: (binding: SessionErasureBinding) => Promise<void>;
+  modelProviderAccount: ModelProviderAccountController;
 }
 
 export interface VillageAppWindow {
@@ -261,6 +263,21 @@ export async function createVillageAppWindow(
     return diagnostics.snapshot();
   });
   ipcMain.handle(
+    "village:get-model-provider-account",
+    (event, ...arguments_) => {
+      assertTrustedRequest(event, arguments_);
+      return options.modelProviderAccount.refresh();
+    },
+  );
+  ipcMain.handle("village:begin-chatgpt-login", (event, ...arguments_) => {
+    assertTrustedRequest(event, arguments_);
+    return options.modelProviderAccount.beginLogin();
+  });
+  ipcMain.handle("village:cancel-chatgpt-login", (event, ...arguments_) => {
+    assertTrustedRequest(event, arguments_);
+    return options.modelProviderAccount.cancelLogin();
+  });
+  ipcMain.handle(
     "village:request-return-control",
     async (event, ...arguments_) => {
       assertTrustedRequest(event, arguments_);
@@ -416,6 +433,9 @@ export async function createVillageAppWindow(
       takeoverChannel,
       "village:get-browser-ui-state",
       "village:get-browser-diagnostics",
+      "village:get-model-provider-account",
+      "village:begin-chatgpt-login",
+      "village:cancel-chatgpt-login",
       "village:request-return-control",
       "village:set-browser-pane",
       "village:record-verification-decision",
@@ -426,7 +446,10 @@ export async function createVillageAppWindow(
     }
     viewport.destroy();
     if (!appView.webContents.isDestroyed()) appView.webContents.close();
-    void browserHost.close().finally(() => window.destroy());
+    void Promise.allSettled([
+      browserHost.close(),
+      options.modelProviderAccount.close(),
+    ]).finally(() => window.destroy());
   });
   try {
     await appView.webContents.loadURL("village://app/");
