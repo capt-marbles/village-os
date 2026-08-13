@@ -1,8 +1,9 @@
 import type {
+  PersonalAgentTaskActivity,
   PersonalAgentTaskRequest,
   PersonalAgentTaskResult,
 } from "@village/contracts";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 type PersonalAgentTaskDisplayState =
   PersonalAgentTaskResult | { state: "IDLE" };
@@ -11,10 +12,13 @@ export interface PersonalAgentTaskBridge {
   runPersonalAgentTask(
     request: PersonalAgentTaskRequest,
   ): Promise<PersonalAgentTaskResult>;
+  subscribePersonalAgentTaskActivity(
+    listener: (activity: PersonalAgentTaskActivity) => void,
+  ): () => void;
 }
 
 export function dispatchPersonalAgentTask(
-  bridge: PersonalAgentTaskBridge,
+  bridge: Pick<PersonalAgentTaskBridge, "runPersonalAgentTask">,
 ): Promise<PersonalAgentTaskResult> {
   return bridge.runPersonalAgentTask({ task: "CHECK_LINKEDIN_SIGN_IN" });
 }
@@ -52,13 +56,35 @@ function statusText(state: PersonalAgentTaskDisplayState): string | null {
   }
 }
 
+const activityLabels: Record<PersonalAgentTaskActivity["stage"], string> = {
+  CLASSIFYING_BROWSER: "Checking the visible browser route",
+  CONSULTING_CHATGPT: "Asking ChatGPT for the allowed read-only check",
+  VERIFYING_BROWSER: "Re-checking the local browser state",
+  WAITING_FOR_OWNER: "Waiting for your account confirmation",
+};
+
+export function mergePersonalAgentTaskActivity(
+  current: readonly PersonalAgentTaskActivity[],
+  next: PersonalAgentTaskActivity,
+): readonly PersonalAgentTaskActivity[] {
+  if (next.sequence === 1) return [next];
+  if (current.some((event) => event.sequence === next.sequence)) {
+    return current;
+  }
+  return [...current, next].sort(
+    (left, right) => left.sequence - right.sequence,
+  );
+}
+
 export function PersonalAgentTaskCard({
   state,
   pending,
+  activity,
   onSubmit,
 }: {
   state: PersonalAgentTaskDisplayState;
   pending: boolean;
+  activity: readonly PersonalAgentTaskActivity[];
   onSubmit(): void;
 }) {
   const status = statusText(state);
@@ -79,7 +105,25 @@ export function PersonalAgentTaskCard({
           {pending ? "Village is checking…" : "Run task"}
         </button>
       </form>
-      {status ? <p role="status">{status}</p> : null}
+      {activity.length > 0 ? (
+        <div aria-live="polite" aria-label="Village activity">
+          <h3>Village activity</h3>
+          <ol>
+            {activity.map((event, index) => (
+              <li key={event.sequence}>
+                {activityLabels[event.stage]}
+                {pending && index === activity.length - 1 ? "…" : null}
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
+      {status ? (
+        <div aria-live="polite">
+          <h3>Result</h3>
+          <p role="status">{status}</p>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -93,9 +137,24 @@ export function PersonalAgentTaskOnboarding({
     state: "IDLE",
   });
   const [pending, setPending] = useState(false);
+  const [activity, setActivity] = useState<
+    readonly PersonalAgentTaskActivity[]
+  >([]);
+
+  useEffect(
+    () =>
+      bridge.subscribePersonalAgentTaskActivity((candidate) => {
+        setActivity((current) =>
+          mergePersonalAgentTaskActivity(current, candidate),
+        );
+      }),
+    [bridge],
+  );
 
   const submit = async () => {
     if (pending) return;
+    setState({ state: "IDLE" });
+    setActivity([]);
     setPending(true);
     try {
       setState(await dispatchPersonalAgentTask(bridge));
@@ -110,6 +169,7 @@ export function PersonalAgentTaskOnboarding({
     <PersonalAgentTaskCard
       state={state}
       pending={pending}
+      activity={activity}
       onSubmit={() => void submit()}
     />
   );

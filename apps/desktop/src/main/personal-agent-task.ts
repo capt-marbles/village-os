@@ -2,6 +2,7 @@ import {
   personalAgentTaskRequestSchema,
   type BrowserObservation,
   type ModelProvider,
+  type PersonalAgentTaskActivity,
   type PersonalAgentTaskResult,
 } from "@village/contracts";
 import { verifyAuthentication } from "../browser/auth-verifier.js";
@@ -20,6 +21,7 @@ export interface PersonalAgentTaskOperations {
   run(
     request: unknown,
     environment: PersonalAgentTaskEnvironment,
+    onActivity?: (activity: PersonalAgentTaskActivity) => void,
   ): Promise<PersonalAgentTaskResult>;
 }
 
@@ -58,6 +60,7 @@ export class PersonalAgentTaskController implements PersonalAgentTaskOperations 
   run(
     candidate: unknown,
     environment: PersonalAgentTaskEnvironment,
+    onActivity?: (activity: PersonalAgentTaskActivity) => void,
   ): Promise<PersonalAgentTaskResult> {
     const request = personalAgentTaskRequestSchema.parse(candidate);
     const key = request.task;
@@ -65,7 +68,7 @@ export class PersonalAgentTaskController implements PersonalAgentTaskOperations 
     if (this.inFlight) {
       return Promise.resolve({ state: "BLOCKED", reason: "TASK_IN_PROGRESS" });
     }
-    const task = this.runExclusive(environment);
+    const task = this.runExclusive(environment, onActivity);
     this.inFlight = { key, result: task };
     const clear = () => {
       if (this.inFlight?.result === task) this.inFlight = undefined;
@@ -76,7 +79,17 @@ export class PersonalAgentTaskController implements PersonalAgentTaskOperations 
 
   private async runExclusive(
     environment: PersonalAgentTaskEnvironment,
+    onActivity?: (activity: PersonalAgentTaskActivity) => void,
   ): Promise<PersonalAgentTaskResult> {
+    let sequence = 0;
+    const report = (stage: PersonalAgentTaskActivity["stage"]) => {
+      try {
+        onActivity?.({ sequence: (sequence += 1), stage });
+      } catch {
+        // Progress reporting must never change the task's safety outcome.
+      }
+    };
+    report("CLASSIFYING_BROWSER");
     const initial = this.readBrowserState(environment);
     if (!initial) return { state: "NEEDS_HUMAN", reason: "UNKNOWN_STATE" };
     const route = classifyLinkedInRoute(initial.currentUrl);
@@ -87,6 +100,7 @@ export class PersonalAgentTaskController implements PersonalAgentTaskOperations 
       return { state: "NEEDS_HUMAN", reason: "UNKNOWN_STATE" };
     }
 
+    report("CONSULTING_CHATGPT");
     const providerResult = await this.provider.nextAction(
       createSanitizedModelContext({
         jobState: "RUNNING_AGENT",
@@ -115,6 +129,7 @@ export class PersonalAgentTaskController implements PersonalAgentTaskOperations 
       return { state: "BLOCKED", reason: "SITE_POLICY_DENIED" };
     }
 
+    report("VERIFYING_BROWSER");
     const fresh = this.readBrowserState(environment);
     if (!fresh) return { state: "NEEDS_HUMAN", reason: "UNKNOWN_STATE" };
     const freshRoute = classifyLinkedInRoute(fresh.currentUrl);
@@ -122,6 +137,7 @@ export class PersonalAgentTaskController implements PersonalAgentTaskOperations 
       return { state: "NEEDS_HUMAN", reason: "UNKNOWN_STATE" };
     }
     if (freshRoute === "AUTHENTICATED") {
+      report("WAITING_FOR_OWNER");
       if (!(await environment.confirmAccount())) {
         return { state: "NEEDS_HUMAN", reason: "ACCOUNT_CONFIRMATION" };
       }

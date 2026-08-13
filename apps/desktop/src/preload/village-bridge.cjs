@@ -16,6 +16,18 @@ contextBridge.exposeInMainWorld(
       ipcRenderer.invoke("village:cancel-chatgpt-login"),
     runPersonalAgentTask: (request) =>
       ipcRenderer.invoke("village:run-personal-agent-task", request),
+    subscribePersonalAgentTaskActivity: (listener) => {
+      if (typeof listener !== "function") {
+        throw new TypeError("Task activity listener must be a function");
+      }
+      const handler = (_event, activity) => listener(activity);
+      ipcRenderer.on("village:personal-agent-task-activity", handler);
+      return () =>
+        ipcRenderer.removeListener(
+          "village:personal-agent-task-activity",
+          handler,
+        );
+    },
     subscribeBrowserUiState: (listener) => {
       if (typeof listener !== "function") {
         throw new TypeError("Browser UI listener must be a function");

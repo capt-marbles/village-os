@@ -6,6 +6,7 @@ import {
   humanGateSchema,
   operationAuthorizationSchema,
   observerIntentSchema,
+  personalAgentTaskActivitySchema,
   personalAgentTaskRequestSchema,
   personalAgentTaskResultSchema,
   stepUpAuthorizationSchema,
@@ -29,6 +30,19 @@ describe("portable trust-boundary schemas", () => {
         outcome: "AUTHENTICATED",
         evidence: "OWNER_CONFIRMED",
         token: "must-not-cross-ipc",
+      }).success,
+    ).toBe(false);
+    expect(
+      personalAgentTaskActivitySchema.parse({
+        sequence: 1,
+        stage: "CLASSIFYING_BROWSER",
+      }),
+    ).toEqual({ sequence: 1, stage: "CLASSIFYING_BROWSER" });
+    expect(
+      personalAgentTaskActivitySchema.safeParse({
+        sequence: 2,
+        stage: "CONSULTING_CHATGPT",
+        detail: "https://www.linkedin.com/feed/?token=secret",
       }).success,
     ).toBe(false);
   });

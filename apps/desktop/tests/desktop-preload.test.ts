@@ -47,6 +47,7 @@ describe("desktop preload bridge", () => {
       "setBrowserPane",
       "subscribeBrowserDiagnostics",
       "subscribeBrowserUiState",
+      "subscribePersonalAgentTaskActivity",
     ]);
     expect(bridge.invoke).toBeUndefined();
     expect(Object.keys(bridges.villagePairing!).sort()).toEqual([
@@ -76,6 +77,18 @@ describe("desktop preload bridge", () => {
     (unsubscribeDiagnostics as () => void)();
     expect(removeListener).toHaveBeenCalledWith(
       "village:browser-diagnostics",
+      expect.any(Function),
+    );
+
+    const unsubscribeTaskActivity =
+      bridge.subscribePersonalAgentTaskActivity!(listener);
+    expect(on).toHaveBeenCalledWith(
+      "village:personal-agent-task-activity",
+      expect.any(Function),
+    );
+    (unsubscribeTaskActivity as () => void)();
+    expect(removeListener).toHaveBeenCalledWith(
+      "village:personal-agent-task-activity",
       expect.any(Function),
     );
 

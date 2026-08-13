@@ -16,6 +16,16 @@ export const personalAgentTaskRequestSchema = z.strictObject({
   task: z.literal("CHECK_LINKEDIN_SIGN_IN"),
 });
 
+export const personalAgentTaskActivitySchema = z.strictObject({
+  sequence: z.number().int().positive().max(10),
+  stage: z.enum([
+    "CLASSIFYING_BROWSER",
+    "CONSULTING_CHATGPT",
+    "VERIFYING_BROWSER",
+    "WAITING_FOR_OWNER",
+  ]),
+});
+
 export const personalAgentTaskResultSchema = z.discriminatedUnion("state", [
   z.strictObject({
     state: z.literal("COMPLETED"),
@@ -97,6 +107,9 @@ export type ModelProviderAccountSnapshot = z.infer<
 >;
 export type PersonalAgentTaskRequest = z.infer<
   typeof personalAgentTaskRequestSchema
+>;
+export type PersonalAgentTaskActivity = z.infer<
+  typeof personalAgentTaskActivitySchema
 >;
 export type PersonalAgentTaskResult = z.infer<
   typeof personalAgentTaskResultSchema
