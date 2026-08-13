@@ -4,8 +4,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   ProfileLock,
+  eraseScopedProfile,
   ensureProtectedProfile,
   profilePartition,
+  scopedProfileAbsent,
 } from "../src/browser/profile-protection.js";
 
 describe("protected browser profile", () => {
@@ -76,5 +78,36 @@ describe("protected browser profile", () => {
 
     await expect(ProfileLock.acquire(path)).rejects.toThrow("PROFILE_IN_USE");
     await expect(readFile(lockPath, "utf8")).resolves.toBe("");
+  });
+
+  it("erases only the exact scoped profile and proves it remains absent", async () => {
+    const root = await mkdtemp(join(tmpdir(), "village-profile-erasure-"));
+    const first = await ensureProtectedProfile(
+      root,
+      {
+        principalId: "usr_01J00000000000000000000000",
+        deviceId: "dev_01J00000000000000000000000",
+        site: "LINKEDIN",
+      },
+      "darwin",
+    );
+    const other = await ensureProtectedProfile(
+      root,
+      {
+        principalId: "usr_01J00000000000000000000000",
+        deviceId: "dev_01J00000000000000000000001",
+        site: "LINKEDIN",
+      },
+      "darwin",
+    );
+    await writeFile(join(first.path, "cookie-store"), "site-only");
+    await writeFile(join(other.path, "cookie-store"), "other-device");
+
+    await eraseScopedProfile(first.path);
+    expect(await scopedProfileAbsent(first.path)).toBe(true);
+    expect(await scopedProfileAbsent(other.path)).toBe(false);
+    expect(await readFile(join(other.path, "cookie-store"), "utf8")).toBe(
+      "other-device",
+    );
   });
 });

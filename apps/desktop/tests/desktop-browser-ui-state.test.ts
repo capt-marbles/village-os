@@ -92,6 +92,40 @@ describe("desktop browser UI projection", () => {
     });
   });
 
+  it("projects an erasure lifecycle without treating cancel as destructive", () => {
+    const state = new DesktopBrowserUiState();
+    state.cancelFutureAutomation();
+    expect(state.current().profile).toBe("PRESENT");
+
+    state.beginErasure();
+    expect(state.current()).toMatchObject({
+      erasure: "ERASING",
+      profile: "FORGETTING",
+      controller: "NONE",
+    });
+    state.failErasure();
+    expect(state.current()).toMatchObject({
+      erasure: "FAILED",
+      profile: "ERASURE_FAILED",
+    });
+    state.beginErasure();
+    state.completeErasure();
+    expect(state.current()).toMatchObject({
+      erasure: "COMPLETE",
+      profile: "ABSENT",
+    });
+  });
+
+  it("projects a device revocation as unavailable before future work", () => {
+    const state = new DesktopBrowserUiState();
+    state.markDeviceRevoked();
+    expect(state.current()).toMatchObject({
+      pairing: "REVOKED",
+      jobState: "WAITING_FOR_BROWSER",
+      controller: "NONE",
+    });
+  });
+
   it("does not broadcast an identical state update", () => {
     const state = new DesktopBrowserUiState();
     const listener = vi.fn();

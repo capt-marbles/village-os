@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdir, open, readFile, unlink } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdir,
+  open,
+  readFile,
+  rm,
+  unlink,
+} from "node:fs/promises";
 import { join } from "node:path";
 import type { BrowserSite } from "./session-policy.js";
 
@@ -34,6 +42,23 @@ export async function ensureProtectedProfile(
   await mkdir(path, { recursive: true, mode: 0o700 });
   await chmod(path, 0o700);
   return { path, partition: profilePartition(scope) };
+}
+
+/** Only callers already holding an exact scope path may invoke this helper. */
+export async function eraseScopedProfile(profilePath: string): Promise<void> {
+  await rm(profilePath, { recursive: true, force: true, maxRetries: 2 });
+}
+
+/** File-system proof used after a destructive lifecycle and app restart. */
+export async function scopedProfileAbsent(
+  profilePath: string,
+): Promise<boolean> {
+  try {
+    await access(profilePath);
+    return false;
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "ENOENT";
+  }
 }
 
 export class ProfileLock {

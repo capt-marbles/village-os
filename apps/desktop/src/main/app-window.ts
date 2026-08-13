@@ -17,6 +17,12 @@ import {
   type NativeBrowserView,
 } from "./browser-viewport-coordinator.js";
 import { SensitiveActionAuthorizer } from "./sensitive-action-authorizer.js";
+import {
+  SessionErasureCoordinator,
+  type SessionErasureBinding,
+} from "./session-erasure.js";
+import { StepUpAuthorizer } from "./step-up-auth.js";
+import { DeviceRevocationRegistry } from "./device-revocation.js";
 import { DesktopBrowserUiState } from "./desktop-browser-ui-state.js";
 import { ControlTransferGate } from "./control-transfer-gate.js";
 import { BrowserControlTransfer } from "./browser-control-transfer.js";
@@ -30,12 +36,20 @@ export interface VillageAppWindowOptions {
   initialUrl: string;
   userDataPath: string;
   preloadPath: string;
+  /** Main-process proof of current owner identity. Absent means fail closed. */
+  verifyStepUp?: (binding: SessionErasureBinding) => Promise<boolean>;
+  /** Site-scoped credential reference cleanup registered by the vault owner. */
+  revokeCredentialReferences?: (
+    binding: SessionErasureBinding,
+  ) => Promise<void>;
 }
 
 export interface VillageAppWindow {
   window: BaseWindow;
   browserHost: LocalBrowserHost;
   viewport: BrowserViewportCoordinator;
+  /** Control-plane revocation seam; it fences all future trusted IPC work. */
+  revokeDevice(): void;
 }
 
 function browserViewAdapter(
@@ -140,6 +154,8 @@ export async function createVillageAppWindow(
   layout();
 
   const authorizer = new SensitiveActionAuthorizer();
+  const stepUpAuthorizer = new StepUpAuthorizer();
+  const deviceRevocations = new DeviceRevocationRegistry();
   const executor = new LocalActionExecutor({ leaseEpoch: 1 });
   const transferGate = new ControlTransferGate();
   const uiState = new DesktopBrowserUiState();
@@ -150,6 +166,40 @@ export async function createVillageAppWindow(
     () => browserHost.reloadAfterUncertainAction(),
     () => browserHost.reloadAfterUncertainAction(),
   );
+  const erasureBinding = (): SessionErasureBinding => ({
+    principalId: options.principalId,
+    deviceId: options.deviceId,
+    browserSessionId: options.browserSessionId,
+    site: options.site,
+    operation: "FORGET_SESSION",
+    currentState:
+      uiState.current().profile === "ERASURE_FAILED"
+        ? "ERASURE_FAILED"
+        : "PRESENT",
+  });
+  const sessionErasure = new SessionErasureCoordinator(stepUpAuthorizer, {
+    revokeAutomation: async () => {
+      executor.markOfflineTakeover();
+      uiState.cancelFutureAutomation();
+    },
+    closeTarget: async () => browserHost.close(),
+    clearBrowserStorage: async () => browserHost.clearSiteStorage(),
+    clearPermissions: async () => browserHost.clearSitePermissions(),
+    // Journals, temporary browser files, and download metadata live under the
+    // same exact profile and are removed by removeScopedProfile below.
+    clearActionJournal: async () => undefined,
+    clearTemporaryData: async () => undefined,
+    clearDownloads: async () => undefined,
+    revokeCredentialReferences: async (binding) =>
+      options.revokeCredentialReferences?.(binding),
+    removeProfile: async () => browserHost.removeScopedProfile(),
+    verifyAbsent: async () => browserHost.scopedProfileAbsent(),
+  });
+  const revokeDevice = () => {
+    deviceRevocations.revoke(options.deviceId);
+    executor.markOfflineTakeover();
+    uiState.markDeviceRevoked();
+  };
   const unsubscribeUiState = uiState.subscribe((snapshot) => {
     if (!appView.webContents.isDestroyed()) {
       appView.webContents.send("village:browser-ui-state", snapshot);
@@ -167,6 +217,8 @@ export async function createVillageAppWindow(
       throw new Error("UNTRUSTED_IPC_SENDER");
     }
     if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
+    const device = deviceRevocations.authorize(options.deviceId);
+    if (!device.ok) throw new Error(device.code);
   };
   const handleTakeover = async (
     event: IpcMainInvokeEvent,
@@ -283,15 +335,40 @@ export async function createVillageAppWindow(
     async (event, ...arguments_) => {
       assertTrustedRequest(event, arguments_);
       uiState.requireStepUpForErasure();
-      await dialog.showMessageBox({
-        type: "info",
-        title: "Step-up authentication required",
+      const binding = erasureBinding();
+      if (!(await options.verifyStepUp?.(binding))) {
+        await dialog.showMessageBox({
+          type: "info",
+          title: "Step-up authentication required",
+          message:
+            "Forgetting a session is separate from canceling work. Village needs a main-process step-up authentication provider before it can remove this local profile.",
+          buttons: ["OK"],
+          noLink: true,
+        });
+        return "STEP_UP_REQUIRED" as const;
+      }
+      const confirmation = await dialog.showMessageBox({
+        type: "warning",
+        title: "Forget this local session?",
         message:
-          "Forgetting a session is separate from canceling work. Complete step-up authentication before Village can remove this local profile.",
-        buttons: ["OK"],
+          "This closes the browser and permanently clears this site's local profile on this Mac.",
+        buttons: ["Forget session", "Cancel"],
+        defaultId: 1,
+        cancelId: 1,
         noLink: true,
       });
-      return "STEP_UP_REQUIRED" as const;
+      if (confirmation.response !== 0) return "DECLINED" as const;
+      const token = stepUpAuthorizer.mint(binding, 15_000);
+      uiState.beginErasure();
+      const result = await sessionErasure.erase(token.token, binding);
+      if (result.status === "COMPLETE") {
+        uiState.completeErasure();
+        return "COMPLETE" as const;
+      }
+      uiState.failErasure();
+      return result.status === "PARTIAL_FAILURE"
+        ? ("PARTIAL_FAILURE" as const)
+        : ("STEP_UP_REQUIRED" as const);
     },
   );
   ipcMain.handle(
@@ -340,7 +417,7 @@ export async function createVillageAppWindow(
     throw error;
   }
   window.show();
-  return { window, browserHost, viewport };
+  return { window, browserHost, viewport, revokeDevice };
 }
 
 export function defaultPreloadPath(appPath: string): string {

@@ -19,7 +19,9 @@ export interface VillageDesktopBridge {
     splitRatio: number;
   }): Promise<void>;
   recordVerificationDecision(decision: "CONFIRM" | "REJECT"): Promise<void>;
-  requestForgetSession(): Promise<"STEP_UP_REQUIRED">;
+  requestForgetSession(): Promise<
+    "STEP_UP_REQUIRED" | "DECLINED" | "COMPLETE" | "PARTIAL_FAILURE"
+  >;
   requestObserverIntent(intent: "CANCEL_FUTURE_AUTOMATION"): Promise<void>;
 }
 
