@@ -59,12 +59,30 @@ describe("browser command grammar", () => {
         capability: "NAVIGATE",
         destination: "FIXTURE_SIGN_IN",
       }),
-    ).toEqual({ ok: false, code: "DESTINATION_SITE_MISMATCH" });
+    ).toEqual({ ok: false, code: "SITE_CAPABILITY_DENIED" });
     expect(
       authorizeSiteCommand("LINKEDIN", {
         capability: "REQUEST_HUMAN_GATE",
         reason: "TWO_FACTOR",
       }),
+    ).toEqual({ ok: false, code: "SITE_CAPABILITY_DENIED" });
+    expect(
+      authorizeSiteCommand("OWNED_FIXTURE", {
+        capability: "REQUEST_SECRET_FILL",
+        credentialSlot: "SITE_PRIMARY_CREDENTIAL",
+        field: "PASSWORD",
+      }),
+    ).toEqual({ ok: false, code: "OWNER_APPROVAL_REQUIRED" });
+    expect(
+      authorizeSiteCommand(
+        "OWNED_FIXTURE",
+        {
+          capability: "REQUEST_SECRET_FILL",
+          credentialSlot: "SITE_PRIMARY_CREDENTIAL",
+          field: "PASSWORD",
+        },
+        { ownerPresent: true },
+      ),
     ).toEqual({ ok: true });
   });
 });

@@ -1,8 +1,5 @@
 import { z } from "zod";
 
-export const observationContractStatus =
-  "PROVISIONAL_UNTIL_U7_BENCHMARK" as const;
-
 export const canonicalOriginSchema = z
   .string()
   .max(255)
@@ -95,17 +92,20 @@ export const browserTaintPolicy = browserTaintPolicySchema.parse({
 
 export type BrowserObservation = z.infer<typeof browserObservationSchema>;
 
-export function serializeBrowserObservation(input: unknown): string {
+export function sanitizeBrowserObservation(input: unknown): BrowserObservation {
   if (typeof input !== "object" || input === null) {
     throw new Error("INVALID_BROWSER_OBSERVATION");
   }
   const record = input as Record<string, unknown>;
-  const observation = browserObservationSchema.parse({
+  return browserObservationSchema.parse({
     schemaVersion: record.schemaVersion,
     source: record.source,
     canonicalOrigin: record.canonicalOrigin,
     predicateIds: record.predicateIds,
     facts: record.facts,
   });
-  return JSON.stringify(observation);
+}
+
+export function serializeBrowserObservation(input: unknown): string {
+  return JSON.stringify(sanitizeBrowserObservation(input));
 }
