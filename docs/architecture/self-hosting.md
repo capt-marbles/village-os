@@ -42,4 +42,20 @@ Each browser session has one Durable Object coordinator. Its SQLite event log,
 lease epoch, accepted actions, result sequence, and projection outbox are the
 authority. D1 stores owner-scoped jobs and rebuildable query projections. A D1
 projection failure therefore exposes lag without discarding accepted control
-state; replay by event sequence repairs the projection.
+state; replay by event sequence repairs the projection. The WebSocket stream is
+only a low-latency notification path: it replays from a caller cursor, and the
+HTTP event cursor remains the recovery contract after disconnects or gaps.
+
+## Desktop device keys
+
+The macOS-first desktop generates its Ed25519 device key in the Electron main
+process. It exports private key material only transiently for encryption by the
+asynchronous Electron `safeStorage` provider, zeroes the temporary byte buffer,
+and persists only a versioned encrypted blob with owner-only file permissions.
+On load, the key is imported as non-exportable before use. Renderers receive
+neither the encrypted blob nor the live key.
+
+Village fails closed when an OS-protected provider is unavailable. In
+particular, Linux's `basic_text` fallback is not accepted. Corrupt files,
+symbolic links, and files with group or world permissions are rejected rather
+than silently replaced.

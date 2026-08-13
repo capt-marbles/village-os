@@ -2,6 +2,13 @@
 
 Decision: **GO — approved for continued internal implementation.**
 
+Runtime decision: **Electron is the settled macOS-first v1 desktop runtime.**
+Tauri is not an active v1 alternative. Village prioritizes one visible Chromium
+session, persistent profiles, `WebContentsView` composition, and bounded CDP
+control over binary size. Runtime-neutral control-plane and browser-host
+contracts remain deliberate seams; revisiting the shell after v1 does not alter
+the current implementation direction.
+
 The numerical thresholds and blank comparison matrix are predeclared in `spikes/linkedin-electron/results/template.md`. A human operator must run the opt-in matrix without automation, credential/cookie logging, challenge bypass, terms acceptance on behalf of another person, or debugger/CDP attachment to LinkedIn.
 
 Technical scope is an internal, model-free, disposable compatibility package. It does not validate delegated product value and must not be distributed.

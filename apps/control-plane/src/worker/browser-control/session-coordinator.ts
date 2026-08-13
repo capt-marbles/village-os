@@ -205,6 +205,83 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
     return { ok: true };
   }
 
+  override async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (
+      request.method !== "GET" ||
+      url.pathname !== "/stream" ||
+      request.headers.get("upgrade")?.toLowerCase() !== "websocket"
+    ) {
+      return Response.json(
+        { ok: false, code: "INVALID_STREAM_REQUEST" },
+        { status: 400 },
+      );
+    }
+    const principal = principalIdSchema.safeParse(
+      request.headers.get("x-village-principal"),
+    );
+    const cursor = z.coerce
+      .number()
+      .int()
+      .nonnegative()
+      .safeParse(url.searchParams.get("cursor") ?? "0");
+    const metadata = this.metadata();
+    if (
+      !principal.success ||
+      !cursor.success ||
+      !metadata ||
+      metadata.principal_id !== principal.data
+    ) {
+      return Response.json(
+        { ok: false, code: "STREAM_IDENTITY_MISMATCH" },
+        { status: 403 },
+      );
+    }
+    if (this.ctx.getWebSockets().length >= 10) {
+      return Response.json(
+        { ok: false, code: "STREAM_CONNECTION_QUOTA_EXCEEDED" },
+        { status: 429 },
+      );
+    }
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair) as [WebSocket, WebSocket];
+    this.ctx.acceptWebSocket(server, [principal.data]);
+    const page = this.eventPage(cursor.data, 100);
+    for (const event of page) {
+      server.send(JSON.stringify({ type: "EVENT", event }));
+    }
+    server.send(
+      JSON.stringify({
+        type: "READY",
+        cursor: page.at(-1)?.sequence ?? cursor.data,
+        latestSequence: metadata.event_sequence,
+        hasMore:
+          (page.at(-1)?.sequence ?? cursor.data) < metadata.event_sequence,
+      }),
+    );
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  override webSocketMessage(webSocket: WebSocket): void {
+    webSocket.close(1008, "Village event streams are read-only");
+  }
+
+  override webSocketClose(
+    webSocket: WebSocket,
+    code: number,
+    reason: string,
+    wasClean: boolean,
+  ): void {
+    void webSocket;
+    void code;
+    void reason;
+    void wasClean;
+  }
+
+  override webSocketError(webSocket: WebSocket): void {
+    webSocket.close(1011, "stream error");
+  }
+
   async claimAgentLease(
     candidate: unknown,
   ): Promise<
@@ -646,20 +723,7 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
        ON CONFLICT(window_started_at) DO UPDATE SET request_count = request_count + 1`,
       window,
     );
-    const events = this.ctx.storage.sql
-      .exec<EventRow>(
-        `SELECT sequence, type, payload_json, occurred_at FROM coordinator_events
-         WHERE sequence > ? ORDER BY sequence LIMIT ?`,
-        parsedCursor.data,
-        parsedLimit.data,
-      )
-      .toArray()
-      .map((event) => ({
-        sequence: event.sequence,
-        type: event.type,
-        payload: JSON.parse(event.payload_json) as unknown,
-        occurredAt: event.occurred_at,
-      }));
+    const events = this.eventPage(parsedCursor.data, parsedLimit.data);
     return {
       ok: true as const,
       events,
@@ -818,6 +882,31 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
       sequence,
       JSON.stringify(event),
     );
+    const message = JSON.stringify({ type: "EVENT", event });
+    for (const webSocket of this.ctx.getWebSockets()) {
+      try {
+        webSocket.send(message);
+      } catch {
+        webSocket.close(1011, "delivery failed");
+      }
+    }
+  }
+
+  private eventPage(cursor: number, limit: number) {
+    return this.ctx.storage.sql
+      .exec<EventRow>(
+        `SELECT sequence, type, payload_json, occurred_at FROM coordinator_events
+         WHERE sequence > ? ORDER BY sequence LIMIT ?`,
+        cursor,
+        limit,
+      )
+      .toArray()
+      .map((event) => ({
+        sequence: event.sequence,
+        type: event.type,
+        payload: JSON.parse(event.payload_json) as unknown,
+        occurredAt: event.occurred_at,
+      }));
   }
 }
 

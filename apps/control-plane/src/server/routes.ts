@@ -19,6 +19,7 @@ import {
   rebuildSessionProjection,
 } from "../worker/browser-control/projection-outbox.js";
 import { createJob, getJob, listJobs } from "../worker/handlers/jobs.js";
+import { openBrowserEventStream } from "../worker/events/stream.js";
 import {
   beginPairing,
   confirmPairing,
@@ -308,7 +309,7 @@ export async function routeRequest(
     }
 
     const sessionOperation = url.pathname.match(
-      /^\/api\/browser-sessions\/([^/]+)\/(connect|commands|results|events|cancel|project|rebuild-projection)$/,
+      /^\/api\/browser-sessions\/([^/]+)\/(connect|commands|results|events|stream|cancel|project|rebuild-projection)$/,
     );
     if (sessionOperation) {
       const sessionId = browserSessionIdSchema.safeParse(sessionOperation[1]);
@@ -389,6 +390,25 @@ export async function routeRequest(
       const coordinator = environment.BROWSER_SESSION_COORDINATOR.getByName(
         sessionId.data,
       );
+      if (request.method === "GET" && operation === "stream") {
+        const origin = authorizeNonBrowserClient(request, environment);
+        if (!origin.ok) return json(request, environment, origin, 403);
+        const cursor = Number(url.searchParams.get("cursor") ?? "0");
+        if (!Number.isInteger(cursor) || cursor < 0)
+          return json(
+            request,
+            environment,
+            { ok: false, code: "INVALID_CURSOR" },
+            400,
+          );
+        return openBrowserEventStream(
+          environment,
+          auth.principalId,
+          sessionId.data,
+          cursor,
+          request,
+        );
+      }
       if (request.method === "GET" && operation === "events") {
         const cursor = Number(url.searchParams.get("cursor") ?? "0");
         const limit = Number(url.searchParams.get("limit") ?? "100");
