@@ -1,0 +1,113 @@
+# Rakazo relevance and reuse assessment — 2026-08-13
+
+## Verdict
+
+**Use Rakazo as a product and UX reference, and possibly as a selectively copied Apache-2.0 component source; do not make it Village's foundation or fork it wholesale.** It is unusually relevant to the “open Grok Bot” product shape: a persistent bot has chat, memory, routines, a graphical computer, takeover, and cross-device clients. Its core execution assumption is nevertheless the opposite of Village's decisive LinkedIn/browser advantage: the bot computer is a Docker or E2B Linux desktop, while Rakazo's Electron app is only a client for a remote web product. That moves browser identity, network origin, credentials, and operational responsibility away from the owner's existing browser and IP.
+
+The codebase is a very early beta, not a mature platform dependency. The canonical repository was created on 2026-08-13, has a single listed contributor, and published `v0.1.0-beta` on the same day; subsequent commits already changed important product behavior. Treat the current source as fast-moving and independently validate every candidate component. [Repository](https://github.com/elie222/rakazo) · [commit history](https://github.com/elie222/rakazo/commits/main) · [beta release](https://github.com/elie222/rakazo/releases/tag/v0.1.0-beta)
+
+## Exact project and provenance
+
+| Question | Finding | Primary evidence |
+| --- | --- | --- |
+| Canonical source | `elie222/rakazo`, public TypeScript monorepo; repository description calls it an open-source Grok Bot alternative. | [Repository](https://github.com/elie222/rakazo) |
+| Owner / origin signal | GitHub identifies the owner as `elie222`; the first commit is `4bdbcb0` (“Initial commit of the Rakazo core product”), and the GitHub contributor endpoint listed only that account when checked. This is an origin signal, not a substitute for a full IP audit. | [Initial commit](https://github.com/elie222/rakazo/commit/4bdbcb0) · [contributors](https://github.com/elie222/rakazo/graphs/contributors) |
+| Stated provenance | The README says the product was “built with Cursor and Grok 4.6” and credits Inbox Zero Inc. It does not identify Rakazo as a fork of another application in the README or root license material. AI-assisted authorship does not itself establish third-party code provenance. | [README](https://github.com/elie222/rakazo/blob/fd89921/README.md) |
+| License | Apache License 2.0; root package metadata matches. Apache permits derivative works and commercial distribution, subject to preserving the license, applicable notices, and modified-file notices. The inspected tree at `fd89921` contains `LICENSE` but no root `NOTICE` file. This is engineering guidance, not legal advice. | [LICENSE](https://github.com/elie222/rakazo/blob/fd89921/LICENSE) · [package metadata](https://github.com/elie222/rakazo/blob/fd89921/package.json) · [source tree](https://github.com/elie222/rakazo/tree/fd89921) |
+
+**If Village copies code:** retain the upstream Apache-2.0 license in the third-party notices, preserve copyright/attribution notices in copied source, add a clear modified-from/upstream URL plus commit SHA header where practical, and keep a `THIRD_PARTY_NOTICES` inventory. Re-audit every copied package and asset separately; Rakazo's top-level license does not supersede its dependency licenses, trademarks, service terms, or a provider's subscription terms.
+
+## What Rakazo actually is
+
+### Product and UX
+
+Rakazo's core mental model is strong and directly relevant: each bot has one thread, one computer, memory, routines, and history. It exposes a visible graphical computer pane, lets the person take control to authenticate, then lets the bot continue with the retained session; web, Electron, and Expo mobile are clients of the same API. The web client subscribes to thread/computer events and has explicit boot, takeover, release, and heartbeat actions. [README](https://github.com/elie222/rakazo/blob/fd89921/README.md) · [web shell](https://github.com/elie222/rakazo/blob/fd89921/apps/web/src/pages/Shell.tsx) · [domain contracts](https://github.com/elie222/rakazo/blob/fd89921/packages/contracts/src/domain.ts)
+
+That makes the interface a useful reference for Village's “progress visible in a side window” requirement:
+
+- persistent bot identity rather than a transient task;
+- chat next to a live computer and explicit human takeover/release;
+- routines and notification-driven continuation;
+- mobile as a supervising client, not necessarily the place where work executes.
+
+Its Electron shell is intentionally thin: it creates a secured `BrowserWindow` that loads `RAKAZO_WEB_URL`; it does not host the bot computer locally. Packaged desktop installers still require a running API and web origin. [Electron main process](https://github.com/elie222/rakazo/blob/fd89921/apps/desktop/src/main.ts) · [desktop package](https://github.com/elie222/rakazo/blob/fd89921/apps/desktop/package.json) · [self-hosting guide](https://github.com/elie222/rakazo/blob/fd89921/docs/self-host.md)
+
+### Architecture and stack
+
+The published stack is TypeScript, React 19/Vite/Tailwind, Electron, Expo, Hono/oRPC, Postgres/Prisma, Better Auth, Graphile Worker, Pi, Docker or E2B sandboxing, and Composio. The repository is split into web/API/worker/desktop/mobile applications plus contracts, adapters, database, memory, and testkit packages. [README stack and layout](https://github.com/elie222/rakazo/blob/fd89921/README.md) · [workspace manifest](https://github.com/elie222/rakazo/blob/fd89921/package.json)
+
+The best architectural idea to study is its small adapter boundary: `SandboxProvider` defines provision, execute, screen connection, user input, snapshot, stop, and destroy. The factory selects `docker`, `e2b`, `desktop`, or `fake`; model and connector adapters are separate. This is a reasonable pattern for Village's optional remote-resume compute, provided Village keeps its local-browser authority model separate. [adapter interfaces](https://github.com/elie222/rakazo/blob/fd89921/packages/adapter-kit/src/interfaces.ts) · [sandbox factory](https://github.com/elie222/rakazo/blob/fd89921/packages/adapters/src/sandbox-factory.ts)
+
+### Agent, browser, and computer capability
+
+The default agent runtime is Pi. Its runtime constructs model tool definitions, streams output, supports tools and bounded parallel subagents, and has explicit abort handling. Bot computers are graphical and advertise PTY, snapshots, takeover, and persistent homes. [Pi runtime](https://github.com/elie222/rakazo/blob/fd89921/packages/adapters/src/pi-runtime.ts) · [Docker adapter](https://github.com/elie222/rakazo/blob/fd89921/packages/adapters/src/docker-sandbox.ts) · [E2B adapter](https://github.com/elie222/rakazo/blob/fd89921/packages/adapters/src/e2b-sandbox.ts)
+
+The computer is a generic Linux GUI, not a user-attached Chrome bridge. Rakazo's Docker image installs Debian, Chromium, Xvfb, Fluxbox, x11vnc, and noVNC; it is a per-bot local container supervised through a private Docker-socket service. E2B creates a remote desktop and launches Chrome/Firefox/Chromium. The documented flow is to take control, sign in in that sandbox browser, and release control so the bot keeps that sandbox session. [Docker computer image](https://github.com/elie222/rakazo/blob/fd89921/infra/sandboxes/computer/Dockerfile) · [README provider table](https://github.com/elie222/rakazo/blob/fd89921/README.md) · [self-hosting guide](https://github.com/elie222/rakazo/blob/fd89921/docs/self-host.md) · [E2B browser launch code](https://github.com/elie222/rakazo/blob/fd89921/packages/adapters/src/e2b-sandbox.ts)
+
+This is valuable for general agent-computer UX and for optional non-sensitive remote workflows. It is a poor direct fit for Village's LinkedIn deliverable: it does not preserve the user's normal residential/business browser/IP identity, and its generic shell-capable computer has a much larger trust boundary than Village's human-driven, site-scoped local browser plan.
+
+## Runtime, deployment, and economic model
+
+Rakazo is self-hostable but not serverless. Its product needs a long-running API, Graphile Worker, Postgres, and a computer provider; the local Compose topology runs Postgres, API, worker, web, a computer image, and a Docker-socket-owning supervisor. The project recommends Docker for trusted single-machine self-hosting and E2B for public or multi-user service. [Self-host architecture](https://github.com/elie222/rakazo/blob/fd89921/docs/self-host.md) · [Compose file](https://github.com/elie222/rakazo/blob/fd89921/infra/compose/docker-compose.yml)
+
+The economics are therefore **BYO model credential plus operator infrastructure**, not a Rakazo-operated managed-compute subscription:
+
+- OpenRouter is the default deployment-key path; users can also bring a model key.
+- The README documents ChatGPT Plus/Pro device-code sign-in for OpenAI Codex through Pi, rather than requiring an OpenAI API key.
+- Local Docker shifts computer cost to the operator's Mac/VPS and requires Docker/volumes; E2B shifts it to a metered external sandbox provider. Composio is optional and has its own account/cost boundary.
+- The project documents no Rakazo-managed model billing in version 1 and explicitly says its public “Cloud” still requires a VPS/always-on service or E2B.
+
+These are topology and cost-allocation facts, not a total-cost estimate: Rakazo's primary documentation does not provide durable E2B, Composio, OpenRouter, or VPS price commitments. [README setup and provider table](https://github.com/elie222/rakazo/blob/fd89921/README.md) · [self-host deployment notes](https://github.com/elie222/rakazo/blob/fd89921/docs/self-host.md) · [environment contract](https://github.com/elie222/rakazo/blob/fd89921/.env.example)
+
+## Authentication, models, MCP, and integrations
+
+**Product authentication:** Better Auth is part of the API stack; deployment secrets fail closed outside development/test when missing or still placeholders. [README](https://github.com/elie222/rakazo/blob/fd89921/README.md) · [secret guard](https://github.com/elie222/rakazo/blob/fd89921/packages/core/src/secrets-guard.ts)
+
+**Model access:** Pi supplies the model catalog/runtime. The custom UI path currently implements ChatGPT Plus/Pro device-code sign-in only for provider `openai-codex`; it persists/refreshes an OAuth credential through its encrypted secret mechanism. Other Pi subscription logins are explicitly not yet exposed in the Rakazo UI. This is relevant evidence that ChatGPT subscription onboarding is possible, but not a reason to copy it blindly: Village should independently validate OpenAI's current supported flow, account policy, token custody, and recovery semantics. [README model setup](https://github.com/elie222/rakazo/blob/fd89921/README.md) · [Pi OAuth implementation](https://github.com/elie222/rakazo/blob/fd89921/packages/adapters/src/pi-oauth.ts) · [onboarding UI](https://github.com/elie222/rakazo/blob/fd89921/apps/web/src/pages/Onboarding.tsx)
+
+**Connected apps:** Rakazo's production integration is Composio. Its connector creates per-user Composio sessions, discovers tools for connected toolkits, executes them, and supports OAuth-style connection/revocation. [Composio connector](https://github.com/elie222/rakazo/blob/fd89921/packages/adapters/src/composio-connector.ts)
+
+**MCP:** do **not** represent Rakazo as providing general production MCP support based on this source. The contracts mention an install kind called `mcp`, but the concrete MCP-named file is a test emulator; the README's integration path is Composio, and the current adapter dependency manifest contains no Model Context Protocol SDK. A proper MCP client/server, permission policy, credential routing, and lifecycle need independent implementation or an explicitly adopted upstream component. [capability contract](https://github.com/elie222/rakazo/blob/fd89921/packages/contracts/src/domain.ts) · [MCP emulator](https://github.com/elie222/rakazo/blob/fd89921/packages/adapters/src/mcp-emulator.ts) · [adapter dependencies](https://github.com/elie222/rakazo/blob/fd89921/packages/adapters/package.json)
+
+## Maturity and operational confidence
+
+Rakazo labels itself “early (beta).” The first beta release was published on 2026-08-13 and is already behind the current main branch; at the assessment snapshot the repository had a same-day initial commit, 49 commits from the one listed contributor, and ongoing substantive changes. That is healthy velocity but weak release stability. [README](https://github.com/elie222/rakazo/blob/fd89921/README.md) · [commit history](https://github.com/elie222/rakazo/commits/main) · [release](https://github.com/elie222/rakazo/releases/tag/v0.1.0-beta)
+
+It has better-than-usual early-project signals: unit/property/in-process verification, a broader Postgres/API/Playwright verification command, provider canaries, source layout separation, and secret-placeholder checks. But its checked-in GitHub Actions workflow runs only lint, type checking, and `verify:fast`; it does not run the fuller verification, live-provider canaries, desktop packaging, or a deployment job. Village should not inherit its operational promises without reproducing them in Village CI. [verification commands](https://github.com/elie222/rakazo/blob/fd89921/package.json) · [CI workflow](https://github.com/elie222/rakazo/blob/fd89921/.github/workflows/ci.yml)
+
+## Reuse decision matrix
+
+| Candidate | Value to Village | Recommendation | Attribution / validation boundary |
+| --- | --- | --- | --- |
+| Bot/thread/computer/routine UX vocabulary and navigation | High product relevance. It makes persistent agent work, visible progress, take-control, and mobile supervision concrete. | Recreate the interaction model in Village's own UI; use screenshots/demo as design input, not a code dependency. | Do not reuse branding/assets. If source UI components are copied, preserve Apache notice/provenance and test accessibility independently. |
+| Sandbox-provider interface and fake-provider test seam | Useful for an optional “resume elsewhere” compute tier. | Study or selectively copy the narrow interface, but adapt it to Village's controller/session/event contracts rather than importing the stack. | Apache attribution; test isolation, tenancy, cancellation, restore, quota, and credential boundaries. |
+| Docker supervisor + graphical computer | Useful for a separate, explicit remote-work mode or owned fixture testing. | Do not make it the LinkedIn path. Consider only after Village local-browser flow is stable, with a distinct remote-browser disclosure. | Docker socket is host-equivalent authority; retain the upstream security model only after a security review. |
+| E2B provider | Shows viable pause/resume and remote GUI plumbing. | Optional later provider behind Village's remote-resume abstraction; never silently migrate an owner’s authenticated local profile into it. | Validate E2B pricing, data residency, persistence, stream authentication, and destructive lifecycle. |
+| Pi/OpenAI Codex device-code onboarding | Directly relevant to ChatGPT OAuth setup pain. | Spike against the current official OpenAI/Pi-supported path, then implement Village-owned token custody and UX. | Do not copy credential storage/refresh blindly; validate subscription entitlement and revocation/recovery behavior. |
+| Composio connected-app layer | Moderate relevance for SaaS integrations, not for the primary browser. | Evaluate as an optional provider, alongside native MCP support rather than pretending Composio equals MCP. | Validate external OAuth, pricing, auditability, tool allowlists, and data egress. |
+| Entire web/API/worker/DB product | Broad scope and a different authority/deployment model. | **Do not fork as Village v1.** A fork would inherit PostgreSQL/Graphile/Docker/E2B operational coupling and a remote-browser-centered product decision. | If a later derivative is desired, begin with a dependency/provenance/security audit and preserve Apache obligations. |
+
+## Key differentiators and gaps versus Village
+
+Village should lead with a different promise: **a local, user-owned browser side pane for trusted human sign-in and visible work, plus optional remote continuity—not a remote computer by default.** This matches the Village plan's local profile/secret custody, main-process authorization, human-driven LinkedIn policy, and explicit no-CDP boundary. [Village local-browser plan](/Volumes/Projects/OpenMausBot/docs/plans/2026-08-11-001-feat-village-local-browser-plan.md)
+
+| Dimension | Rakazo | Village opportunity |
+| --- | --- | --- |
+| Browser identity | Sandbox Chrome/Firefox/Chromium in Docker or E2B. | User-attached/local Electron browser profile, preserving a trusted network and clearly scoped consent. |
+| Desktop | Electron wrapper around a remotely served web UI. | Native Electron composition with a trustworthy local UI beside untrusted browser content. |
+| Human control | Strong visible takeover/release pattern. | Keep this pattern, but make linked-site login owner-only and enforce main-process step-up for destructive actions. |
+| Provider agility | Pi catalog, BYOK, OpenRouter, and one ChatGPT Plus/Pro device flow. | Provide provider choice while keeping model credentials local and making ChatGPT OAuth recovery frictionless. |
+| Remote continuity | First-class remote computer and mobile/web clients. | Add remote resume/supervision as a deliberate, disclosed tier; start with encrypted state/artifact continuity rather than treating a remote VM as the default browser. |
+| MCP | Not established as a production generic MCP implementation. | Build a real MCP capability boundary: explicit server approval, scopes, secret mediation, provenance, audit trail, and revocation. |
+| Safety posture | Generic shell-capable computer; direct host provider is documented as least isolated. | Narrow capabilities per site/session, local profile boundaries, human gates, and conservative policies for high-risk sites. |
+
+## Recommended next move
+
+1. **Do not fork Rakazo.** Keep Village clean-room in product identity and core control-plane/browser architecture.
+2. Run two tightly scoped comparison spikes: (a) reproduce Rakazo's chat-plus-live-computer/takeover information architecture with Village's local browser; (b) verify the current official ChatGPT/Codex device flow before adopting any Pi-inspired OAuth code.
+3. Define a Village `RemoteComputerProvider` only for opt-in backup/resume. Its contract must say that it does not receive a local LinkedIn profile, cookies, or credentials by default.
+4. If copying a Rakazo component, copy one small, tested unit at a pinned upstream SHA, add Apache notices, and maintain a source-to-Village provenance record. Start with an interface/test pattern, not a composed application service.
+
+## Source scope and snapshot
+
+This assessment uses only the canonical Rakazo GitHub repository, its code/history/release metadata, and the repository's own `rakazo.com` reference in the README. No secondary articles, social posts, or price aggregators were used. Facts that can change quickly (commit count, stars, issues, providers, and release state) are snapshot facts as of 2026-08-13; the linked canonical sources should be refreshed before implementation or public claims.
