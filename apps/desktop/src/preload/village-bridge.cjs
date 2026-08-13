@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld(
     beginChatGptLogin: () => ipcRenderer.invoke("village:begin-chatgpt-login"),
     cancelChatGptLogin: () =>
       ipcRenderer.invoke("village:cancel-chatgpt-login"),
+    runPersonalAgentTask: (request) =>
+      ipcRenderer.invoke("village:run-personal-agent-task", request),
     subscribeBrowserUiState: (listener) => {
       if (typeof listener !== "function") {
         throw new TypeError("Browser UI listener must be a function");

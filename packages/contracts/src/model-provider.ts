@@ -9,7 +9,35 @@ export const sanitizedModelContextSchema = z.strictObject({
   jobState: jobStateSchema,
   actionPhase: actionPhaseSchema,
   observation: browserObservationSchema,
+  objective: z.string().trim().min(1).max(500).optional(),
 });
+
+export const personalAgentTaskRequestSchema = z.strictObject({
+  task: z.literal("CHECK_LINKEDIN_SIGN_IN"),
+});
+
+export const personalAgentTaskResultSchema = z.discriminatedUnion("state", [
+  z.strictObject({
+    state: z.literal("COMPLETED"),
+    outcome: z.enum(["AUTHENTICATED", "NOT_AUTHENTICATED"]),
+    evidence: z.enum(["LOCAL_PREDICATE", "OWNER_CONFIRMED"]),
+  }),
+  z.strictObject({
+    state: z.literal("NEEDS_HUMAN"),
+    reason: z.enum(["CHALLENGE", "ACCOUNT_CONFIRMATION", "UNKNOWN_STATE"]),
+  }),
+  z.strictObject({
+    state: z.literal("BLOCKED"),
+    reason: z.enum([
+      "CHATGPT_AUTH_REQUIRED",
+      "PROVIDER_UNAVAILABLE",
+      "UNSUPPORTED_TASK",
+      "SITE_POLICY_DENIED",
+      "SENSITIVE_INPUT_DENIED",
+      "TASK_IN_PROGRESS",
+    ]),
+  }),
+]);
 
 export const modelProviderResultSchema = z.discriminatedUnion("status", [
   z.strictObject({
@@ -66,6 +94,12 @@ export type SanitizedModelContext = z.infer<typeof sanitizedModelContextSchema>;
 export type ModelProviderResult = z.infer<typeof modelProviderResultSchema>;
 export type ModelProviderAccountSnapshot = z.infer<
   typeof modelProviderAccountSnapshotSchema
+>;
+export type PersonalAgentTaskRequest = z.infer<
+  typeof personalAgentTaskRequestSchema
+>;
+export type PersonalAgentTaskResult = z.infer<
+  typeof personalAgentTaskResultSchema
 >;
 
 export interface ModelProvider {

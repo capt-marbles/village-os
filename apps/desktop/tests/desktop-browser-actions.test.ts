@@ -11,6 +11,7 @@ function bridge(): VillageDesktopBridge {
     getModelProviderAccount: vi.fn(),
     beginChatGptLogin: vi.fn(),
     cancelChatGptLogin: vi.fn(),
+    runPersonalAgentTask: vi.fn(),
     subscribeBrowserUiState: vi.fn(() => () => undefined),
     subscribeBrowserDiagnostics: vi.fn(() => () => undefined),
     requestTakeover: vi.fn(),

@@ -22,6 +22,53 @@ const observation: BrowserObservation = {
 };
 
 describe("model provider boundary", () => {
+  it("starts once and preempts an active turn on close", async () => {
+    let releaseTurn: (() => void) | undefined;
+    const turn = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+    let initializeCalls = 0;
+    let closeCalls = 0;
+    const provider = new CodexAppServerProvider({
+      request: async (method: string): Promise<unknown> => {
+        if (method === "initialize") {
+          initializeCalls += 1;
+          return {};
+        }
+        if (method === "account/read") {
+          return { account: { type: "chatgpt" } };
+        }
+        if (method === "thread/start") return { thread: { id: "thread-1" } };
+        throw new Error(`unexpected method ${method}`);
+      },
+      notify: () => undefined,
+      runBrowserActionTurn: async () => {
+        await turn;
+        return { capability: "OBSERVE", facts: ["AUTH_STATE"] };
+      },
+      close: async () => {
+        closeCalls += 1;
+      },
+    });
+
+    await Promise.all([provider.start(), provider.start()]);
+    expect(initializeCalls).toBe(1);
+    const action = provider.nextAction(
+      createSanitizedModelContext({
+        jobState: "RUNNING_AGENT",
+        actionPhase: "ACCEPTED",
+        observation,
+      }),
+    );
+    const closing = provider.close();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(closeCalls).toBe(1);
+    await closing;
+    expect(closeCalls).toBe(1);
+    releaseTurn?.();
+    await action;
+  });
+
   it("serializes only bounded facts and treats provider output as an untrusted command candidate", async () => {
     const context = createSanitizedModelContext({
       jobState: "RUNNING_AGENT",
@@ -190,7 +237,7 @@ describe("model provider boundary", () => {
     ).toBe(true);
   });
 
-  it("bounds unanswered requests and clears provider thread state on close", async () => {
+  it("bounds unanswered requests and makes provider close terminal", async () => {
     const stdin = new PassThrough();
     const stdout = new PassThrough();
     const stderr = new PassThrough();
@@ -247,10 +294,9 @@ describe("model provider boundary", () => {
     await provider.start();
     await provider.nextAction(context);
     await provider.close();
-    await provider.start();
-    await provider.nextAction(context);
-    expect(threadStarts).toBe(2);
-    expect(transportsCreated).toBe(2);
+    await expect(provider.start()).rejects.toThrow("CODEX_APP_SERVER_CLOSED");
+    expect(threadStarts).toBe(1);
+    expect(transportsCreated).toBe(1);
   });
 
   it("interrupts timed-out turns and contains stdin failures", async () => {

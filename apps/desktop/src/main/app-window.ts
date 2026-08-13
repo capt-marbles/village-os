@@ -29,6 +29,11 @@ import { BrowserControlTransfer } from "./browser-control-transfer.js";
 import { isTrustedVillageSender, trustedWebPreferences } from "./security.js";
 import { CrashReporter } from "./crash-reporting.js";
 import type { ModelProviderAccountOperations } from "./model-provider-account.js";
+import {
+  personalAgentTaskResultSchema,
+  type PersonalAgentTaskResult,
+} from "@village/contracts";
+import type { PersonalAgentTaskOperations } from "./personal-agent-task.js";
 
 export interface VillageAppWindowOptions {
   principalId: string;
@@ -43,6 +48,7 @@ export interface VillageAppWindowOptions {
   /** Site-scoped credential reference cleanup registered by the vault owner. */
   revokeCredentialReferences: (binding: SessionErasureBinding) => Promise<void>;
   modelProviderAccount: ModelProviderAccountOperations;
+  personalAgentTask: PersonalAgentTaskOperations;
 }
 
 export interface VillageAppWindow {
@@ -278,6 +284,41 @@ export async function createVillageAppWindow(
     return options.modelProviderAccount.cancelLogin();
   });
   ipcMain.handle(
+    "village:run-personal-agent-task",
+    async (
+      event,
+      candidate: unknown,
+      ...arguments_
+    ): Promise<PersonalAgentTaskResult> => {
+      assertTrustedRequest(event, arguments_);
+      const taskResult = await options.personalAgentTask.run(candidate, {
+        readBrowserState: () => {
+          if (browserHost.view.webContents.isDestroyed()) {
+            throw new Error("BROWSER_TARGET_UNAVAILABLE");
+          }
+          return {
+            currentUrl: browserHost.view.webContents.getURL(),
+            debuggerAttached:
+              browserHost.view.webContents.debugger.isAttached(),
+          };
+        },
+        confirmAccount: async () => {
+          const response = await dialog.showMessageBox({
+            type: "question",
+            title: "Confirm LinkedIn session",
+            message: "Is the LinkedIn account shown in the browser yours?",
+            buttons: ["Confirm", "Not mine"],
+            defaultId: 0,
+            cancelId: 1,
+            noLink: true,
+          });
+          return response.response === 0;
+        },
+      });
+      return personalAgentTaskResultSchema.parse(taskResult);
+    },
+  );
+  ipcMain.handle(
     "village:request-return-control",
     async (event, ...arguments_) => {
       assertTrustedRequest(event, arguments_);
@@ -436,6 +477,7 @@ export async function createVillageAppWindow(
       "village:get-model-provider-account",
       "village:begin-chatgpt-login",
       "village:cancel-chatgpt-login",
+      "village:run-personal-agent-task",
       "village:request-return-control",
       "village:set-browser-pane",
       "village:record-verification-decision",

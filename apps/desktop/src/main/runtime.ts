@@ -26,6 +26,7 @@ import { installGlobalSecurityPolicy } from "./security.js";
 import { verifyMacOsOwnerPresence } from "./step-up-auth.js";
 import { createCodexAppServerProvider } from "../model-provider/codex-app-server.js";
 import { ModelProviderAccountController } from "./model-provider-account.js";
+import { PersonalAgentTaskController } from "./personal-agent-task.js";
 
 registerVillageScheme(protocol);
 installGlobalSecurityPolicy(app);
@@ -111,6 +112,9 @@ export async function startVillageRuntime(
     modelProviderAccount: new ModelProviderAccountController(
       createCodexAppServerProvider(),
       (url) => shell.openExternal(url),
+    ),
+    personalAgentTask: new PersonalAgentTaskController(
+      createCodexAppServerProvider(),
     ),
     verifyStepUp: () => verifyMacOsOwnerPresence(),
     // LinkedIn authentication is human-only: Village never persists a
