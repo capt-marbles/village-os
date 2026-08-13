@@ -85,6 +85,12 @@ importers:
         specifier: 4.4.3
         version: 4.4.3
 
+  packages/test-auth-site:
+    dependencies:
+      '@village/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+
   packages/ui:
     dependencies:
       react:

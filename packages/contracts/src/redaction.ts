@@ -94,3 +94,18 @@ export const browserTaintPolicy = browserTaintPolicySchema.parse({
 });
 
 export type BrowserObservation = z.infer<typeof browserObservationSchema>;
+
+export function serializeBrowserObservation(input: unknown): string {
+  if (typeof input !== "object" || input === null) {
+    throw new Error("INVALID_BROWSER_OBSERVATION");
+  }
+  const record = input as Record<string, unknown>;
+  const observation = browserObservationSchema.parse({
+    schemaVersion: record.schemaVersion,
+    source: record.source,
+    canonicalOrigin: record.canonicalOrigin,
+    predicateIds: record.predicateIds,
+    facts: record.facts,
+  });
+  return JSON.stringify(observation);
+}

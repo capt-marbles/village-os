@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { browserObservationSchema } from "../redaction.js";
+import {
+  browserObservationSchema,
+  serializeBrowserObservation,
+} from "../redaction.js";
 
 describe("browser observation boundary", () => {
   it("accepts bounded policy facts and rejects every raw page-content field", () => {
@@ -44,5 +47,30 @@ describe("browser observation boundary", () => {
         facts: [{ id: "AUTH_STATE", value: "SEND_SECRET" }],
       }).success,
     ).toBe(false);
+  });
+
+  it("serializes only closed bounded facts from hostile observation inputs", () => {
+    const secret = "u5-plaintext-7f60a9";
+    const serialized = serializeBrowserObservation({
+      schemaVersion: 1,
+      source: "BROWSER_UNTRUSTED",
+      canonicalOrigin: "https://fixture.village.test",
+      predicateIds: ["auth-form-visible-v1"],
+      facts: [{ id: "HUMAN_GATE", value: "UNKNOWN_CHALLENGE" }],
+      title: secret,
+      url: `https://fixture.village.test/?secret=${secret}#${secret}`,
+      aria: secret,
+      hiddenFields: { password: secret },
+      canvas: secret,
+      notification: secret,
+      console: secret,
+      stack: secret,
+      html: `<input value="${secret}">`,
+      markdown: `![x](${secret})`,
+    });
+    expect(serialized).toBe(
+      '{"schemaVersion":1,"source":"BROWSER_UNTRUSTED","canonicalOrigin":"https://fixture.village.test","predicateIds":["auth-form-visible-v1"],"facts":[{"id":"HUMAN_GATE","value":"UNKNOWN_CHALLENGE"}]}',
+    );
+    expect(serialized).not.toContain(secret);
   });
 });
