@@ -1,16 +1,18 @@
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import {
+  actionIdSchema,
+  actionPhaseSchema,
+  browserActionSchema,
+  instantSchema,
+  type BrowserAction,
+} from "@village/contracts";
 
 export interface ActionJournalEntry {
   actionId: string;
   leaseEpoch: number;
-  phase:
-    | "ACCEPTED"
-    | "DISPATCHED"
-    | "EFFECT_OBSERVED"
-    | "RECEIPTED"
-    | "RECONCILIATION_REQUIRED";
-  mutationClass: "READ_ONLY" | "IDEMPOTENT" | "NON_IDEMPOTENT";
+  phase: BrowserAction["phase"];
+  mutationClass: BrowserAction["mutationClass"];
   recordedAt: string;
 }
 
@@ -19,23 +21,14 @@ function validateEntry(candidate: unknown): ActionJournalEntry {
     throw new Error("ACTION_JOURNAL_CORRUPT");
   }
   const entry = candidate as Partial<ActionJournalEntry>;
-  const phases = new Set([
-    "ACCEPTED",
-    "DISPATCHED",
-    "EFFECT_OBSERVED",
-    "RECEIPTED",
-    "RECONCILIATION_REQUIRED",
-  ]);
-  const mutations = new Set(["READ_ONLY", "IDEMPOTENT", "NON_IDEMPOTENT"]);
   if (
-    typeof entry.actionId !== "string" ||
-    !/^act_[0-9A-HJKMNP-TV-Z]{26}$/.test(entry.actionId) ||
+    !actionIdSchema.safeParse(entry.actionId).success ||
     !Number.isInteger(entry.leaseEpoch) ||
     (entry.leaseEpoch ?? 0) < 1 ||
-    !phases.has(entry.phase ?? "") ||
-    !mutations.has(entry.mutationClass ?? "") ||
-    typeof entry.recordedAt !== "string" ||
-    Number.isNaN(Date.parse(entry.recordedAt)) ||
+    !actionPhaseSchema.safeParse(entry.phase).success ||
+    !browserActionSchema.shape.mutationClass.safeParse(entry.mutationClass)
+      .success ||
+    !instantSchema.safeParse(entry.recordedAt).success ||
     Object.keys(entry).some(
       (key) =>
         ![

@@ -32,6 +32,7 @@ describe("native browser viewport", () => {
 
     coordinator.layout({ width: 900, height: 600 });
     coordinator.beginTakeover();
+    coordinator.layout({ width: 1_000, height: 700 });
     coordinator.acknowledgeTakeover();
     coordinator.destroy();
 
@@ -39,6 +40,9 @@ describe("native browser viewport", () => {
     expect(calls.indexOf("input:true")).toBeGreaterThan(
       calls.indexOf("input:false"),
     );
+    expect(
+      calls.slice(calls.indexOf("input:false"), calls.indexOf("input:true")),
+    ).not.toContain("visible:true");
     expect(calls.at(-1)).toBe("destroy");
   });
 });

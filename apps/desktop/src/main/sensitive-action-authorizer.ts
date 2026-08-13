@@ -9,7 +9,7 @@ export interface SensitiveActionBinding {
 
 interface StoredAuthorization extends SensitiveActionBinding {
   expiresAt: number;
-  consumed: boolean;
+  consumedAt?: number;
 }
 
 export class SensitiveActionAuthorizer {
@@ -25,12 +25,12 @@ export class SensitiveActionAuthorizer {
     ) {
       throw new Error("INVALID_AUTHORIZATION_LIFETIME");
     }
+    this.purge();
     const token = crypto.randomUUID();
     const expiresAt = this.now() + lifetimeMs;
     this.authorizations.set(token, {
       ...binding,
       expiresAt,
-      consumed: false,
     });
     return { token, expiresAt };
   }
@@ -48,13 +48,14 @@ export class SensitiveActionAuthorizer {
           | "AUTHORIZATION_EXPIRED"
           | "AUTHORIZATION_BINDING_MISMATCH";
       } {
+    this.purge();
     const authorization = this.authorizations.get(token);
     if (!authorization) return { ok: false, code: "AUTHORIZATION_UNKNOWN" };
-    if (authorization.consumed) {
+    if (authorization.consumedAt !== undefined) {
       return { ok: false, code: "AUTHORIZATION_REPLAYED" };
     }
     if (this.now() > authorization.expiresAt) {
-      authorization.consumed = true;
+      authorization.consumedAt = this.now();
       return { ok: false, code: "AUTHORIZATION_EXPIRED" };
     }
     if (
@@ -65,7 +66,16 @@ export class SensitiveActionAuthorizer {
     ) {
       return { ok: false, code: "AUTHORIZATION_BINDING_MISMATCH" };
     }
-    authorization.consumed = true;
+    authorization.consumedAt = this.now();
     return { ok: true };
+  }
+
+  private purge(): void {
+    const now = this.now();
+    for (const [token, authorization] of this.authorizations) {
+      const replayWindowEnds =
+        (authorization.consumedAt ?? authorization.expiresAt) + 60_000;
+      if (replayWindowEnds < now) this.authorizations.delete(token);
+    }
   }
 }

@@ -49,6 +49,7 @@ export interface NativeBrowserView {
 
 export class BrowserViewportCoordinator {
   private visible = true;
+  private inputBlocked = false;
   private destroyed = false;
   private options: ViewportOptions = {};
 
@@ -61,21 +62,25 @@ export class BrowserViewportCoordinator {
   layout(size: Size): void {
     if (this.destroyed) return;
     this.view.setBounds(calculateBrowserBounds(size, this.options));
-    this.view.setVisible(this.visible);
+    this.view.setVisible(this.visible && !this.inputBlocked);
   }
 
   setVisible(visible: boolean): void {
     if (this.destroyed) return;
+    if (this.visible === visible) return;
     this.visible = visible;
-    this.view.setVisible(visible);
+    this.view.setVisible(visible && !this.inputBlocked);
   }
 
   beginTakeover(): void {
-    if (!this.destroyed) this.view.setInputEnabled(false);
+    if (this.destroyed) return;
+    this.inputBlocked = true;
+    this.view.setInputEnabled(false);
   }
 
   acknowledgeTakeover(): void {
     if (this.destroyed) return;
+    this.inputBlocked = false;
     this.view.setInputEnabled(true);
     this.view.focus();
   }

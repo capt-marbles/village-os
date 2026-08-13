@@ -9,7 +9,6 @@ export interface LocalAction {
 
 type InFlight = {
   actionId: string;
-  mutationClass: LocalAction["mutationClass"];
   settled: Promise<void>;
 };
 
@@ -37,7 +36,6 @@ export class LocalActionExecutor {
     const settled = new Promise<void>((resolve) => (settle = resolve));
     this.inFlight = {
       actionId: action.actionId,
-      mutationClass: action.mutationClass,
       settled,
     };
     try {
@@ -64,12 +62,13 @@ export class LocalActionExecutor {
     const inFlight = this.inFlight;
     if (!inFlight) return { status: "QUIESCED" };
 
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     const timedOut = await Promise.race([
       inFlight.settled.then(() => false),
-      new Promise<true>((resolve) =>
-        setTimeout(() => resolve(true), timeoutMs),
-      ),
-    ]);
+      new Promise<true>((resolve) => {
+        timeout = setTimeout(() => resolve(true), timeoutMs);
+      }),
+    ]).finally(() => clearTimeout(timeout));
     if (!timedOut) return { status: "QUIESCED" };
     return { status: "OUTCOME_UNKNOWN", actionId: inFlight.actionId };
   }

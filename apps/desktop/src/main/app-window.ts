@@ -62,13 +62,25 @@ export async function createVillageAppWindow(
   const appView = new WebContentsView({
     webPreferences: trustedWebPreferences(options.preloadPath),
   });
-  const browserHost = await LocalBrowserHost.create({
-    principalId: options.principalId,
-    deviceId: options.deviceId,
-    site: options.site,
-    profileRoot: LocalBrowserHost.profileRoot(options.userDataPath),
-    initialUrl: options.initialUrl,
-  });
+  const appLoad = appView.webContents.loadURL("village://app/");
+  let browserHost: LocalBrowserHost | undefined;
+  try {
+    browserHost = await LocalBrowserHost.create({
+      principalId: options.principalId,
+      deviceId: options.deviceId,
+      site: options.site,
+      profileRoot: LocalBrowserHost.profileRoot(options.userDataPath),
+      initialUrl: options.initialUrl,
+    });
+    await appLoad;
+  } catch (error) {
+    await appLoad.catch(() => undefined);
+    await browserHost?.close();
+    if (!appView.webContents.isDestroyed()) appView.webContents.close();
+    window.destroy();
+    throw error;
+  }
+  if (!browserHost) throw new Error("BROWSER_HOST_CREATION_FAILED");
   const viewport = new BrowserViewportCoordinator(
     browserViewAdapter(window, browserHost),
   );
@@ -86,7 +98,6 @@ export async function createVillageAppWindow(
   };
   window.on("resize", layout);
   layout();
-  await appView.webContents.loadURL("village://app/");
 
   const authorizer = new SensitiveActionAuthorizer();
   const executor = new LocalActionExecutor({ leaseEpoch: 1 });

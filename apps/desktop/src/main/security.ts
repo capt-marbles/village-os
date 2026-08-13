@@ -3,10 +3,11 @@ import {
   browserWebPreferences,
   decideNavigation,
   decidePopup,
+  isPermissionAllowed,
   type BrowserSite,
 } from "../browser/session-policy.js";
 
-export const trustedAppOrigin = "village://app";
+const configuredSessions = new WeakSet<Session>();
 
 export function trustedWebPreferences(preload: string): WebPreferences {
   return {
@@ -30,9 +31,13 @@ export function isTrustedVillageSender(contents: WebContents): boolean {
 }
 
 export function configureBrowserSession(browserSession: Session): void {
-  browserSession.setPermissionCheckHandler(() => false);
-  browserSession.setPermissionRequestHandler((_contents, _permission, done) =>
-    done(false),
+  if (configuredSessions.has(browserSession)) return;
+  configuredSessions.add(browserSession);
+  browserSession.setPermissionCheckHandler((_contents, permission) =>
+    isPermissionAllowed(permission),
+  );
+  browserSession.setPermissionRequestHandler((_contents, permission, done) =>
+    done(isPermissionAllowed(permission)),
   );
   browserSession.setDevicePermissionHandler(() => false);
   browserSession.setDisplayMediaRequestHandler((_request, done) => done({}));
@@ -84,5 +89,3 @@ export function installGlobalSecurityPolicy(application: App): void {
     callback();
   });
 }
-
-export { browserWebPreferences };

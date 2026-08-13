@@ -63,6 +63,7 @@ export function installVillageProtocol(
   protocolModule: Protocol,
   rendererRoot: string,
 ): void {
+  const rendererSource = readFile(join(rendererRoot, "index.js"));
   protocolModule.handle("village", async (request) => {
     const url = new URL(request.url);
     if (url.host !== "app") return new Response("Not found", { status: 404 });
@@ -77,8 +78,7 @@ export function installVillageProtocol(
       });
     }
     if (url.pathname === "/renderer.js") {
-      const source = await readFile(join(rendererRoot, "index.js"));
-      return new Response(source, {
+      return new Response(await rendererSource, {
         headers: { "content-type": "text/javascript; charset=utf-8" },
       });
     }

@@ -1,11 +1,7 @@
 import type { WebPreferences } from "electron";
+import { commandPolicyFor, type Site } from "@village/contracts";
 
-export type BrowserSite = "OWNED_FIXTURE" | "LINKEDIN";
-
-const allowedOrigin: Record<BrowserSite, string> = {
-  OWNED_FIXTURE: "https://fixture.village.test",
-  LINKEDIN: "https://www.linkedin.com",
-};
+export type BrowserSite = Site;
 
 export const browserWebPreferences = Object.freeze({
   sandbox: true,
@@ -28,7 +24,11 @@ export function decideNavigation(
   } catch {
     return { allow: false, code: "NAVIGATION_DENIED" };
   }
-  if (url.protocol !== "https:" || url.origin !== allowedOrigin[site]) {
+  const policy = commandPolicyFor(site);
+  if (
+    url.protocol !== "https:" ||
+    !policy.allowedOrigins.some((origin) => origin === url.origin)
+  ) {
     return { allow: false, code: "NAVIGATION_DENIED" };
   }
   return { allow: true };
@@ -43,5 +43,7 @@ export function isPermissionAllowed(_permission: string): false {
 }
 
 export function originForSite(site: BrowserSite): string {
-  return allowedOrigin[site];
+  const [origin] = commandPolicyFor(site).allowedOrigins;
+  if (!origin) throw new Error("SITE_POLICY_MISSING_ORIGIN");
+  return origin;
 }
