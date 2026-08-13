@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ModelProviderAccountCard,
   dispatchModelProviderAccountAction,
+  startModelProviderAccountPolling,
   type ModelProviderAccountBridge,
 } from "../src/renderer/ModelProviderAccountCard.js";
 
@@ -88,5 +89,42 @@ describe("ChatGPT account onboarding", () => {
     expect(village.beginChatGptLogin).toHaveBeenCalledOnce();
     expect(village.cancelChatGptLogin).toHaveBeenCalledOnce();
     expect(village.getModelProviderAccount).toHaveBeenCalledOnce();
+  });
+
+  it("keeps at most one account refresh in flight", async () => {
+    vi.useFakeTimers();
+    let resolveFirst!: (value: {
+      provider: "CHATGPT";
+      state: "AUTHENTICATING";
+    }) => void;
+    const first = new Promise<{
+      provider: "CHATGPT";
+      state: "AUTHENTICATING";
+    }>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const getModelProviderAccount = vi
+      .fn()
+      .mockImplementationOnce(() => first)
+      .mockResolvedValue({ provider: "CHATGPT", state: "AUTHENTICATING" });
+    const publish = vi.fn();
+    const stop = startModelProviderAccountPolling(
+      { getModelProviderAccount },
+      publish,
+      10,
+    );
+
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(getModelProviderAccount).toHaveBeenCalledOnce();
+    resolveFirst({ provider: "CHATGPT", state: "AUTHENTICATING" });
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(getModelProviderAccount).toHaveBeenCalledTimes(2);
+
+    stop();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(getModelProviderAccount).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 });

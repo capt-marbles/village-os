@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import type { ModelProviderAccountSnapshot } from "../main/model-provider-account.js";
+import { useCallback, useEffect, useState } from "react";
+import type { ModelProviderAccountSnapshot } from "@village/contracts";
 
 export type ModelProviderAccountAction =
   "BEGIN_LOGIN" | "CANCEL_LOGIN" | "REFRESH";
@@ -8,6 +8,50 @@ export interface ModelProviderAccountBridge {
   getModelProviderAccount(): Promise<ModelProviderAccountSnapshot>;
   beginChatGptLogin(): Promise<ModelProviderAccountSnapshot>;
   cancelChatGptLogin(): Promise<ModelProviderAccountSnapshot>;
+}
+
+const providerUnavailable = Object.freeze({
+  provider: "CHATGPT",
+  state: "UNAVAILABLE",
+  errorCode: "PROVIDER_UNAVAILABLE",
+} satisfies ModelProviderAccountSnapshot);
+
+function sameSnapshot(
+  current: ModelProviderAccountSnapshot,
+  next: ModelProviderAccountSnapshot,
+): boolean {
+  if (current.state !== next.state) return false;
+  if (current.state === "AUTHENTICATED" && next.state === "AUTHENTICATED") {
+    return current.accountType === next.accountType;
+  }
+  if (current.state === "UNAVAILABLE" && next.state === "UNAVAILABLE") {
+    return current.errorCode === next.errorCode;
+  }
+  return true;
+}
+
+export function startModelProviderAccountPolling(
+  bridge: Pick<ModelProviderAccountBridge, "getModelProviderAccount">,
+  publish: (snapshot: ModelProviderAccountSnapshot) => void,
+  intervalMs = 1_500,
+): () => void {
+  let active = true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const poll = async () => {
+    try {
+      const snapshot = await bridge.getModelProviderAccount();
+      if (active) publish(snapshot);
+    } catch {
+      if (active) publish(providerUnavailable);
+    } finally {
+      if (active) timer = setTimeout(() => void poll(), intervalMs);
+    }
+  };
+  timer = setTimeout(() => void poll(), intervalMs);
+  return () => {
+    active = false;
+    if (timer) clearTimeout(timer);
+  };
 }
 
 export function dispatchModelProviderAccountAction(
@@ -139,12 +183,15 @@ export function ModelProviderAccountOnboarding({
     state: "CHECKING",
   });
   const [pending, setPending] = useState(false);
+  const publish = useCallback((next: ModelProviderAccountSnapshot) => {
+    setSnapshot((current) => (sameSnapshot(current, next) ? current : next));
+  }, []);
 
   const run = async (action: ModelProviderAccountAction) => {
     if (pending) return;
     setPending(true);
     try {
-      setSnapshot(await dispatchModelProviderAccountAction(bridge, action));
+      publish(await dispatchModelProviderAccountAction(bridge, action));
     } finally {
       setPending(false);
     }
@@ -154,37 +201,17 @@ export function ModelProviderAccountOnboarding({
     let active = true;
     void bridge
       .getModelProviderAccount()
-      .then((next) => active && setSnapshot(next))
-      .catch(
-        () =>
-          active &&
-          setSnapshot({
-            provider: "CHATGPT",
-            state: "UNAVAILABLE",
-            errorCode: "PROVIDER_UNAVAILABLE",
-          }),
-      );
+      .then((next) => active && publish(next))
+      .catch(() => active && publish(providerUnavailable));
     return () => {
       active = false;
     };
-  }, [bridge]);
+  }, [bridge, publish]);
 
   useEffect(() => {
     if (snapshot.state !== "AUTHENTICATING") return;
-    const interval = window.setInterval(() => {
-      void bridge
-        .getModelProviderAccount()
-        .then(setSnapshot)
-        .catch(() => {
-          setSnapshot({
-            provider: "CHATGPT",
-            state: "UNAVAILABLE",
-            errorCode: "PROVIDER_UNAVAILABLE",
-          });
-        });
-    }, 1_500);
-    return () => window.clearInterval(interval);
-  }, [bridge, snapshot.state]);
+    return startModelProviderAccountPolling(bridge, publish);
+  }, [bridge, publish, snapshot.state]);
 
   return (
     <ModelProviderAccountCard

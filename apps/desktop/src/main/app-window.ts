@@ -28,7 +28,7 @@ import { ControlTransferGate } from "./control-transfer-gate.js";
 import { BrowserControlTransfer } from "./browser-control-transfer.js";
 import { isTrustedVillageSender, trustedWebPreferences } from "./security.js";
 import { CrashReporter } from "./crash-reporting.js";
-import type { ModelProviderAccountController } from "./model-provider-account.js";
+import type { ModelProviderAccountOperations } from "./model-provider-account.js";
 
 export interface VillageAppWindowOptions {
   principalId: string;
@@ -42,7 +42,7 @@ export interface VillageAppWindowOptions {
   verifyStepUp?: (binding: SessionErasureBinding) => Promise<boolean>;
   /** Site-scoped credential reference cleanup registered by the vault owner. */
   revokeCredentialReferences: (binding: SessionErasureBinding) => Promise<void>;
-  modelProviderAccount: ModelProviderAccountController;
+  modelProviderAccount: ModelProviderAccountOperations;
 }
 
 export interface VillageAppWindow {

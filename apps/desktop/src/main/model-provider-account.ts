@@ -1,20 +1,4 @@
-export type ModelProviderAccountSnapshot =
-  | { provider: "CHATGPT"; state: "CHECKING" }
-  | { provider: "CHATGPT"; state: "AUTHENTICATION_REQUIRED" }
-  | { provider: "CHATGPT"; state: "AUTHENTICATING" }
-  | {
-      provider: "CHATGPT";
-      state: "AUTHENTICATED";
-      accountType: "chatgpt";
-    }
-  | {
-      provider: "CHATGPT";
-      state: "UNAVAILABLE";
-      errorCode:
-        | "PROVIDER_UNAVAILABLE"
-        | "UNTRUSTED_AUTH_URL"
-        | "AUTH_BROWSER_UNAVAILABLE";
-    };
+import type { ModelProviderAccountSnapshot } from "@village/contracts";
 
 export interface ManagedModelProviderAccount {
   start(): Promise<void>;
@@ -31,6 +15,13 @@ export interface ManagedModelProviderAccount {
 }
 
 export type OpenManagedLogin = (url: string) => Promise<void>;
+
+export interface ModelProviderAccountOperations {
+  refresh(): Promise<ModelProviderAccountSnapshot>;
+  beginLogin(): Promise<ModelProviderAccountSnapshot>;
+  cancelLogin(): Promise<ModelProviderAccountSnapshot>;
+  close(): Promise<void>;
+}
 
 function trustedManagedLoginUrl(candidate: string): string | undefined {
   try {
@@ -51,11 +42,7 @@ function trustedManagedLoginUrl(candidate: string): string | undefined {
 }
 
 /** Owns Codex account state in Electron's main process; no tokens reach IPC. */
-export class ModelProviderAccountController {
-  private snapshot: ModelProviderAccountSnapshot = {
-    provider: "CHATGPT",
-    state: "CHECKING",
-  };
+export class ModelProviderAccountController implements ModelProviderAccountOperations {
   private started = false;
   private closed = false;
   private activeLoginId: string | undefined;
@@ -102,7 +89,9 @@ export class ModelProviderAccountController {
             accountType: account.accountType,
           });
         }
-        if (this.activeLoginId) return this.snapshot;
+        if (this.activeLoginId) {
+          return { provider: "CHATGPT", state: "AUTHENTICATING" };
+        }
 
         const login = await this.provider.startManagedChatGptLogin();
         const authUrl = trustedManagedLoginUrl(login.authUrl);
@@ -165,7 +154,6 @@ export class ModelProviderAccountController {
   private update(
     snapshot: ModelProviderAccountSnapshot,
   ): ModelProviderAccountSnapshot {
-    this.snapshot = snapshot;
     return { ...snapshot };
   }
 

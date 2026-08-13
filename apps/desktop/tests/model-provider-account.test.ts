@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { modelProviderAccountSnapshotSchema } from "@village/contracts";
 import {
   ModelProviderAccountController,
   type ManagedModelProviderAccount,
@@ -109,5 +110,16 @@ describe("model provider account controller", () => {
       state: "UNAVAILABLE",
       errorCode: "PROVIDER_UNAVAILABLE",
     });
+  });
+
+  it("keeps the renderer account contract closed to credential-shaped fields", () => {
+    expect(
+      modelProviderAccountSnapshotSchema.safeParse({
+        provider: "CHATGPT",
+        state: "AUTHENTICATED",
+        accountType: "chatgpt",
+        accessToken: "must-not-cross-ipc",
+      }).success,
+    ).toBe(false);
   });
 });
