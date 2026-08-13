@@ -1,0 +1,190 @@
+export type ModelProviderAccountSnapshot =
+  | { provider: "CHATGPT"; state: "CHECKING" }
+  | { provider: "CHATGPT"; state: "AUTHENTICATION_REQUIRED" }
+  | { provider: "CHATGPT"; state: "AUTHENTICATING" }
+  | {
+      provider: "CHATGPT";
+      state: "AUTHENTICATED";
+      accountType: "chatgpt";
+    }
+  | {
+      provider: "CHATGPT";
+      state: "UNAVAILABLE";
+      errorCode:
+        | "PROVIDER_UNAVAILABLE"
+        | "UNTRUSTED_AUTH_URL"
+        | "AUTH_BROWSER_UNAVAILABLE";
+    };
+
+export interface ManagedModelProviderAccount {
+  start(): Promise<void>;
+  accountStatus(): Promise<
+    | { status: "authenticated"; accountType: "chatgpt" }
+    | { status: "authentication_required" }
+  >;
+  startManagedChatGptLogin(): Promise<{
+    loginId: string;
+    authUrl: string;
+  }>;
+  cancelManagedChatGptLogin(loginId: string): Promise<void>;
+  close(): Promise<void>;
+}
+
+export type OpenManagedLogin = (url: string) => Promise<void>;
+
+function trustedManagedLoginUrl(candidate: string): string | undefined {
+  try {
+    const url = new URL(candidate);
+    if (
+      url.protocol !== "https:" ||
+      url.hostname !== "auth.openai.com" ||
+      url.port !== "" ||
+      url.username !== "" ||
+      url.password !== ""
+    ) {
+      return undefined;
+    }
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+/** Owns Codex account state in Electron's main process; no tokens reach IPC. */
+export class ModelProviderAccountController {
+  private snapshot: ModelProviderAccountSnapshot = {
+    provider: "CHATGPT",
+    state: "CHECKING",
+  };
+  private started = false;
+  private closed = false;
+  private activeLoginId: string | undefined;
+  private operationTail: Promise<void> = Promise.resolve();
+
+  constructor(
+    private readonly provider: ManagedModelProviderAccount,
+    private readonly openManagedLogin: OpenManagedLogin,
+  ) {}
+
+  refresh(): Promise<ModelProviderAccountSnapshot> {
+    return this.enqueue(async () => {
+      try {
+        await this.ensureStarted();
+        const account = await this.provider.accountStatus();
+        if (account.status === "authenticated") {
+          this.activeLoginId = undefined;
+          return this.update({
+            provider: "CHATGPT",
+            state: "AUTHENTICATED",
+            accountType: account.accountType,
+          });
+        }
+        return this.update(
+          this.activeLoginId
+            ? { provider: "CHATGPT", state: "AUTHENTICATING" }
+            : { provider: "CHATGPT", state: "AUTHENTICATION_REQUIRED" },
+        );
+      } catch {
+        return this.unavailable("PROVIDER_UNAVAILABLE");
+      }
+    });
+  }
+
+  beginLogin(): Promise<ModelProviderAccountSnapshot> {
+    return this.enqueue(async () => {
+      try {
+        await this.ensureStarted();
+        const account = await this.provider.accountStatus();
+        if (account.status === "authenticated") {
+          return this.update({
+            provider: "CHATGPT",
+            state: "AUTHENTICATED",
+            accountType: account.accountType,
+          });
+        }
+        if (this.activeLoginId) return this.snapshot;
+
+        const login = await this.provider.startManagedChatGptLogin();
+        const authUrl = trustedManagedLoginUrl(login.authUrl);
+        if (!authUrl) {
+          await this.provider
+            .cancelManagedChatGptLogin(login.loginId)
+            .catch(() => undefined);
+          return this.unavailable("UNTRUSTED_AUTH_URL");
+        }
+        this.activeLoginId = login.loginId;
+        try {
+          await this.openManagedLogin(authUrl);
+        } catch {
+          this.activeLoginId = undefined;
+          await this.provider
+            .cancelManagedChatGptLogin(login.loginId)
+            .catch(() => undefined);
+          return this.unavailable("AUTH_BROWSER_UNAVAILABLE");
+        }
+        return this.update({ provider: "CHATGPT", state: "AUTHENTICATING" });
+      } catch {
+        return this.unavailable("PROVIDER_UNAVAILABLE");
+      }
+    });
+  }
+
+  cancelLogin(): Promise<ModelProviderAccountSnapshot> {
+    return this.enqueue(async () => {
+      const loginId = this.activeLoginId;
+      this.activeLoginId = undefined;
+      if (loginId) {
+        try {
+          await this.provider.cancelManagedChatGptLogin(loginId);
+        } catch {
+          return this.unavailable("PROVIDER_UNAVAILABLE");
+        }
+      }
+      return this.update({
+        provider: "CHATGPT",
+        state: "AUTHENTICATION_REQUIRED",
+      });
+    });
+  }
+
+  async close(): Promise<void> {
+    await this.operationTail;
+    if (this.closed) return;
+    this.closed = true;
+    this.activeLoginId = undefined;
+    await this.provider.close();
+  }
+
+  private async ensureStarted(): Promise<void> {
+    if (this.closed) throw new Error("MODEL_PROVIDER_ACCOUNT_CLOSED");
+    if (this.started) return;
+    await this.provider.start();
+    this.started = true;
+  }
+
+  private update(
+    snapshot: ModelProviderAccountSnapshot,
+  ): ModelProviderAccountSnapshot {
+    this.snapshot = snapshot;
+    return { ...snapshot };
+  }
+
+  private unavailable(
+    errorCode: Extract<
+      ModelProviderAccountSnapshot,
+      { state: "UNAVAILABLE" }
+    >["errorCode"],
+  ): ModelProviderAccountSnapshot {
+    this.activeLoginId = undefined;
+    return this.update({ provider: "CHATGPT", state: "UNAVAILABLE", errorCode });
+  }
+
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.operationTail.then(operation, operation);
+    this.operationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+}
