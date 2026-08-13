@@ -166,7 +166,34 @@ describe("step-up authenticated session erasure", () => {
     ]);
   });
 
-  it("serializes duplicate erasure attempts and fails if absence cannot be verified after cleanup", async () => {
+  it("rejects a concurrent erasure while the first cleanup is still running", async () => {
+    const authorizer = new StepUpAuthorizer(() => 1_000);
+    const cleanup = operations();
+    let releaseCleanup!: () => void;
+    const cleanupBlocked = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    cleanup.clearBrowserStorage = async () => {
+      cleanup.calls.push("clearBrowserStorage");
+      await cleanupBlocked;
+    };
+    const erasure = new SessionErasureCoordinator(authorizer, cleanup);
+    const first = erasure.erase(authorizer.mint(binding, 5_000).token, binding);
+    await vi.waitFor(() =>
+      expect(cleanup.calls).toContain("clearBrowserStorage"),
+    );
+
+    await expect(
+      erasure.erase(authorizer.mint(binding, 5_000).token, binding),
+    ).resolves.toEqual({
+      status: "REJECTED",
+      code: "ERASURE_ALREADY_RUNNING",
+    });
+    releaseCleanup();
+    await expect(first).resolves.toEqual({ status: "COMPLETE" });
+  });
+
+  it("fails if absence cannot be verified after cleanup and permits a fresh retry", async () => {
     const authorizer = new StepUpAuthorizer(() => 1_000);
     const cleanup = operations();
     cleanup.verifyAbsent = async () => false;

@@ -107,6 +107,15 @@ export async function startVillageRuntime(
     userDataPath: app.getPath("userData"),
     preloadPath,
     verifyStepUp: () => verifyMacOsOwnerPresence(),
+    // LinkedIn authentication is human-only: Village never persists a
+    // LinkedIn credential reference. Keeping this required callback in the
+    // production composition prevents future credential-capable sites from
+    // silently skipping their vault cleanup.
+    revokeCredentialReferences: async (binding) => {
+      if (binding.site !== "LINKEDIN") {
+        throw new Error("CREDENTIAL_REFERENCE_OWNER_REQUIRED");
+      }
+    },
   });
 }
 

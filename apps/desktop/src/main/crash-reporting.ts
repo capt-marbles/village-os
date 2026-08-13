@@ -14,6 +14,8 @@ export interface LocalDiagnostic {
 }
 
 export class CrashReporter {
+  private readonly entries: LocalDiagnostic[] = [];
+
   /** Upload transport is deliberately absent from the alpha default. */
   capture(input: LocalDiagnostic): {
     upload: "DISABLED";
@@ -33,13 +35,24 @@ export class CrashReporter {
     ) {
       throw new Error("DIAGNOSTIC_FIELD_DENIED");
     }
+    const preview = {
+      component: input.component,
+      code: input.code,
+      retriable: input.retriable,
+    };
+    this.entries.push(preview);
+    if (this.entries.length > 50) this.entries.shift();
     return {
       upload: "DISABLED",
-      preview: {
-        component: input.component,
-        code: input.code,
-        retriable: input.retriable,
-      },
+      preview,
     };
+  }
+
+  snapshot(): readonly LocalDiagnostic[] {
+    return this.entries.map((entry) => ({
+      component: entry.component,
+      code: entry.code,
+      retriable: entry.retriable,
+    }));
   }
 }

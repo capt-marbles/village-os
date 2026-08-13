@@ -58,11 +58,24 @@ describe("protected browser profile", () => {
     await second.release();
   });
 
+  it("keeps the sibling lock authoritative while the profile is erased", async () => {
+    const root = await mkdtemp(join(tmpdir(), "village-profile-erase-lock-"));
+    const path = join(root, "profile");
+    const lock = await ProfileLock.acquire(path);
+
+    await eraseScopedProfile(path);
+    await expect(ProfileLock.acquire(path)).rejects.toThrow("PROFILE_IN_USE");
+
+    await lock.release();
+    const replacement = await ProfileLock.acquire(path);
+    await replacement.release();
+  });
+
   it("recovers a lock left by a dead process", async () => {
     const root = await mkdtemp(join(tmpdir(), "village-stale-lock-"));
     const path = join(root, "profile");
     await mkdir(path, { mode: 0o700 });
-    await writeFile(join(path, ".village.lock"), "2147483647\n", {
+    await writeFile(`${path}.lock`, "2147483647\n", {
       mode: 0o600,
     });
     const lock = await ProfileLock.acquire(path);
@@ -73,7 +86,7 @@ describe("protected browser profile", () => {
     const root = await mkdtemp(join(tmpdir(), "village-partial-lock-"));
     const path = join(root, "profile");
     await mkdir(path, { mode: 0o700 });
-    const lockPath = join(path, ".village.lock");
+    const lockPath = `${path}.lock`;
     await writeFile(lockPath, "", { mode: 0o600 });
 
     await expect(ProfileLock.acquire(path)).rejects.toThrow("PROFILE_IN_USE");

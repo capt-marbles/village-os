@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld(
     requestReturnControl: () =>
       ipcRenderer.invoke("village:request-return-control"),
     getBrowserUiState: () => ipcRenderer.invoke("village:get-browser-ui-state"),
+    getBrowserDiagnostics: () =>
+      ipcRenderer.invoke("village:get-browser-diagnostics"),
     subscribeBrowserUiState: (listener) => {
       if (typeof listener !== "function") {
         throw new TypeError("Browser UI listener must be a function");
@@ -15,6 +17,15 @@ contextBridge.exposeInMainWorld(
       ipcRenderer.on("village:browser-ui-state", handler);
       return () =>
         ipcRenderer.removeListener("village:browser-ui-state", handler);
+    },
+    subscribeBrowserDiagnostics: (listener) => {
+      if (typeof listener !== "function") {
+        throw new TypeError("Browser diagnostics listener must be a function");
+      }
+      const handler = (_event, entries) => listener(entries);
+      ipcRenderer.on("village:browser-diagnostics", handler);
+      return () =>
+        ipcRenderer.removeListener("village:browser-diagnostics", handler);
     },
     setBrowserPane: (input) =>
       ipcRenderer.invoke("village:set-browser-pane", input),

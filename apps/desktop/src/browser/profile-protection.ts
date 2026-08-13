@@ -72,7 +72,9 @@ export class ProfileLock {
   static async acquire(profilePath: string): Promise<ProfileLock> {
     await mkdir(profilePath, { recursive: true, mode: 0o700 });
     await chmod(profilePath, 0o700);
-    const lockPath = join(profilePath, ".village.lock");
+    // Keep the lock beside the profile so destructive erasure can remove the
+    // entire profile directory without opening a second-host race window.
+    const lockPath = `${profilePath}.lock`;
     let handle: Awaited<ReturnType<typeof open>>;
     try {
       handle = await open(lockPath, "wx", 0o600);

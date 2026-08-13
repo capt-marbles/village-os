@@ -1,5 +1,6 @@
 import {
   BrowserPane,
+  type BrowserDiagnosticEntry,
   type BrowserUiAction,
   type BrowserUiSnapshot,
 } from "@village/ui";
@@ -7,8 +8,12 @@ import { useEffect, useState } from "react";
 
 export interface VillageDesktopBridge {
   getBrowserUiState(): Promise<BrowserUiSnapshot>;
+  getBrowserDiagnostics(): Promise<readonly BrowserDiagnosticEntry[]>;
   subscribeBrowserUiState(
     listener: (snapshot: BrowserUiSnapshot) => void,
+  ): () => void;
+  subscribeBrowserDiagnostics(
+    listener: (entries: readonly BrowserDiagnosticEntry[]) => void,
   ): () => void;
   requestTakeover(): Promise<
     "QUIESCED" | "OUTCOME_UNKNOWN" | "RECOVERY_REQUIRED" | "DECLINED"
@@ -73,6 +78,9 @@ export function DesktopBrowserPane({
     null,
   );
   const [actionError, setActionError] = useState<string | null>(null);
+  const [diagnostics, setDiagnostics] = useState<
+    readonly BrowserDiagnosticEntry[]
+  >([]);
   const activeBridge = bridge ?? globalThis.window?.village;
 
   useEffect(() => {
@@ -97,6 +105,22 @@ export function DesktopBrowserPane({
       .getBrowserUiState()
       .then(publish)
       .catch(() => active && setActionError("Browser status is unavailable."));
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [activeBridge]);
+
+  useEffect(() => {
+    if (!activeBridge) return;
+    let active = true;
+    const unsubscribe = activeBridge.subscribeBrowserDiagnostics((entries) => {
+      if (active) setDiagnostics(entries);
+    });
+    void activeBridge
+      .getBrowserDiagnostics()
+      .then((entries) => active && setDiagnostics(entries))
+      .catch(() => undefined);
     return () => {
       active = false;
       unsubscribe();
@@ -146,6 +170,7 @@ export function DesktopBrowserPane({
         splitRatio={splitRatio}
         onSplitRatioChange={handleSplitRatioChange}
         actionsDisabled={pendingAction !== null}
+        diagnostics={diagnostics}
       />
       {actionError ? (
         <p role="alert" style={{ margin: ".5rem 1rem", color: "#f1b5aa" }}>

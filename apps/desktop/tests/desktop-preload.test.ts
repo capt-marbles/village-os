@@ -33,6 +33,7 @@ describe("desktop preload bridge", () => {
 
     const bridge = bridges.village!;
     expect(Object.keys(bridge).sort()).toEqual([
+      "getBrowserDiagnostics",
       "getBrowserUiState",
       "recordVerificationDecision",
       "requestForgetSession",
@@ -40,6 +41,7 @@ describe("desktop preload bridge", () => {
       "requestReturnControl",
       "requestTakeover",
       "setBrowserPane",
+      "subscribeBrowserDiagnostics",
       "subscribeBrowserUiState",
     ]);
     expect(bridge.invoke).toBeUndefined();
@@ -58,6 +60,18 @@ describe("desktop preload bridge", () => {
     (unsubscribe as () => void)();
     expect(removeListener).toHaveBeenCalledWith(
       "village:browser-ui-state",
+      expect.any(Function),
+    );
+
+    const unsubscribeDiagnostics =
+      bridge.subscribeBrowserDiagnostics!(listener);
+    expect(on).toHaveBeenCalledWith(
+      "village:browser-diagnostics",
+      expect.any(Function),
+    );
+    (unsubscribeDiagnostics as () => void)();
+    expect(removeListener).toHaveBeenCalledWith(
+      "village:browser-diagnostics",
       expect.any(Function),
     );
   });

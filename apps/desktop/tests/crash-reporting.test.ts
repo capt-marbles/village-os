@@ -25,6 +25,19 @@ describe("local diagnostics", () => {
     ]);
   });
 
+  it("retains only a bounded local preview", () => {
+    const reporter = new CrashReporter();
+    for (let index = 0; index < 55; index += 1) {
+      reporter.capture({
+        component: "BROWSER_HOST",
+        code: `FAILURE_${index}`,
+        retriable: true,
+      });
+    }
+    expect(reporter.snapshot()).toHaveLength(50);
+    expect(reporter.snapshot()[0]).toMatchObject({ code: "FAILURE_5" });
+  });
+
   it("cannot serialize page, profile, key, or secret-derived fields", () => {
     const reporter = new CrashReporter();
     expect(() =>

@@ -72,6 +72,10 @@ export class LocalBrowserHost {
     await this.profileLock.release();
   }
 
+  async closeTargetForErasure(): Promise<void> {
+    if (!this.view.webContents.isDestroyed()) this.view.webContents.close();
+  }
+
   /** Destructive lifecycle helpers, called only after main-process step-up. */
   async clearSiteStorage(): Promise<void> {
     await this.browserSession.clearStorageData();
@@ -85,8 +89,11 @@ export class LocalBrowserHost {
   }
 
   async removeScopedProfile(): Promise<void> {
-    await this.profileLock.release();
-    await eraseScopedProfile(this.profilePath);
+    try {
+      await eraseScopedProfile(this.profilePath);
+    } finally {
+      await this.profileLock.release();
+    }
   }
 
   async scopedProfileAbsent(): Promise<boolean> {
