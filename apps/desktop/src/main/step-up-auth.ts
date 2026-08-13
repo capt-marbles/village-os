@@ -1,3 +1,5 @@
+import { spawn } from "node:child_process";
+
 export type StepUpOperation = "FORGET_SESSION";
 export type SiteSessionState = "PRESENT" | "ERASURE_FAILED";
 
@@ -25,6 +27,56 @@ export type StepUpConsumption =
         | "STEP_UP_EXPIRED"
         | "STEP_UP_BINDING_MISMATCH";
     };
+
+export type OwnerPresenceRunner = (
+  file: string,
+  arguments_: readonly string[],
+) => Promise<number>;
+
+const macOsAuthorizationScript =
+  'do shell script "/usr/bin/true" with administrator privileges with prompt "Village needs permission to forget this local browser session."';
+
+/**
+ * Requests a system-owned macOS authorization dialog. Village supplies only a
+ * fixed no-op command and never receives the password entered into that UI.
+ */
+export async function verifyMacOsOwnerPresence(
+  platform = process.platform,
+  run: OwnerPresenceRunner = runMacOsAuthorization,
+): Promise<boolean> {
+  if (platform !== "darwin") return false;
+  try {
+    return (
+      (await run("/usr/bin/osascript", ["-e", macOsAuthorizationScript])) === 0
+    );
+  } catch {
+    return false;
+  }
+}
+
+function runMacOsAuthorization(
+  file: string,
+  arguments_: readonly string[],
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, arguments_, {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("STEP_UP_AUTHORIZATION_TIMEOUT"));
+    }, 60_000);
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("exit", (code) => {
+      clearTimeout(timeout);
+      resolve(code ?? 1);
+    });
+  });
+}
 
 /** Main-process-only, short-lived proof for destructive local operations. */
 export class StepUpAuthorizer {

@@ -4,7 +4,10 @@ import {
   type SessionErasureBinding,
   type SessionErasureOperations,
 } from "../src/main/session-erasure.js";
-import { StepUpAuthorizer } from "../src/main/step-up-auth.js";
+import {
+  StepUpAuthorizer,
+  verifyMacOsOwnerPresence,
+} from "../src/main/step-up-auth.js";
 
 const binding: SessionErasureBinding = {
   principalId: "usr_01J00000000000000000000000",
@@ -37,6 +40,39 @@ function operations(): SessionErasureOperations & { calls: string[] } {
 }
 
 describe("step-up authenticated session erasure", () => {
+  it("uses a fixed macOS authorization request without receiving the OS password", async () => {
+    const calls: Array<{ file: string; arguments_: readonly string[] }> = [];
+    await expect(
+      verifyMacOsOwnerPresence("darwin", async (file, arguments_) => {
+        calls.push({ file, arguments_ });
+        return 0;
+      }),
+    ).resolves.toBe(true);
+    expect(calls).toEqual([
+      {
+        file: "/usr/bin/osascript",
+        arguments_: [
+          "-e",
+          'do shell script "/usr/bin/true" with administrator privileges with prompt "Village needs permission to forget this local browser session."',
+        ],
+      },
+    ]);
+  });
+
+  it("fails closed when system authorization is unavailable, denied, or interrupted", async () => {
+    await expect(
+      verifyMacOsOwnerPresence("linux", async () => 0),
+    ).resolves.toBe(false);
+    await expect(
+      verifyMacOsOwnerPresence("darwin", async () => 1),
+    ).resolves.toBe(false);
+    await expect(
+      verifyMacOsOwnerPresence("darwin", async () => {
+        throw new Error("authorization canceled");
+      }),
+    ).resolves.toBe(false);
+  });
+
   it.each([
     ["principalId", "usr_01J00000000000000000000001"],
     ["deviceId", "dev_01J00000000000000000000001"],

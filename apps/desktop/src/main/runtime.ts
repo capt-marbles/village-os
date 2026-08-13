@@ -23,6 +23,7 @@ import { PairingClient } from "./pairing-client.js";
 import { PairingDeepLinkInbox } from "./pairing-deep-link.js";
 import { createPairingWindow } from "./pairing-window.js";
 import { installGlobalSecurityPolicy } from "./security.js";
+import { verifyMacOsOwnerPresence } from "./step-up-auth.js";
 
 registerVillageScheme(protocol);
 installGlobalSecurityPolicy(app);
@@ -105,6 +106,7 @@ export async function startVillageRuntime(
     initialUrl: "https://www.linkedin.com/login",
     userDataPath: app.getPath("userData"),
     preloadPath,
+    verifyStepUp: () => verifyMacOsOwnerPresence(),
   });
 }
 
