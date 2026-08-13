@@ -9,8 +9,13 @@ import {
   ModelProviderAccountOnboarding,
   type ModelProviderAccountBridge,
 } from "./ModelProviderAccountCard.js";
+import {
+  PersonalAgentTaskOnboarding,
+  type PersonalAgentTaskBridge,
+} from "./PersonalAgentTaskCard.js";
 
-export interface VillageDesktopBridge extends ModelProviderAccountBridge {
+export interface VillageDesktopBridge
+  extends ModelProviderAccountBridge, PersonalAgentTaskBridge {
   getBrowserUiState(): Promise<BrowserUiSnapshot>;
   getBrowserDiagnostics(): Promise<readonly BrowserDiagnosticEntry[]>;
   subscribeBrowserUiState(
@@ -177,7 +182,10 @@ export function DesktopBrowserPane({
         diagnostics={diagnostics}
       />
       {activeBridge ? (
-        <ModelProviderAccountOnboarding bridge={activeBridge} />
+        <>
+          <ModelProviderAccountOnboarding bridge={activeBridge} />
+          <PersonalAgentTaskOnboarding bridge={activeBridge} />
+        </>
       ) : null}
       {actionError ? (
         <p role="alert" style={{ margin: ".5rem 1rem", color: "#f1b5aa" }}>

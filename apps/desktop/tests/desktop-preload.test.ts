@@ -43,6 +43,7 @@ describe("desktop preload bridge", () => {
       "requestObserverIntent",
       "requestReturnControl",
       "requestTakeover",
+      "runPersonalAgentTask",
       "setBrowserPane",
       "subscribeBrowserDiagnostics",
       "subscribeBrowserUiState",
@@ -81,8 +82,12 @@ describe("desktop preload bridge", () => {
     await bridge.getModelProviderAccount!();
     await bridge.beginChatGptLogin!();
     await bridge.cancelChatGptLogin!();
+    await bridge.runPersonalAgentTask!({ task: "CHECK_LINKEDIN_SIGN_IN" });
     expect(invoke).toHaveBeenCalledWith("village:get-model-provider-account");
     expect(invoke).toHaveBeenCalledWith("village:begin-chatgpt-login");
     expect(invoke).toHaveBeenCalledWith("village:cancel-chatgpt-login");
+    expect(invoke).toHaveBeenCalledWith("village:run-personal-agent-task", {
+      task: "CHECK_LINKEDIN_SIGN_IN",
+    });
   });
 });

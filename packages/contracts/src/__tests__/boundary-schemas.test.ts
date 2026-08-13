@@ -6,11 +6,33 @@ import {
   humanGateSchema,
   operationAuthorizationSchema,
   observerIntentSchema,
+  personalAgentTaskRequestSchema,
+  personalAgentTaskResultSchema,
   stepUpAuthorizationSchema,
   signedResultEnvelopeSchema,
 } from "../index.js";
 
 describe("portable trust-boundary schemas", () => {
+  it("keeps personal task IPC bounded and credential-free", () => {
+    expect(
+      personalAgentTaskRequestSchema.parse({ task: "CHECK_LINKEDIN_SIGN_IN" }),
+    ).toEqual({ task: "CHECK_LINKEDIN_SIGN_IN" });
+    expect(
+      personalAgentTaskRequestSchema.safeParse({
+        task: "CHECK_LINKEDIN_SIGN_IN",
+        prompt: "my password is secret",
+      }).success,
+    ).toBe(false);
+    expect(
+      personalAgentTaskResultSchema.safeParse({
+        state: "COMPLETED",
+        outcome: "AUTHENTICATED",
+        evidence: "OWNER_CONFIRMED",
+        token: "must-not-cross-ipc",
+      }).success,
+    ).toBe(false);
+  });
+
   it("keeps execution hosts semantic and rejects adapter-specific locators", () => {
     const host = {
       hostId: "hst_01J00000000000000000000000",

@@ -14,6 +14,7 @@ export function createSanitizedModelContext(
     jobState: jobStateSchema.parse(input.jobState),
     actionPhase: actionPhaseSchema.parse(input.actionPhase),
     observation: sanitizeBrowserObservation(input.observation),
+    ...(input.objective === undefined ? {} : { objective: input.objective }),
   };
   return sanitizedModelContextSchema.parse(context);
 }
