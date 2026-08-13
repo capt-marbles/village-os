@@ -49,11 +49,11 @@ export function configureRemoteContents(
 ): void {
   contents.setWindowOpenHandler(decidePopup);
   contents.on("will-attach-webview", (event) => event.preventDefault());
-  contents.on("will-navigate", (event, url) => {
-    if (!decideNavigation(site, url).allow) event.preventDefault();
+  contents.on("will-navigate", (event) => {
+    if (!decideNavigation(site, event.url).allow) event.preventDefault();
   });
-  contents.on("will-redirect", (event, url) => {
-    if (!decideNavigation(site, url).allow) event.preventDefault();
+  contents.on("will-redirect", (event) => {
+    if (!decideNavigation(site, event.url).allow) event.preventDefault();
   });
   contents.on("will-frame-navigate", (event) => {
     if (event.isMainFrame && !decideNavigation(site, event.url).allow) {

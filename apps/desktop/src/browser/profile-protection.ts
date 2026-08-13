@@ -48,26 +48,33 @@ export class ProfileLock {
     await mkdir(profilePath, { recursive: true, mode: 0o700 });
     await chmod(profilePath, 0o700);
     const lockPath = join(profilePath, ".village.lock");
+    let handle: Awaited<ReturnType<typeof open>>;
     try {
-      const handle = await open(lockPath, "wx", 0o600);
-      await handle.writeFile(`${process.pid}\n`, "utf8");
-      return new ProfileLock(lockPath, handle);
+      handle = await open(lockPath, "wx", 0o600);
     } catch (error) {
-      if (
+      if (!(
         error instanceof Error &&
         "code" in error &&
         error.code === "EEXIST"
-      ) {
-        const existingPid = Number.parseInt(
-          await readFile(lockPath, "utf8").catch(() => ""),
-          10,
-        );
-        if (Number.isInteger(existingPid) && isProcessAlive(existingPid)) {
-          throw new Error("PROFILE_IN_USE");
-        }
-        await unlink(lockPath).catch(() => undefined);
-        return ProfileLock.acquire(profilePath);
+      )) {
+        throw error;
       }
+      const existingPid = completedLockPid(
+        await readFile(lockPath, "utf8").catch(() => ""),
+      );
+      if (existingPid === undefined || isProcessAlive(existingPid)) {
+        throw new Error("PROFILE_IN_USE");
+      }
+      await unlink(lockPath).catch(() => undefined);
+      return ProfileLock.acquire(profilePath);
+    }
+
+    try {
+      await handle.writeFile(`${process.pid}\n`, "utf8");
+      return new ProfileLock(lockPath, handle);
+    } catch (error) {
+      await handle.close().catch(() => undefined);
+      await unlink(lockPath).catch(() => undefined);
       throw error;
     }
   }
@@ -78,6 +85,12 @@ export class ProfileLock {
     await this.handle.close();
     await unlink(this.lockPath).catch(() => undefined);
   }
+}
+
+function completedLockPid(contents: string): number | undefined {
+  if (!/^[1-9]\d*\n$/.test(contents)) return undefined;
+  const pid = Number.parseInt(contents, 10);
+  return Number.isSafeInteger(pid) ? pid : undefined;
 }
 
 function isProcessAlive(pid: number): boolean {

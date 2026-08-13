@@ -5,25 +5,41 @@ import {
   installVillageProtocol,
   registerVillageScheme,
 } from "./local-app-protocol.js";
+import {
+  resolveRuntimeIdentity,
+  type PairedRuntimeIdentitySource,
+} from "./runtime-identity.js";
 import { installGlobalSecurityPolicy } from "./security.js";
 
 registerVillageScheme(protocol);
 installGlobalSecurityPolicy(app);
 
-void app.whenReady().then(async () => {
+export async function startVillageRuntime(
+  pairedIdentitySource?: PairedRuntimeIdentitySource,
+): Promise<void> {
+  const identity = await resolveRuntimeIdentity({
+    isPackaged: app.isPackaged,
+    ...(pairedIdentitySource ? { pairedIdentitySource } : {}),
+  });
   installVillageProtocol(
     protocol,
     fileURLToPath(new URL("../renderer", import.meta.url)),
   );
   await createVillageAppWindow({
-    principalId: "usr_01J00000000000000000000000",
-    deviceId: "dev_01J00000000000000000000000",
-    browserSessionId: "bsn_01J00000000000000000000000",
+    ...identity,
     site: "LINKEDIN",
     initialUrl: "https://www.linkedin.com/login",
     userDataPath: app.getPath("userData"),
     preloadPath: defaultPreloadPath(app.getAppPath()),
   });
-});
+}
+
+void app
+  .whenReady()
+  .then(() => startVillageRuntime())
+  .catch((error: unknown) => {
+    console.error("Village startup blocked:", error);
+    app.exit(1);
+  });
 
 app.on("window-all-closed", () => app.quit());

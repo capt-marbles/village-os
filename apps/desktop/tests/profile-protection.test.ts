@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -65,5 +65,16 @@ describe("protected browser profile", () => {
     });
     const lock = await ProfileLock.acquire(path);
     await lock.release();
+  });
+
+  it("fails closed while a newly-created lock has no complete PID", async () => {
+    const root = await mkdtemp(join(tmpdir(), "village-partial-lock-"));
+    const path = join(root, "profile");
+    await mkdir(path, { mode: 0o700 });
+    const lockPath = join(path, ".village.lock");
+    await writeFile(lockPath, "", { mode: 0o600 });
+
+    await expect(ProfileLock.acquire(path)).rejects.toThrow("PROFILE_IN_USE");
+    await expect(readFile(lockPath, "utf8")).resolves.toBe("");
   });
 });
