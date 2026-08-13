@@ -56,9 +56,9 @@ export function reconcileBrowserRecovery(
       continuation: { status: "WAITING_FOR_USER", actionId: waiting.actionId },
     };
   }
-  const retryable = actions
-    .filter((action) => action.disposition === "RETRY_ALLOWED")
-    .sort((left, right) => left.actionId.localeCompare(right.actionId))[0];
+  const retryable = actions.find(
+    (action) => action.disposition === "RETRY_ALLOWED",
+  );
   return {
     control,
     actions,

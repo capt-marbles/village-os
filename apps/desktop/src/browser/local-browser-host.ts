@@ -80,10 +80,8 @@ export class LocalBrowserHost {
   }
 
   async clearSitePermissions(): Promise<void> {
-    // Permission prompts are deny-by-default and session configuration is
-    // process-local. Removing the scoped profile below erases Chromium's
-    // persisted permission state; clear storage here removes origin grants.
-    await this.browserSession.clearStorageData();
+    // Permission prompts are deny-by-default and process-local; persisted
+    // Chromium permission state is erased with the scoped profile below.
   }
 
   async removeScopedProfile(): Promise<void> {

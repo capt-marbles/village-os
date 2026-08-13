@@ -49,14 +49,20 @@ async function sourceFiles(relative) {
 
 export async function auditTelemetryEgress() {
   const errors = [];
-  for (const relative of telemetryModules) {
-    const source = await readFile(path.join(root, relative), "utf8");
-    errors.push(...auditTelemetrySource(source, relative));
-  }
-  for (const relative of (
-    await Promise.all(sourceRoots.map(sourceFiles))
-  ).flat()) {
-    const source = await readFile(path.join(root, relative), "utf8");
+  const relativeFiles = new Set([
+    ...telemetryModules,
+    ...(await Promise.all(sourceRoots.map(sourceFiles))).flat(),
+  ]);
+  const sources = await Promise.all(
+    [...relativeFiles].map(async (relative) => [
+      relative,
+      await readFile(path.join(root, relative), "utf8"),
+    ]),
+  );
+  for (const [relative, source] of sources) {
+    if (telemetryModules.includes(relative)) {
+      errors.push(...auditTelemetrySource(source, relative));
+    }
     if (thirdPartyTelemetry.test(source))
       errors.push(`${relative} imports a forbidden telemetry SDK`);
   }

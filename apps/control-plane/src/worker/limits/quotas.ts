@@ -20,19 +20,6 @@ export async function consumeAuthenticatedQuota(
   const deviceColumn = quotaColumn(kind, "device");
   const principalColumn = quotaColumn(kind, "principal");
   const limits = authenticatedQuotaLimits[kind];
-  const device = await db
-    .prepare(
-      `INSERT INTO authenticated_quota_usage
-       (principal_id, device_id, window_started_at, ${deviceColumn})
-       VALUES (?, ?, ?, 1)
-       ON CONFLICT(principal_id, device_id, window_started_at) DO UPDATE SET
-         ${deviceColumn} = ${deviceColumn} + 1
-       WHERE ${deviceColumn} < ?
-       RETURNING ${deviceColumn} AS usage`,
-    )
-    .bind(principalId, deviceId, window, limits.device)
-    .first<{ usage: number }>();
-  if (!device) return backpressure(now);
   const principal = await db
     .prepare(
       `INSERT INTO authenticated_principal_quota_usage
@@ -45,13 +32,50 @@ export async function consumeAuthenticatedQuota(
     )
     .bind(principalId, window, limits.principal)
     .first<{ usage: number }>();
-  return principal
-    ? {
-        ok: true as const,
-        usage: { device: device.usage, principal: principal.usage },
-        limit: limits,
-      }
-    : backpressure(now);
+  if (!principal) return backpressure(now);
+  let device: { usage: number } | null;
+  try {
+    device = await db
+      .prepare(
+        `INSERT INTO authenticated_quota_usage
+         (principal_id, device_id, window_started_at, ${deviceColumn})
+         VALUES (?, ?, ?, 1)
+         ON CONFLICT(principal_id, device_id, window_started_at) DO UPDATE SET
+           ${deviceColumn} = ${deviceColumn} + 1
+         WHERE ${deviceColumn} < ?
+         RETURNING ${deviceColumn} AS usage`,
+      )
+      .bind(principalId, deviceId, window, limits.device)
+      .first<{ usage: number }>();
+  } catch (error) {
+    await releasePrincipalQuota(db, principalId, window, principalColumn);
+    throw error;
+  }
+  if (!device) {
+    await releasePrincipalQuota(db, principalId, window, principalColumn);
+    return backpressure(now);
+  }
+  return {
+    ok: true as const,
+    usage: { device: device.usage, principal: principal.usage },
+    limit: limits,
+  };
+}
+
+async function releasePrincipalQuota(
+  db: D1Database,
+  principalId: string,
+  window: string,
+  column: string,
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE authenticated_principal_quota_usage
+       SET ${column} = ${column} - 1
+       WHERE principal_id = ? AND window_started_at = ? AND ${column} > 0`,
+    )
+    .bind(principalId, window)
+    .run();
 }
 
 function quotaColumn(kind: QuotaKind, scope: "device" | "principal") {

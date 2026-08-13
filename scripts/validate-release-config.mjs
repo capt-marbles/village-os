@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parse } from "yaml";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -40,33 +41,70 @@ export function validateReleaseFiles({
   if (typeof electron !== "string" || Number(electron.split(".")[0]) !== 43) {
     errors.push("Electron major 43 is required");
   }
-  for (const required of [
-    "electronVersion: 43.2.0",
-    "runAsNode: false",
-    "enableCookieEncryption: true",
-    "enableNodeOptionsEnvironmentVariable: false",
-    "enableNodeCliInspectArguments: false",
-    "enableEmbeddedAsarIntegrityValidation: true",
-    "onlyLoadAppFromAsar: true",
-    "grantFileProtocolExtraPrivileges: false",
-    "notarize: true",
-    "url: https://updates.village.run/desktop/alpha",
-    "channel: alpha",
-  ]) {
-    if (!releaseConfig.includes(required))
-      errors.push(`Release config is missing: ${required}`);
+  const expectedRelease = [
+    ["appId", releaseConfig.appId, "com.village.desktop"],
+    ["productName", releaseConfig.productName, "Village"],
+    ["electronVersion", releaseConfig.electronVersion, "43.2.0"],
+    ["electronFuses.runAsNode", releaseConfig.electronFuses?.runAsNode, false],
+    [
+      "electronFuses.enableCookieEncryption",
+      releaseConfig.electronFuses?.enableCookieEncryption,
+      true,
+    ],
+    [
+      "electronFuses.enableNodeOptionsEnvironmentVariable",
+      releaseConfig.electronFuses?.enableNodeOptionsEnvironmentVariable,
+      false,
+    ],
+    [
+      "electronFuses.enableNodeCliInspectArguments",
+      releaseConfig.electronFuses?.enableNodeCliInspectArguments,
+      false,
+    ],
+    [
+      "electronFuses.enableEmbeddedAsarIntegrityValidation",
+      releaseConfig.electronFuses?.enableEmbeddedAsarIntegrityValidation,
+      true,
+    ],
+    [
+      "electronFuses.onlyLoadAppFromAsar",
+      releaseConfig.electronFuses?.onlyLoadAppFromAsar,
+      true,
+    ],
+    [
+      "electronFuses.grantFileProtocolExtraPrivileges",
+      releaseConfig.electronFuses?.grantFileProtocolExtraPrivileges,
+      false,
+    ],
+    ["mac.hardenedRuntime", releaseConfig.mac?.hardenedRuntime, true],
+    ["mac.notarize", releaseConfig.mac?.notarize, true],
+    ["publish.provider", releaseConfig.publish?.provider, "generic"],
+    [
+      "publish.url",
+      releaseConfig.publish?.url,
+      "https://updates.village.run/desktop/alpha",
+    ],
+    ["publish.channel", releaseConfig.publish?.channel, "alpha"],
+  ];
+  for (const [field, actual, expected] of expectedRelease) {
+    if (actual !== expected)
+      errors.push(`Release config has invalid ${field}: expected ${expected}`);
   }
-  if (/identity:\s*["']?-["']?/.test(releaseConfig)) {
+  if (releaseConfig.mac?.identity === "-") {
     errors.push("Release config cannot use an ad-hoc signing identity");
   }
-  for (const required of [
-    "extends: ./electron-builder.yml",
-    'identity: "-"',
-    "notarize: false",
-    "publish: null",
-  ]) {
-    if (!e2eConfig.includes(required))
-      errors.push(`Local E2E config is missing: ${required}`);
+  const expectedE2e = [
+    ["extends", e2eConfig.extends, "./electron-builder.yml"],
+    ["publish", e2eConfig.publish, null],
+    ["mac.identity", e2eConfig.mac?.identity, "-"],
+    ["mac.notarize", e2eConfig.mac?.notarize, false],
+    ["mac.target", e2eConfig.mac?.target, "dir"],
+  ];
+  for (const [field, actual, expected] of expectedE2e) {
+    if (actual !== expected)
+      errors.push(
+        `Local E2E config has invalid ${field}: expected ${expected}`,
+      );
   }
   return errors;
 }
@@ -76,8 +114,13 @@ async function validateFiles() {
     readFile(path.join(root, "apps/desktop/package.json"), "utf8").then(
       JSON.parse,
     ),
-    readFile(path.join(root, "apps/desktop/electron-builder.yml"), "utf8"),
-    readFile(path.join(root, "apps/desktop/electron-builder.e2e.yml"), "utf8"),
+    readFile(path.join(root, "apps/desktop/electron-builder.yml"), "utf8").then(
+      parse,
+    ),
+    readFile(
+      path.join(root, "apps/desktop/electron-builder.e2e.yml"),
+      "utf8",
+    ).then(parse),
   ]);
   return validateReleaseFiles({ desktopPackage, releaseConfig, e2eConfig });
 }

@@ -24,25 +24,31 @@ test("release credentials require signing, notarization and a pinned signer", ()
 });
 
 test("static release config requires Electron 43, hardened fuses and a separate local package path", () => {
-  const releaseConfig = `
-electronVersion: 43.2.0
-runAsNode: false
-enableCookieEncryption: true
-enableNodeOptionsEnvironmentVariable: false
-enableNodeCliInspectArguments: false
-enableEmbeddedAsarIntegrityValidation: true
-onlyLoadAppFromAsar: true
-grantFileProtocolExtraPrivileges: false
-notarize: true
-url: https://updates.village.run/desktop/alpha
-channel: alpha
-`;
-  const e2eConfig = `
-extends: ./electron-builder.yml
-publish: null
-identity: "-"
-notarize: false
-`;
+  const releaseConfig = {
+    appId: "com.village.desktop",
+    productName: "Village",
+    electronVersion: "43.2.0",
+    electronFuses: {
+      runAsNode: false,
+      enableCookieEncryption: true,
+      enableNodeOptionsEnvironmentVariable: false,
+      enableNodeCliInspectArguments: false,
+      enableEmbeddedAsarIntegrityValidation: true,
+      onlyLoadAppFromAsar: true,
+      grantFileProtocolExtraPrivileges: false,
+    },
+    mac: { hardenedRuntime: true, notarize: true },
+    publish: {
+      provider: "generic",
+      url: "https://updates.village.run/desktop/alpha",
+      channel: "alpha",
+    },
+  };
+  const e2eConfig = {
+    extends: "./electron-builder.yml",
+    publish: null,
+    mac: { identity: "-", notarize: false, target: "dir" },
+  };
   assert.deepEqual(
     validateReleaseFiles({
       desktopPackage: { devDependencies: { electron: "43.2.0" } },
@@ -57,5 +63,18 @@ notarize: false
       releaseConfig,
       e2eConfig,
     }).includes("Electron major 43 is required"),
+  );
+  assert.ok(
+    validateReleaseFiles({
+      desktopPackage: { devDependencies: { electron: "43.2.0" } },
+      releaseConfig: {
+        ...releaseConfig,
+        electronFuses: {
+          ...releaseConfig.electronFuses,
+          runAsNode: true,
+        },
+      },
+      e2eConfig,
+    }).some((error) => error.includes("electronFuses.runAsNode")),
   );
 });

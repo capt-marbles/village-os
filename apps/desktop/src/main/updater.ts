@@ -1,5 +1,8 @@
 import { timingSafeEqual } from "node:crypto";
 
+const sha256Pattern = /^[a-f0-9]{64}$/;
+const sha512Pattern = /^[a-f0-9]{128}$/;
+
 export const VILLAGE_PRODUCT_ID = "com.village.desktop" as const;
 export const VILLAGE_UPDATE_CHANNEL = "alpha" as const;
 export const VILLAGE_UPDATE_ENDPOINT =
@@ -92,10 +95,14 @@ function compareVersions(left: ParsedVersion, right: ParsedVersion): number {
   return 0;
 }
 
-function equalHex(left: string, right: string, length: number): boolean {
-  const hexPattern = new RegExp(`^[a-f0-9]{${length}}$`);
-  if (!hexPattern.test(left) || !hexPattern.test(right)) return false;
+function equalHex(left: string, right: string, length: 64 | 128): boolean {
+  if (!isLowercaseHex(left, length) || !isLowercaseHex(right, length))
+    return false;
   return timingSafeEqual(Buffer.from(left, "hex"), Buffer.from(right, "hex"));
+}
+
+function isLowercaseHex(value: string, length: 64 | 128): boolean {
+  return (length === 64 ? sha256Pattern : sha512Pattern).test(value);
 }
 
 function validPolicy(policy: UpdateTrustPolicy): boolean {
@@ -103,7 +110,7 @@ function validPolicy(policy: UpdateTrustPolicy): boolean {
     policy.productId === VILLAGE_PRODUCT_ID &&
     policy.channel === VILLAGE_UPDATE_CHANNEL &&
     policy.endpoint === VILLAGE_UPDATE_ENDPOINT &&
-    equalHex(policy.signerSha256, policy.signerSha256, 64)
+    isLowercaseHex(policy.signerSha256, 64)
   );
 }
 
@@ -143,8 +150,8 @@ export function validateUpdateCandidate(
   if (
     !current ||
     !next ||
-    !equalHex(candidate.expectedSha512, candidate.expectedSha512, 128) ||
-    !equalHex(candidate.downloadedSha512, candidate.downloadedSha512, 128)
+    !isLowercaseHex(candidate.expectedSha512, 128) ||
+    !isLowercaseHex(candidate.downloadedSha512, 128)
   ) {
     return { ok: false, code: "INVALID_UPDATE_METADATA" };
   }

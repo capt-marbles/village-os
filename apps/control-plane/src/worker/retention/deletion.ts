@@ -7,13 +7,6 @@ const deletionRequestSchema = z.strictObject({
   requestedAt: instantSchema,
 });
 
-type RecordCounts = {
-  projections: number;
-  events: number;
-  checkpoints: number;
-  receipts: number;
-};
-
 const deletionCountQueries = [
   "SELECT COUNT(*) AS count FROM principals WHERE principal_id = ?",
   "SELECT COUNT(*) AS count FROM devices WHERE principal_id = ?",
@@ -161,28 +154,13 @@ export async function verifyPrincipalDeletion(
   principalCandidate: unknown,
 ): Promise<{ verified: boolean; remainingRecords: number }> {
   const principal = principalIdSchema.parse(principalCandidate);
-  const counts = await Promise.all(
-    deletionCountQueries.map(async (query) => {
-      const row = await db
-        .prepare(query)
-        .bind(principal)
-        .first<{ count: number }>();
-      return row?.count ?? 0;
-    }),
+  const results = await db.batch(
+    deletionCountQueries.map((query) => db.prepare(query).bind(principal)),
+  );
+  const counts = results.map(
+    (result) =>
+      (result.results[0] as { count?: number } | undefined)?.count ?? 0,
   );
   const remainingRecords = counts.reduce((total, count) => total + count, 0);
   return { verified: remainingRecords === 0, remainingRecords };
-}
-
-export async function principalRecordCounts(
-  db: D1Database,
-  principalCandidate: unknown,
-): Promise<RecordCounts> {
-  const exported = await exportPrincipalRecords(db, principalCandidate);
-  return {
-    projections: exported.projections.length,
-    events: exported.events.length,
-    checkpoints: exported.checkpoints.length,
-    receipts: exported.receipts.length,
-  };
 }

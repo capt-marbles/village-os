@@ -115,6 +115,14 @@ describe("authenticated protocol quotas", () => {
       code: "AUTHENTICATED_QUOTA_EXCEEDED",
       retryAt: "2026-08-12T18:01:00.000Z",
     });
+    await expect(
+      env.VILLAGE_DB.prepare(
+        `SELECT connections FROM authenticated_quota_usage
+         WHERE principal_id = ? AND device_id = ? AND window_started_at = ?`,
+      )
+        .bind(principalId, secondDeviceId, now)
+        .first<{ connections: number }>(),
+    ).resolves.toBeNull();
 
     for (const kind of [
       "replays",
