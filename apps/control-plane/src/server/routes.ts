@@ -24,6 +24,7 @@ import {
   beginPairing,
   confirmPairing,
   consumePairing,
+  getPairingStatus,
   rejectPairing,
   revokeDevice,
   rotateDeviceCredential,
@@ -163,6 +164,26 @@ export async function routeRequest(
     const confirmation = url.pathname.match(
       /^\/api\/pairing\/([^/]+)\/confirm$/,
     );
+    const pairingStatus = url.pathname.match(/^\/api\/pairing\/([^/]+)$/);
+    if (request.method === "GET" && pairingStatus) {
+      const auth = await authenticateRequest(request, environment);
+      if (!auth.ok) return json(request, environment, auth, 401);
+      const pairingId = pairingIdSchema.safeParse(pairingStatus[1]);
+      if (!pairingId.success) {
+        return json(
+          request,
+          environment,
+          { ok: false, code: "INVALID_PAIRING_ID" },
+          400,
+        );
+      }
+      const result = await getPairingStatus(environment.VILLAGE_DB, {
+        principalId: auth.principalId,
+        pairingId: pairingId.data,
+        now: new Date().toISOString(),
+      });
+      return json(request, environment, result, result.ok ? 200 : 404);
+    }
     if (request.method === "POST" && confirmation) {
       const csrf = authorizeBrowserMutation(request, environment);
       if (!csrf.ok) return json(request, environment, csrf, 403);

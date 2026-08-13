@@ -15,6 +15,7 @@ const beginPairingSchema = z.strictObject({
   deviceDisplayName: z.string().trim().min(1).max(80),
   publicKey: publicKeySchema,
   protection: z.enum(["HARDWARE_NON_EXPORTABLE", "OS_PROTECTED_FALLBACK"]),
+  secretHash: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   now: instantSchema,
 });
 
@@ -40,6 +41,8 @@ type PairingRow = {
   pairing_id: string;
   device_id: string;
   public_key_json: string;
+  device_display_name: string;
+  fingerprint: string;
   protection: "HARDWARE_NON_EXPORTABLE" | "OS_PROTECTED_FALLBACK";
   secret_hash: string;
   attempts_remaining: number;
@@ -47,6 +50,52 @@ type PairingRow = {
     "PENDING_CONFIRMATION" | "CONFIRMED" | "EXPIRED" | "REJECTED" | "CONSUMED";
   expires_at: string;
 };
+
+export async function getPairingStatus(db: D1Database, candidate: unknown) {
+  const parsed = pairingOperationSchema.safeParse(candidate);
+  if (!parsed.success) {
+    return { ok: false as const, code: "INVALID_PAIRING_STATUS" };
+  }
+  const input = parsed.data;
+  const row = await db
+    .prepare(
+      `SELECT principal_id, pairing_id, device_id, device_display_name,
+              public_key_json, protection, secret_hash, fingerprint,
+              attempts_remaining, state, expires_at
+       FROM pairing_challenges WHERE principal_id = ? AND pairing_id = ?`,
+    )
+    .bind(input.principalId, input.pairingId)
+    .first<PairingRow>();
+  if (!row) return { ok: false as const, code: "PAIRING_NOT_FOUND" };
+  let state = row.state;
+  if (
+    (state === "PENDING_CONFIRMATION" || state === "CONFIRMED") &&
+    row.expires_at <= input.now
+  ) {
+    state = "EXPIRED";
+    await db
+      .prepare(
+        `UPDATE pairing_challenges SET state = 'EXPIRED'
+         WHERE principal_id = ? AND pairing_id = ?
+           AND state IN ('PENDING_CONFIRMATION', 'CONFIRMED')`,
+      )
+      .bind(input.principalId, input.pairingId)
+      .run();
+  }
+  return {
+    ok: true as const,
+    pairing: {
+      principalId: row.principal_id,
+      pairingId: row.pairing_id,
+      deviceId: row.device_id,
+      deviceDisplayName: row.device_display_name,
+      fingerprint: row.fingerprint,
+      attemptsRemaining: row.attempts_remaining,
+      state,
+      expiresAt: row.expires_at,
+    },
+  };
+}
 
 const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
@@ -100,8 +149,6 @@ export async function beginPairing(db: D1Database, candidate: unknown) {
   if (!parsed.success)
     return { ok: false as const, code: "INVALID_PAIRING_REQUEST" };
   const input = parsed.data;
-  const secret = base64Url(crypto.getRandomValues(new Uint8Array(32)));
-  const secretHash = await sha256(secret);
   const publicKeyJson = JSON.stringify(input.publicKey);
   const fingerprint = (await sha256(publicKeyJson)).slice(0, 16).toUpperCase();
   const pairingId = pairingIdSchema.parse(
@@ -124,7 +171,7 @@ export async function beginPairing(db: D1Database, candidate: unknown) {
         input.deviceDisplayName,
         publicKeyJson,
         input.protection,
-        secretHash,
+        input.secretHash,
         fingerprint,
         input.now,
         expiresAt,
@@ -133,7 +180,13 @@ export async function beginPairing(db: D1Database, candidate: unknown) {
   } catch {
     return { ok: false as const, code: "PAIRING_CONFLICT" };
   }
-  return { ok: true as const, pairingId, secret, fingerprint, expiresAt };
+  return {
+    ok: true as const,
+    principalId: input.principalId,
+    pairingId,
+    fingerprint,
+    expiresAt,
+  };
 }
 
 export async function confirmPairing(db: D1Database, candidate: unknown) {
@@ -180,8 +233,9 @@ export async function consumePairing(db: D1Database, candidate: unknown) {
   const input = parsed.data;
   const row = await db
     .prepare(
-      `SELECT principal_id, pairing_id, device_id, public_key_json, protection,
-              secret_hash, attempts_remaining, state, expires_at
+      `SELECT principal_id, pairing_id, device_id, device_display_name,
+              public_key_json, protection, secret_hash, fingerprint,
+              attempts_remaining, state, expires_at
        FROM pairing_challenges WHERE principal_id = ? AND pairing_id = ?`,
     )
     .bind(input.principalId, input.pairingId)

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   BrowserViewportCoordinator,
   calculateBrowserBounds,
+  calculateNativeViewVisibility,
 } from "../src/main/browser-viewport-coordinator.js";
 
 describe("native browser viewport", () => {
@@ -20,7 +21,7 @@ describe("native browser viewport", () => {
     ).toEqual({ x: 180, y: 200, width: 320, height: 0 });
   });
 
-  it("restores the view when takeover fails before acknowledgement", () => {
+  it("keeps input blocked when takeover fails before acknowledgement", () => {
     const calls: string[] = [];
     const coordinator = new BrowserViewportCoordinator({
       setBounds: () => undefined,
@@ -30,8 +31,29 @@ describe("native browser viewport", () => {
       destroy: () => undefined,
     });
     coordinator.beginTakeover();
-    coordinator.cancelTakeover();
-    expect(calls).toEqual(["input:false", "input:true"]);
+    coordinator.restoreAgentControl();
+    expect(calls).toEqual(["input:false", "input:false"]);
+  });
+
+  it("restores user input when hand-back reconciliation fails", () => {
+    const calls: string[] = [];
+    const coordinator = new BrowserViewportCoordinator({
+      setBounds: () => undefined,
+      setVisible: () => undefined,
+      setInputEnabled: (enabled) => calls.push(`input:${enabled}`),
+      focus: () => calls.push("focus"),
+      destroy: () => undefined,
+    });
+    coordinator.acknowledgeTakeover();
+    coordinator.beginTakeover();
+    coordinator.restoreUserControl();
+    expect(calls).toEqual([
+      "input:true",
+      "focus",
+      "input:false",
+      "input:true",
+      "focus",
+    ]);
   });
 
   it("keeps remote input covered until takeover is acknowledged", () => {
@@ -58,5 +80,35 @@ describe("native browser viewport", () => {
       calls.slice(calls.indexOf("input:false"), calls.indexOf("input:true")),
     ).not.toContain("input:true");
     expect(calls.at(-1)).toBe("destroy");
+  });
+
+  it("supports clamped resize and collapse without enabling browser input", () => {
+    const calls: string[] = [];
+    const coordinator = new BrowserViewportCoordinator({
+      setBounds: (bounds) => calls.push(`width:${bounds.width}`),
+      setVisible: (visible) => calls.push(`visible:${visible}`),
+      setInputEnabled: (enabled) => calls.push(`input:${enabled}`),
+      focus: () => undefined,
+      destroy: () => undefined,
+    });
+    coordinator.configure({ splitRatio: 0.42, minWidth: 360 });
+    coordinator.setSplitRatio(0.7);
+    coordinator.layout({ width: 1_000, height: 700 });
+    coordinator.setVisible(false);
+
+    expect(calls).toContain("width:700");
+    expect(calls).toContain("visible:false");
+    expect(calls).not.toContain("input:true");
+  });
+
+  it("keeps both native views hidden while a collapsed pane is input-blocked", () => {
+    expect(calculateNativeViewVisibility(false, false)).toEqual({
+      browserVisible: false,
+      shieldVisible: false,
+    });
+    expect(calculateNativeViewVisibility(true, false)).toEqual({
+      browserVisible: true,
+      shieldVisible: true,
+    });
   });
 });

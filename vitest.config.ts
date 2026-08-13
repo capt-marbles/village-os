@@ -7,6 +7,9 @@ export default defineConfig({
       "@village/contracts": fileURLToPath(
         new URL("./packages/contracts/src/index.ts", import.meta.url),
       ),
+      "@village/ui": fileURLToPath(
+        new URL("./packages/ui/src/index.ts", import.meta.url),
+      ),
     },
   },
   test: {

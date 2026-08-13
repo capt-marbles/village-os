@@ -14,6 +14,13 @@ const principalId = "prn_01J00000000000000000000000" as const;
 const otherPrincipalId = "prn_01J00000000000000000000001" as const;
 const deviceId = "dev_01J00000000000000000000000" as const;
 const now = "2026-08-12T18:00:00.000Z";
+const pairingSecret = "a".repeat(43);
+
+async function hashSecret(secret: string): Promise<string> {
+  return Buffer.from(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret)),
+  ).toString("base64url");
+}
 
 beforeEach(async () => {
   await applyD1Migrations(env.VILLAGE_DB, env.TEST_MIGRATIONS!);
@@ -34,6 +41,7 @@ async function challenge() {
     deviceDisplayName: "Andrew's Mac",
     publicKey: { kty: "OKP", crv: "Ed25519", x: "cHVibGljX2tleQ" },
     protection: "HARDWARE_NON_EXPORTABLE",
+    secretHash: await hashSecret(pairingSecret),
     now,
   });
 }
@@ -42,12 +50,11 @@ describe("device pairing", () => {
   it("requires owner confirmation and consumes the high-entropy secret once", async () => {
     const begun = await challenge();
     if (!begun.ok) throw new Error(begun.code);
-    expect(begun.secret).toHaveLength(43);
     expect(
       await consumePairing(env.VILLAGE_DB, {
         principalId,
         pairingId: begun.pairingId,
-        secret: begun.secret,
+        secret: pairingSecret,
         now,
       }),
     ).toEqual({ ok: false, code: "PAIRING_NOT_CONSUMABLE" });
@@ -62,7 +69,7 @@ describe("device pairing", () => {
       await consumePairing(env.VILLAGE_DB, {
         principalId,
         pairingId: begun.pairingId,
-        secret: begun.secret,
+        secret: pairingSecret,
         now,
       }),
     ).toEqual({ ok: true, deviceId });
@@ -70,7 +77,7 @@ describe("device pairing", () => {
       await consumePairing(env.VILLAGE_DB, {
         principalId,
         pairingId: begun.pairingId,
-        secret: begun.secret,
+        secret: pairingSecret,
         now,
       }),
     ).toEqual({ ok: false, code: "PAIRING_NOT_CONSUMABLE" });
@@ -105,7 +112,7 @@ describe("device pairing", () => {
       await consumePairing(env.VILLAGE_DB, {
         principalId,
         pairingId: begun.pairingId,
-        secret: begun.secret,
+        secret: pairingSecret,
         now,
       }),
     ).toEqual({ ok: false, code: "PAIRING_NOT_CONSUMABLE" });
@@ -126,6 +133,7 @@ describe("device pairing", () => {
       deviceDisplayName: "Replacement",
       publicKey: { kty: "OKP", crv: "Ed25519", x: "cmVwbGFjZW1lbnQ" },
       protection: "OS_PROTECTED_FALLBACK",
+      secretHash: await hashSecret(pairingSecret),
       now,
     });
     if (!third.ok) throw new Error(third.code);
@@ -137,7 +145,7 @@ describe("device pairing", () => {
     await consumePairing(env.VILLAGE_DB, {
       principalId,
       pairingId: third.pairingId,
-      secret: third.secret,
+      secret: pairingSecret,
       now,
     });
     expect(
@@ -171,6 +179,7 @@ describe("device pairing", () => {
       deviceDisplayName: "Rejected host",
       publicKey: { kty: "OKP", crv: "Ed25519", x: "cmVqZWN0ZWQ" },
       protection: "HARDWARE_NON_EXPORTABLE",
+      secretHash: await hashSecret(pairingSecret),
       now,
     });
     if (!rejected.ok) throw new Error(rejected.code);

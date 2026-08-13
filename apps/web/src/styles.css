@@ -14,4 +14,162 @@ body {
 }
 button {
   font: inherit;
+  min-height: 44px;
+  border: 1px solid #a8d48f;
+  border-radius: 999px;
+  padding: 0.65rem 1rem;
+  background: #a8d48f;
+  color: #101713;
+  font-weight: 750;
+  cursor: pointer;
+}
+button:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 3px;
+}
+.button-secondary {
+  border-color: #59665d;
+  color: #e9f0eb;
+  background: #182019;
+}
+.observer-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 420px);
+  min-height: 100vh;
+}
+.observer-card {
+  margin: clamp(1rem, 3vw, 2rem);
+  align-self: start;
+  overflow: hidden;
+  border: 1px solid #334038;
+  border-radius: 20px;
+  background: #131a15;
+  box-shadow: 0 24px 70px rgb(0 0 0 / 25%);
+}
+.observer-card__body {
+  padding: 1rem;
+}
+.observer-card__eyebrow {
+  color: #8fb89e;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+}
+.observer-card__body h2 {
+  margin: 0.4rem 0;
+}
+.observer-card__body p {
+  color: #b8c2b9;
+  line-height: 1.55;
+}
+.observer-card__facts {
+  display: grid;
+  gap: 0.5rem;
+  margin: 1rem 0;
+}
+.observer-card__facts div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.observer-card__facts dt {
+  color: #8e9a91;
+}
+.observer-card__facts dd {
+  margin: 0;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+.observer-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.observer-connection {
+  margin: 0 0 0.75rem;
+  border: 1px solid #4b584d;
+  border-radius: 12px;
+  padding: 0.75rem 0.9rem;
+  color: #d9e2d8;
+  background: #182019;
+}
+
+.pair-desktop-card {
+  margin: clamp(1rem, 3vw, 2rem);
+  border: 1px solid #334038;
+  border-radius: 20px;
+  padding: 1rem;
+  background: #131a15;
+}
+.pair-desktop-card h2 {
+  margin: 0.4rem 0;
+}
+.pair-desktop-card p,
+.pair-desktop-card label {
+  color: #b8c2b9;
+  line-height: 1.55;
+}
+.pair-desktop-card label {
+  display: block;
+  margin-bottom: 0.4rem;
+  font-weight: 700;
+}
+.pair-desktop-card textarea {
+  width: 100%;
+  margin-bottom: 0.75rem;
+  border: 1px solid #59665d;
+  border-radius: 12px;
+  padding: 0.75rem;
+  color: #ebf2ed;
+  background: #0d120f;
+  font:
+    0.78rem ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  resize: vertical;
+}
+.pair-desktop-card__fingerprint {
+  display: block;
+  margin: 0.75rem 0 1rem;
+  font:
+    800 1.15rem ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  letter-spacing: 0.08em;
+}
+.pair-desktop-card__link {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.65rem 1rem;
+  color: #101713;
+  background: #a8d48f;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.observer-card__actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+@media (max-width: 780px) {
+  .observer-layout {
+    display: block;
+  }
+  .observer-card {
+    margin-top: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }

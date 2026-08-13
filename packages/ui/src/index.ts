@@ -1,2 +1,14 @@
 export { VillageShell } from "./VillageShell.js";
 export { setMobilePanel, useMobilePanel } from "./use-mobile-panel.js";
+export { BrowserPane } from "./browser/BrowserPane.js";
+export { BrowserStatusCard } from "./browser/BrowserStatusCard.js";
+export {
+  browserActionLabel,
+  deriveBrowserUiModel,
+} from "./browser/browser-ui-state-matrix.js";
+export type {
+  BrowserUiAction,
+  BrowserUiModel,
+  BrowserUiSnapshot,
+  BrowserVerification,
+} from "./browser/browser-ui-state-matrix.js";
