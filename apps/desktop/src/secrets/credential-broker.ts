@@ -23,7 +23,7 @@ export type CredentialFillBinding = Pick<
 };
 
 export interface CredentialDestination {
-  inspectApprovedFixtureField(): Promise<
+  inspectApprovedFixtureField(signal: AbortSignal): Promise<
     CredentialFillBinding & {
       approved: boolean;
       visible: boolean;
@@ -31,14 +31,17 @@ export interface CredentialDestination {
       obscured: boolean;
     }
   >;
-  writeApprovedFixtureField(request: {
-    plaintext: Uint8Array;
-    exactOrigin: string;
-    documentId: string;
-    mainFrameId: string;
-    nodeId: string;
-    fieldSemantic: "PASSWORD";
-  }): Promise<void>;
+  writeApprovedFixtureField(
+    request: {
+      plaintext: Uint8Array;
+      exactOrigin: string;
+      documentId: string;
+      mainFrameId: string;
+      nodeId: string;
+      fieldSemantic: "PASSWORD";
+    },
+    signal: AbortSignal,
+  ): Promise<void>;
 }
 
 export interface CredentialConsentPrompt {
@@ -49,7 +52,7 @@ export interface CredentialConsentPrompt {
 }
 
 type Authorization = {
-  binding: CredentialFillBinding;
+  binding: Readonly<CredentialFillBinding>;
   expiresAt: number;
   state: "ACTIVE" | "CONSUMED" | "INVALIDATED";
   terminalAt?: number;
@@ -75,8 +78,8 @@ function newAuthorizationId(): string {
 }
 
 function sameBinding(
-  left: CredentialFillBinding,
-  right: CredentialFillBinding,
+  left: Readonly<CredentialFillBinding>,
+  right: Readonly<CredentialFillBinding>,
 ): boolean {
   return (
     left.principalId === right.principalId &&
@@ -117,17 +120,21 @@ function assertBinding(binding: CredentialFillBinding): void {
 
 export class CredentialBroker {
   private readonly authorizations = new Map<string, Authorization>();
+  private readonly lifecycleGenerations = new Map<string, number>();
+  private readonly activeDestinations = new Map<string, Set<AbortController>>();
 
   constructor(
     private readonly vault: SecretVault,
     private readonly destination: CredentialDestination,
     private readonly consentPrompt: CredentialConsentPrompt,
     private readonly now: () => number = Date.now,
+    private readonly destinationTimeoutMs = 10_000,
   ) {}
 
   async authorize(binding: CredentialFillBinding, lifetimeMs: number) {
     this.purge();
-    assertBinding(binding);
+    const snapshot = Object.freeze({ ...binding });
+    assertBinding(snapshot);
     if (
       !Number.isInteger(lifetimeMs) ||
       lifetimeMs < 1 ||
@@ -135,15 +142,24 @@ export class CredentialBroker {
     ) {
       throw new Error("INVALID_AUTHORIZATION_LIFETIME");
     }
+    const lifecycleGeneration = this.lifecycleGeneration(
+      snapshot.browserSessionId,
+    );
     const approved = await this.consentPrompt.confirmCredentialUse({
-      exactOrigin: binding.exactOrigin,
-      fieldSemantic: binding.fieldSemantic,
+      exactOrigin: snapshot.exactOrigin,
+      fieldSemantic: snapshot.fieldSemantic,
     });
     if (!approved) throw new Error("CREDENTIAL_USE_DECLINED");
+    if (
+      lifecycleGeneration !==
+      this.lifecycleGeneration(snapshot.browserSessionId)
+    ) {
+      throw new Error("CREDENTIAL_USE_INVALIDATED");
+    }
     const authorizationId = newAuthorizationId();
     const expiresAt = this.now() + lifetimeMs;
     this.authorizations.set(authorizationId, {
-      binding: { ...binding },
+      binding: snapshot,
       expiresAt,
       state: "ACTIVE",
     });
@@ -163,7 +179,7 @@ export class CredentialBroker {
     if (authorization.state === "INVALIDATED") {
       return { ok: false, code: "AUTHORIZATION_INVALIDATED" };
     }
-    if (this.now() > authorization.expiresAt) {
+    if (this.now() >= authorization.expiresAt) {
       authorization.state = "CONSUMED";
       authorization.terminalAt = this.now();
       return { ok: false, code: "AUTHORIZATION_EXPIRED" };
@@ -175,16 +191,26 @@ export class CredentialBroker {
     }
     authorization.state = "CONSUMED";
     authorization.terminalAt = this.now();
+    const lifecycleGeneration = this.lifecycleGeneration(
+      authorization.binding.browserSessionId,
+    );
     try {
       return await this.vault.withSecret(
-        binding.secretRef,
+        authorization.binding.secretRef,
         async (plaintext) => {
           let current: Awaited<
             ReturnType<CredentialDestination["inspectApprovedFixtureField"]>
           >;
           try {
-            current = await this.destination.inspectApprovedFixtureField();
-          } catch {
+            current = await this.runDestination(
+              authorization.binding.browserSessionId,
+              lifecycleGeneration,
+              (signal) => this.destination.inspectApprovedFixtureField(signal),
+            );
+          } catch (error) {
+            if (this.isLifecycleInvalidation(error)) {
+              return { ok: false, code: "AUTHORIZATION_INVALIDATED" } as const;
+            }
             return { ok: false, code: "DESTINATION_BINDING_MISMATCH" } as const;
           }
           if (
@@ -196,17 +222,31 @@ export class CredentialBroker {
           ) {
             return { ok: false, code: "DESTINATION_BINDING_MISMATCH" } as const;
           }
+          if (this.now() >= authorization.expiresAt) {
+            return { ok: false, code: "AUTHORIZATION_EXPIRED" } as const;
+          }
           try {
-            await this.destination.writeApprovedFixtureField({
-              plaintext,
-              exactOrigin: binding.exactOrigin,
-              documentId: binding.documentId,
-              mainFrameId: binding.mainFrameId,
-              nodeId: binding.nodeId,
-              fieldSemantic: binding.fieldSemantic,
-            });
+            await this.runDestination(
+              authorization.binding.browserSessionId,
+              lifecycleGeneration,
+              (signal) =>
+                this.destination.writeApprovedFixtureField(
+                  {
+                    plaintext,
+                    exactOrigin: authorization.binding.exactOrigin,
+                    documentId: authorization.binding.documentId,
+                    mainFrameId: authorization.binding.mainFrameId,
+                    nodeId: authorization.binding.nodeId,
+                    fieldSemantic: authorization.binding.fieldSemantic,
+                  },
+                  signal,
+                ),
+            );
             return { ok: true } as const;
-          } catch {
+          } catch (error) {
+            if (this.isLifecycleInvalidation(error)) {
+              return { ok: false, code: "AUTHORIZATION_INVALIDATED" } as const;
+            }
             return { ok: false, code: "DESTINATION_WRITE_FAILED" } as const;
           }
         },
@@ -220,6 +260,7 @@ export class CredentialBroker {
   }
 
   invalidateForNavigation(browserSessionId: string): void {
+    this.advanceLifecycle(browserSessionId);
     this.invalidate((binding) => binding.browserSessionId === browserSessionId);
   }
 
@@ -227,6 +268,7 @@ export class CredentialBroker {
     browserSessionId: string,
     documentId: string,
   ): void {
+    this.advanceLifecycle(browserSessionId);
     this.invalidate(
       (binding) =>
         binding.browserSessionId === browserSessionId &&
@@ -235,6 +277,7 @@ export class CredentialBroker {
   }
 
   invalidateForNodeReplacement(browserSessionId: string, nodeId: string): void {
+    this.advanceLifecycle(browserSessionId);
     this.invalidate(
       (binding) =>
         binding.browserSessionId === browserSessionId &&
@@ -258,6 +301,71 @@ export class CredentialBroker {
         authorization.terminalAt = this.now();
       }
     }
+  }
+
+  private lifecycleGeneration(browserSessionId: string): number {
+    return this.lifecycleGenerations.get(browserSessionId) ?? 0;
+  }
+
+  private advanceLifecycle(browserSessionId: string): void {
+    this.lifecycleGenerations.set(
+      browserSessionId,
+      this.lifecycleGeneration(browserSessionId) + 1,
+    );
+    for (const controller of this.activeDestinations.get(browserSessionId) ??
+      []) {
+      controller.abort(new Error("CREDENTIAL_USE_INVALIDATED"));
+    }
+    this.activeDestinations.delete(browserSessionId);
+  }
+
+  private async runDestination<T>(
+    browserSessionId: string,
+    lifecycleGeneration: number,
+    operation: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    if (lifecycleGeneration !== this.lifecycleGeneration(browserSessionId)) {
+      throw new Error("CREDENTIAL_USE_INVALIDATED");
+    }
+    const controller = new AbortController();
+    const active =
+      this.activeDestinations.get(browserSessionId) ??
+      new Set<AbortController>();
+    active.add(controller);
+    this.activeDestinations.set(browserSessionId, active);
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        operation(controller.signal),
+        new Promise<never>((_resolve, reject) => {
+          controller.signal.addEventListener(
+            "abort",
+            () =>
+              reject(
+                controller.signal.reason ??
+                  new Error("CREDENTIAL_DESTINATION_ABORTED"),
+              ),
+            { once: true },
+          );
+        }),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => {
+            controller.abort();
+            reject(new Error("CREDENTIAL_DESTINATION_TIMEOUT"));
+          }, this.destinationTimeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      active.delete(controller);
+      if (active.size === 0) this.activeDestinations.delete(browserSessionId);
+    }
+  }
+
+  private isLifecycleInvalidation(error: unknown): boolean {
+    return (
+      error instanceof Error && error.message === "CREDENTIAL_USE_INVALIDATED"
+    );
   }
 
   private purge(): void {

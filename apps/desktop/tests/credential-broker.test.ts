@@ -280,7 +280,7 @@ describe("one-use credential broker", () => {
     }
     const expired = await setup();
     const consent = await expired.broker.authorize(expired.binding, 5_000);
-    expired.advance(5_001);
+    expired.advance(5_000);
     await expect(
       expired.broker.fill(consent.authorizationId, expired.binding),
     ).resolves.toEqual({
@@ -359,6 +359,270 @@ describe("one-use credential broker", () => {
     ).resolves.toEqual({
       ok: false,
       code: "SECRET_REVOKED",
+    });
+  });
+
+  it("fails closed for every unsafe destination state", async () => {
+    for (const unsafe of [
+      { approved: false },
+      { visible: false },
+      { enabled: false },
+      { obscured: true },
+    ]) {
+      const context = await setup();
+      const writes: string[] = [];
+      const broker = new CredentialBroker(
+        context.vault,
+        {
+          inspectApprovedFixtureField: async () => ({
+            ...context.binding,
+            approved: true,
+            visible: true,
+            enabled: true,
+            obscured: false,
+            ...unsafe,
+          }),
+          writeApprovedFixtureField: async () => {
+            writes.push("unsafe");
+          },
+        },
+        { confirmCredentialUse: async () => true },
+        () => 1_000,
+      );
+      const consent = await broker.authorize(context.binding, 5_000);
+      await expect(
+        broker.fill(consent.authorizationId, context.binding),
+      ).resolves.toEqual({
+        ok: false,
+        code: "DESTINATION_BINDING_MISMATCH",
+      });
+      expect(writes).toEqual([]);
+    }
+
+    const context = await setup();
+    const broker = new CredentialBroker(
+      context.vault,
+      {
+        inspectApprovedFixtureField: async () => {
+          throw new Error("browser target disappeared");
+        },
+        writeApprovedFixtureField: async () => {
+          throw new Error("must not write");
+        },
+      },
+      { confirmCredentialUse: async () => true },
+      () => 1_000,
+    );
+    const consent = await broker.authorize(context.binding, 5_000);
+    await expect(
+      broker.fill(consent.authorizationId, context.binding),
+    ).resolves.toEqual({
+      ok: false,
+      code: "DESTINATION_BINDING_MISMATCH",
+    });
+  });
+
+  it("snapshots consent input and rejects lifecycle changes during the prompt", async () => {
+    const context = await setup();
+    let resolveConsent!: (approved: boolean) => void;
+    const consentResult = new Promise<boolean>((resolve) => {
+      resolveConsent = resolve;
+    });
+    const broker = new CredentialBroker(
+      context.vault,
+      {
+        inspectApprovedFixtureField: async () => ({
+          ...context.binding,
+          approved: true,
+          visible: true,
+          enabled: true,
+          obscured: false,
+        }),
+        writeApprovedFixtureField: async (request) => {
+          context.writes.push(new TextDecoder().decode(request.plaintext));
+        },
+      },
+      { confirmCredentialUse: async () => consentResult },
+      () => 1_000,
+    );
+    const mutableBinding = { ...context.binding };
+    const authorization = broker.authorize(mutableBinding, 5_000);
+    mutableBinding.exactOrigin = "https://evil.example";
+    resolveConsent(true);
+    const approved = await authorization;
+    await expect(
+      broker.fill(approved.authorizationId, context.binding),
+    ).resolves.toEqual({ ok: true });
+
+    let resolvePending!: (approved: boolean) => void;
+    const pendingResult = new Promise<boolean>((resolve) => {
+      resolvePending = resolve;
+    });
+    const pendingBroker = new CredentialBroker(
+      context.vault,
+      {
+        inspectApprovedFixtureField: async () => ({
+          ...context.binding,
+          approved: true,
+          visible: true,
+          enabled: true,
+          obscured: false,
+        }),
+        writeApprovedFixtureField: async () => undefined,
+      },
+      { confirmCredentialUse: async () => pendingResult },
+      () => 1_000,
+    );
+    const pending = pendingBroker.authorize(context.binding, 5_000);
+    pendingBroker.invalidateForNavigation(context.binding.browserSessionId);
+    resolvePending(true);
+    await expect(pending).rejects.toThrow("CREDENTIAL_USE_INVALIDATED");
+  });
+
+  it("uses the authorized snapshot when the fill request mutates in flight", async () => {
+    const context = await setup();
+    let resolveInspection!: () => void;
+    const inspectionGate = new Promise<void>((resolve) => {
+      resolveInspection = resolve;
+    });
+    const writtenOrigins: string[] = [];
+    const broker = new CredentialBroker(
+      context.vault,
+      {
+        inspectApprovedFixtureField: async () => {
+          await inspectionGate;
+          return {
+            ...context.binding,
+            approved: true,
+            visible: true,
+            enabled: true,
+            obscured: false,
+          };
+        },
+        writeApprovedFixtureField: async (request) => {
+          writtenOrigins.push(request.exactOrigin);
+        },
+      },
+      { confirmCredentialUse: async () => true },
+      () => 1_000,
+    );
+    const consent = await broker.authorize(context.binding, 5_000);
+    const mutableFill = { ...context.binding };
+    const fill = broker.fill(consent.authorizationId, mutableFill);
+    mutableFill.exactOrigin = "https://evil.example";
+    resolveInspection();
+
+    await expect(fill).resolves.toEqual({ ok: true });
+    expect(writtenOrigins).toEqual(["https://fixture.village.test"]);
+  });
+
+  it("rechecks expiry after destination inspection", async () => {
+    const context = await setup();
+    let now = 1_000;
+    const writes: string[] = [];
+    const broker = new CredentialBroker(
+      context.vault,
+      {
+        inspectApprovedFixtureField: async () => {
+          now = 1_005;
+          return {
+            ...context.binding,
+            approved: true,
+            visible: true,
+            enabled: true,
+            obscured: false,
+          };
+        },
+        writeApprovedFixtureField: async () => {
+          writes.push("expired");
+        },
+      },
+      { confirmCredentialUse: async () => true },
+      () => now,
+    );
+    const consent = await broker.authorize(context.binding, 5);
+    await expect(
+      broker.fill(consent.authorizationId, context.binding),
+    ).resolves.toEqual({
+      ok: false,
+      code: "AUTHORIZATION_EXPIRED",
+    });
+    expect(writes).toEqual([]);
+  });
+
+  it("aborts a hung destination so vault revocation can continue", async () => {
+    const context = await setup();
+    let aborted = false;
+    const broker = new CredentialBroker(
+      context.vault,
+      {
+        inspectApprovedFixtureField: async () => ({
+          ...context.binding,
+          approved: true,
+          visible: true,
+          enabled: true,
+          obscured: false,
+        }),
+        writeApprovedFixtureField: async (_request, signal) =>
+          new Promise<void>((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                aborted = true;
+                reject(new Error("aborted"));
+              },
+              { once: true },
+            );
+          }),
+      },
+      { confirmCredentialUse: async () => true },
+      () => 1_000,
+      5,
+    );
+    const consent = await broker.authorize(context.binding, 5_000);
+    await expect(
+      broker.fill(consent.authorizationId, context.binding),
+    ).resolves.toEqual({
+      ok: false,
+      code: "DESTINATION_WRITE_FAILED",
+    });
+    expect(aborted).toBe(true);
+    await expect(context.vault.revoke(context.binding.secretRef)).resolves.toBe(
+      undefined,
+    );
+  });
+
+  it("aborts an in-flight destination write on takeover", async () => {
+    const context = await setup();
+    let signalWriteStarted!: () => void;
+    const writeStarted = new Promise<void>((resolve) => {
+      signalWriteStarted = resolve;
+    });
+    const broker = new CredentialBroker(
+      context.vault,
+      {
+        inspectApprovedFixtureField: async () => ({
+          ...context.binding,
+          approved: true,
+          visible: true,
+          enabled: true,
+          obscured: false,
+        }),
+        writeApprovedFixtureField: async () => {
+          signalWriteStarted();
+          return new Promise<void>(() => undefined);
+        },
+      },
+      { confirmCredentialUse: async () => true },
+      () => 1_000,
+    );
+    const consent = await broker.authorize(context.binding, 5_000);
+    const fill = broker.fill(consent.authorizationId, context.binding);
+    await writeStarted;
+    broker.invalidateForTakeover(context.binding.browserSessionId);
+    await expect(fill).resolves.toEqual({
+      ok: false,
+      code: "AUTHORIZATION_INVALIDATED",
     });
   });
 
