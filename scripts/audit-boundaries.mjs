@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const allowedWorkspaceDependencies = new Map([
-  ["apps/control-plane", new Set()],
+  ["apps/control-plane", new Set(["@village/contracts"])],
   ["apps/desktop", new Set(["@village/contracts"])],
   ["apps/web", new Set(["@village/ui"])],
   ["packages/contracts", new Set()],
