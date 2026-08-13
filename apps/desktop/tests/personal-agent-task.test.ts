@@ -53,14 +53,67 @@ describe("personal agent task controller", () => {
       ]),
     );
     const browser = environment("https://www.linkedin.com/feed/");
+    const activity: unknown[] = [];
 
-    await expect(controller.run(request, browser)).resolves.toEqual({
+    await expect(
+      controller.run(request, browser, (event) => activity.push(event)),
+    ).resolves.toEqual({
       state: "COMPLETED",
       outcome: "AUTHENTICATED",
       evidence: "OWNER_CONFIRMED",
     });
     expect(browser.confirmAccount).toHaveBeenCalledOnce();
     expect(browser.readBrowserState).toHaveBeenCalledTimes(3);
+    expect(activity).toEqual([
+      { sequence: 1, stage: "CLASSIFYING_BROWSER" },
+      { sequence: 2, stage: "CONSULTING_CHATGPT" },
+      { sequence: 3, stage: "VERIFYING_BROWSER" },
+      { sequence: 4, stage: "WAITING_FOR_OWNER" },
+    ]);
+  });
+
+  it("stops progress at the safe human gate before consulting ChatGPT", async () => {
+    const nextAction = vi.fn();
+    const controller = new PersonalAgentTaskController({
+      id: "must-not-run",
+      nextAction,
+      close: vi.fn(),
+    });
+    const activity: unknown[] = [];
+
+    await controller.run(
+      request,
+      environment("https://www.linkedin.com/checkpoint/challenge"),
+      (event) => activity.push(event),
+    );
+
+    expect(activity).toEqual([{ sequence: 1, stage: "CLASSIFYING_BROWSER" }]);
+    expect(nextAction).not.toHaveBeenCalled();
+  });
+
+  it("keeps the task result safe when the activity consumer disconnects", async () => {
+    const controller = new PersonalAgentTaskController(
+      new DeterministicProviderDouble([
+        {
+          capability: "VERIFY_AUTHENTICATION",
+          predicateVersion: "linkedin-route-v1",
+        },
+      ]),
+    );
+
+    await expect(
+      controller.run(
+        request,
+        environment("https://www.linkedin.com/login"),
+        () => {
+          throw new Error("renderer closed");
+        },
+      ),
+    ).resolves.toEqual({
+      state: "COMPLETED",
+      outcome: "NOT_AUTHENTICATED",
+      evidence: "LOCAL_PREDICATE",
+    });
   });
 
   it("reports sign-out and human gates without allowing a model mutation", async () => {
