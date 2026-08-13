@@ -5,8 +5,12 @@ import {
   type BrowserUiSnapshot,
 } from "@village/ui";
 import { useEffect, useState } from "react";
+import {
+  ModelProviderAccountOnboarding,
+  type ModelProviderAccountBridge,
+} from "./ModelProviderAccountCard.js";
 
-export interface VillageDesktopBridge {
+export interface VillageDesktopBridge extends ModelProviderAccountBridge {
   getBrowserUiState(): Promise<BrowserUiSnapshot>;
   getBrowserDiagnostics(): Promise<readonly BrowserDiagnosticEntry[]>;
   subscribeBrowserUiState(
@@ -172,6 +176,9 @@ export function DesktopBrowserPane({
         actionsDisabled={pendingAction !== null}
         diagnostics={diagnostics}
       />
+      {activeBridge ? (
+        <ModelProviderAccountOnboarding bridge={activeBridge} />
+      ) : null}
       {actionError ? (
         <p role="alert" style={{ margin: ".5rem 1rem", color: "#f1b5aa" }}>
           {actionError}

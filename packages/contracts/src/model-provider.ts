@@ -30,8 +30,43 @@ export const modelProviderResultSchema = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("complete") }),
 ]);
 
+export const modelProviderAccountSnapshotSchema = z.discriminatedUnion(
+  "state",
+  [
+    z.strictObject({
+      provider: z.literal("CHATGPT"),
+      state: z.literal("CHECKING"),
+    }),
+    z.strictObject({
+      provider: z.literal("CHATGPT"),
+      state: z.literal("AUTHENTICATION_REQUIRED"),
+    }),
+    z.strictObject({
+      provider: z.literal("CHATGPT"),
+      state: z.literal("AUTHENTICATING"),
+    }),
+    z.strictObject({
+      provider: z.literal("CHATGPT"),
+      state: z.literal("AUTHENTICATED"),
+      accountType: z.literal("chatgpt"),
+    }),
+    z.strictObject({
+      provider: z.literal("CHATGPT"),
+      state: z.literal("UNAVAILABLE"),
+      errorCode: z.enum([
+        "PROVIDER_UNAVAILABLE",
+        "UNTRUSTED_AUTH_URL",
+        "AUTH_BROWSER_UNAVAILABLE",
+      ]),
+    }),
+  ],
+);
+
 export type SanitizedModelContext = z.infer<typeof sanitizedModelContextSchema>;
 export type ModelProviderResult = z.infer<typeof modelProviderResultSchema>;
+export type ModelProviderAccountSnapshot = z.infer<
+  typeof modelProviderAccountSnapshotSchema
+>;
 
 export interface ModelProvider {
   readonly id: string;

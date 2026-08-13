@@ -33,8 +33,11 @@ describe("desktop preload bridge", () => {
 
     const bridge = bridges.village!;
     expect(Object.keys(bridge).sort()).toEqual([
+      "beginChatGptLogin",
+      "cancelChatGptLogin",
       "getBrowserDiagnostics",
       "getBrowserUiState",
+      "getModelProviderAccount",
       "recordVerificationDecision",
       "requestForgetSession",
       "requestObserverIntent",
@@ -74,5 +77,12 @@ describe("desktop preload bridge", () => {
       "village:browser-diagnostics",
       expect.any(Function),
     );
+
+    await bridge.getModelProviderAccount!();
+    await bridge.beginChatGptLogin!();
+    await bridge.cancelChatGptLogin!();
+    expect(invoke).toHaveBeenCalledWith("village:get-model-provider-account");
+    expect(invoke).toHaveBeenCalledWith("village:begin-chatgpt-login");
+    expect(invoke).toHaveBeenCalledWith("village:cancel-chatgpt-login");
   });
 });

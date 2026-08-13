@@ -9,6 +9,11 @@ contextBridge.exposeInMainWorld(
     getBrowserUiState: () => ipcRenderer.invoke("village:get-browser-ui-state"),
     getBrowserDiagnostics: () =>
       ipcRenderer.invoke("village:get-browser-diagnostics"),
+    getModelProviderAccount: () =>
+      ipcRenderer.invoke("village:get-model-provider-account"),
+    beginChatGptLogin: () => ipcRenderer.invoke("village:begin-chatgpt-login"),
+    cancelChatGptLogin: () =>
+      ipcRenderer.invoke("village:cancel-chatgpt-login"),
     subscribeBrowserUiState: (listener) => {
       if (typeof listener !== "function") {
         throw new TypeError("Browser UI listener must be a function");
