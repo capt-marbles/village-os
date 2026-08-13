@@ -48,8 +48,10 @@ before distributing the integration.
    - challenge, stale, unexpected-account, or unknown route: `unknown`.
 7. Close the app normally, relaunch it, reopen the same Browser Session, and
    repeat step 6. Do not perform a post-login action merely to test retention.
-8. Cancel the Job and verify the retained site session is still present. Do not
-   invoke forget-session until U8's step-up erasure flow is available.
+8. Cancel the Job and verify the retained site session is still present. In a
+   separate destructive-lifecycle check, choose forget-session, complete the
+   system-owned macOS authorization prompt, confirm deletion, and verify that
+   only the scoped Village profile is absent after restart.
 
 ## Pass criteria
 

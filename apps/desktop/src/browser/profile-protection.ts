@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdir, open, readFile, unlink } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  mkdir,
+  open,
+  readFile,
+  rm,
+  unlink,
+} from "node:fs/promises";
 import { join } from "node:path";
 import type { BrowserSite } from "./session-policy.js";
 
@@ -36,6 +44,32 @@ export async function ensureProtectedProfile(
   return { path, partition: profilePartition(scope) };
 }
 
+/** Only callers already holding an exact scope path may invoke this helper. */
+export async function eraseScopedProfile(profilePath: string): Promise<void> {
+  await rm(profilePath, { recursive: true, force: true, maxRetries: 2 });
+}
+
+export async function eraseProfileHoldingLock(
+  profilePath: string,
+  profileLock: Pick<ProfileLock, "release">,
+  erase: (path: string) => Promise<void> = eraseScopedProfile,
+): Promise<void> {
+  await erase(profilePath);
+  await profileLock.release();
+}
+
+/** File-system proof used after a destructive lifecycle and app restart. */
+export async function scopedProfileAbsent(
+  profilePath: string,
+): Promise<boolean> {
+  try {
+    await access(profilePath);
+    return false;
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "ENOENT";
+  }
+}
+
 export class ProfileLock {
   private released = false;
 
@@ -47,7 +81,9 @@ export class ProfileLock {
   static async acquire(profilePath: string): Promise<ProfileLock> {
     await mkdir(profilePath, { recursive: true, mode: 0o700 });
     await chmod(profilePath, 0o700);
-    const lockPath = join(profilePath, ".village.lock");
+    // Keep the lock beside the profile so destructive erasure can remove the
+    // entire profile directory without opening a second-host race window.
+    const lockPath = `${profilePath}.lock`;
     let handle: Awaited<ReturnType<typeof open>>;
     try {
       handle = await open(lockPath, "wx", 0o600);

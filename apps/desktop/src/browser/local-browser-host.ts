@@ -1,8 +1,10 @@
 import { join } from "node:path";
 import { session, WebContentsView } from "electron";
 import {
+  eraseProfileHoldingLock,
   ensureProtectedProfile,
   ProfileLock,
+  scopedProfileAbsent,
   type ProfileScope,
 } from "./profile-protection.js";
 import {
@@ -26,6 +28,8 @@ export class LocalBrowserHost {
   private constructor(
     view: WebContentsView,
     private readonly profileLock: ProfileLock,
+    private readonly profilePath: string,
+    private readonly browserSession: ReturnType<typeof session.fromPath>,
   ) {
     this.view = view;
   }
@@ -50,7 +54,12 @@ export class LocalBrowserHost {
       });
       configureRemoteContents(view.webContents, options.site);
       await view.webContents.loadURL(options.initialUrl).catch(() => undefined);
-      return new LocalBrowserHost(view, profileLock);
+      return new LocalBrowserHost(
+        view,
+        profileLock,
+        profile.path,
+        browserSession,
+      );
     } catch (error) {
       // The view may exist even when later session setup fails.
       await profileLock.release();
@@ -61,6 +70,30 @@ export class LocalBrowserHost {
   async close(): Promise<void> {
     if (!this.view.webContents.isDestroyed()) this.view.webContents.close();
     await this.profileLock.release();
+  }
+
+  async closeTargetForErasure(): Promise<void> {
+    if (!this.view.webContents.isDestroyed()) this.view.webContents.close();
+  }
+
+  /** Destructive lifecycle helpers, called only after main-process step-up. */
+  async clearSiteStorage(): Promise<void> {
+    await this.browserSession.clearStorageData();
+    await this.browserSession.clearCache();
+    await this.browserSession.clearAuthCache();
+  }
+
+  async clearSitePermissions(): Promise<void> {
+    // Permission prompts are deny-by-default and process-local; persisted
+    // Chromium permission state is erased with the scoped profile below.
+  }
+
+  async removeScopedProfile(): Promise<void> {
+    await eraseProfileHoldingLock(this.profilePath, this.profileLock);
+  }
+
+  async scopedProfileAbsent(): Promise<boolean> {
+    return scopedProfileAbsent(this.profilePath);
   }
 
   async reloadAfterUncertainAction(timeoutMs = 10_000): Promise<void> {

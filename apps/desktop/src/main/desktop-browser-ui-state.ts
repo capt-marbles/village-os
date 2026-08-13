@@ -128,6 +128,34 @@ export class DesktopBrowserUiState {
     this.update({ erasure: "STEP_UP_REQUIRED" });
   }
 
+  beginErasure(): void {
+    this.update({
+      erasure: "ERASING",
+      profile: "FORGETTING",
+      jobState: "CANCELED",
+      controller: "NONE",
+      takeover: "NONE",
+    });
+  }
+
+  completeErasure(): void {
+    this.update({
+      erasure: "COMPLETE",
+      profile: "ABSENT",
+      controller: "NONE",
+      takeover: "NONE",
+    });
+  }
+
+  failErasure(): void {
+    this.update({
+      erasure: "FAILED",
+      profile: "ERASURE_FAILED",
+      controller: "NONE",
+      takeover: "NONE",
+    });
+  }
+
   cancelFutureAutomation(): void {
     this.update({
       jobState: "CANCELED",
@@ -137,6 +165,15 @@ export class DesktopBrowserUiState {
         this.snapshot.connection === "OFFLINE"
           ? "OFFLINE_MARKED"
           : "NONE",
+    });
+  }
+
+  markDeviceRevoked(): void {
+    this.update({
+      pairing: "REVOKED",
+      jobState: "WAITING_FOR_BROWSER",
+      controller: "NONE",
+      takeover: "NONE",
     });
   }
 

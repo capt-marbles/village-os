@@ -1,0 +1,6 @@
+extends: ./electron-builder.yml
+publish: null
+mac:
+  target: dir
+  identity: "-"
+  notarize: false

@@ -1,5 +1,9 @@
 import { BrowserStatusCard } from "./BrowserStatusCard.js";
 import { BrowserToolbar } from "./BrowserToolbar.js";
+import {
+  BrowserDiagnostics,
+  type BrowserDiagnosticEntry,
+} from "./BrowserDiagnostics.js";
 import { ForgetSessionFlow } from "./ForgetSessionFlow.js";
 import { HumanGateCard } from "./HumanGateCard.js";
 import { PairingFlow } from "./PairingFlow.js";
@@ -18,6 +22,7 @@ export function BrowserPane({
   splitRatio,
   onSplitRatioChange,
   actionsDisabled,
+  diagnostics = [],
 }: {
   snapshot: BrowserUiSnapshot;
   collapsed: boolean;
@@ -26,6 +31,7 @@ export function BrowserPane({
   splitRatio?: number;
   onSplitRatioChange?: (splitRatio: number) => void;
   actionsDisabled?: boolean;
+  diagnostics?: readonly BrowserDiagnosticEntry[];
 }) {
   const model = deriveBrowserUiModel(snapshot);
   return (
@@ -68,6 +74,7 @@ export function BrowserPane({
             state={snapshot.erasure}
             {...(onAction ? { onAction } : {})}
           />
+          <BrowserDiagnostics entries={diagnostics} />
           <div
             id="village-browser-surface"
             role="region"

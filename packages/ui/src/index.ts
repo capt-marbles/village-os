@@ -1,6 +1,8 @@
 export { VillageShell } from "./VillageShell.js";
 export { setMobilePanel, useMobilePanel } from "./use-mobile-panel.js";
 export { BrowserPane } from "./browser/BrowserPane.js";
+export { BrowserDiagnostics } from "./browser/BrowserDiagnostics.js";
+export type { BrowserDiagnosticEntry } from "./browser/BrowserDiagnostics.js";
 export { BrowserStatusCard } from "./browser/BrowserStatusCard.js";
 export {
   browserActionLabel,
