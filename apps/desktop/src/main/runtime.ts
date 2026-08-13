@@ -1,4 +1,5 @@
 import { app, protocol } from "electron";
+import { fileURLToPath } from "node:url";
 import { createVillageAppWindow, defaultPreloadPath } from "./app-window.js";
 import {
   installVillageProtocol,
@@ -12,7 +13,7 @@ installGlobalSecurityPolicy(app);
 void app.whenReady().then(async () => {
   installVillageProtocol(
     protocol,
-    new URL("../renderer", import.meta.url).pathname,
+    fileURLToPath(new URL("../renderer", import.meta.url)),
   );
   await createVillageAppWindow({
     principalId: "usr_01J00000000000000000000000",

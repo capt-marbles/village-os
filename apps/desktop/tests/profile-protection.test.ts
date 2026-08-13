@@ -1,4 +1,4 @@
-import { mkdtemp, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -54,5 +54,16 @@ describe("protected browser profile", () => {
     await first.release();
     const second = await ProfileLock.acquire(path);
     await second.release();
+  });
+
+  it("recovers a lock left by a dead process", async () => {
+    const root = await mkdtemp(join(tmpdir(), "village-stale-lock-"));
+    const path = join(root, "profile");
+    await mkdir(path, { mode: 0o700 });
+    await writeFile(join(path, ".village.lock"), "2147483647\n", {
+      mode: 0o600,
+    });
+    const lock = await ProfileLock.acquire(path);
+    await lock.release();
   });
 });

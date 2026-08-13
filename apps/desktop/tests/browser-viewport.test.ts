@@ -20,6 +20,20 @@ describe("native browser viewport", () => {
     ).toEqual({ x: 180, y: 200, width: 320, height: 0 });
   });
 
+  it("restores the view when takeover fails before acknowledgement", () => {
+    const calls: string[] = [];
+    const coordinator = new BrowserViewportCoordinator({
+      setBounds: () => undefined,
+      setVisible: () => undefined,
+      setInputEnabled: (enabled) => calls.push(`input:${enabled}`),
+      focus: () => undefined,
+      destroy: () => undefined,
+    });
+    coordinator.beginTakeover();
+    coordinator.cancelTakeover();
+    expect(calls).toEqual(["input:false", "input:true"]);
+  });
+
   it("keeps remote input covered until takeover is acknowledged", () => {
     const calls: string[] = [];
     const coordinator = new BrowserViewportCoordinator({
@@ -42,7 +56,7 @@ describe("native browser viewport", () => {
     );
     expect(
       calls.slice(calls.indexOf("input:false"), calls.indexOf("input:true")),
-    ).not.toContain("visible:true");
+    ).not.toContain("input:true");
     expect(calls.at(-1)).toBe("destroy");
   });
 });

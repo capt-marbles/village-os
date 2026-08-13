@@ -1,6 +1,5 @@
 import type { App, Session, WebContents, WebPreferences } from "electron";
 import {
-  browserWebPreferences,
   decideNavigation,
   decidePopup,
   isPermissionAllowed,
@@ -9,14 +8,14 @@ import {
 
 const configuredSessions = new WeakSet<Session>();
 
-export function trustedWebPreferences(preload: string): WebPreferences {
+export function trustedWebPreferences(preload?: string): WebPreferences {
   return {
     sandbox: true,
     contextIsolation: true,
     nodeIntegration: false,
     webSecurity: true,
     devTools: false,
-    preload,
+    ...(preload ? { preload } : {}),
   };
 }
 
@@ -51,6 +50,9 @@ export function configureRemoteContents(
   contents.setWindowOpenHandler(decidePopup);
   contents.on("will-attach-webview", (event) => event.preventDefault());
   contents.on("will-navigate", (event, url) => {
+    if (!decideNavigation(site, url).allow) event.preventDefault();
+  });
+  contents.on("will-redirect", (event, url) => {
     if (!decideNavigation(site, url).allow) event.preventDefault();
   });
   contents.on("will-frame-navigate", (event) => {

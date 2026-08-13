@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdir, open, unlink } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import type { BrowserSite } from "./session-policy.js";
 
@@ -58,7 +58,15 @@ export class ProfileLock {
         "code" in error &&
         error.code === "EEXIST"
       ) {
-        throw new Error("PROFILE_IN_USE");
+        const existingPid = Number.parseInt(
+          await readFile(lockPath, "utf8").catch(() => ""),
+          10,
+        );
+        if (Number.isInteger(existingPid) && isProcessAlive(existingPid)) {
+          throw new Error("PROFILE_IN_USE");
+        }
+        await unlink(lockPath).catch(() => undefined);
+        return ProfileLock.acquire(profilePath);
       }
       throw error;
     }
@@ -69,5 +77,18 @@ export class ProfileLock {
     this.released = true;
     await this.handle.close();
     await unlink(this.lockPath).catch(() => undefined);
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return !(
+      error instanceof Error &&
+      "code" in error &&
+      (error.code === "ESRCH" || error.code === "EINVAL")
+    );
   }
 }

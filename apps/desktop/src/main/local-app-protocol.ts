@@ -43,6 +43,20 @@ p { color: #b8c2b3; max-width: 520px; line-height: 1.6; }
 button { margin-top: 20px; border: 1px solid #a8d48f; border-radius: 999px; padding: 12px 20px; background: #a8d48f; color: #101410; font-weight: 700; }
 button:focus-visible { outline: 3px solid white; outline-offset: 3px; }`;
 
+const shieldHtml = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+    <style>
+      html, body { margin: 0; height: 100%; background: transparent; font-family: ui-sans-serif, system-ui; }
+      body { display: grid; place-items: start center; }
+      p { margin-top: 14px; padding: 7px 12px; border-radius: 999px; color: #eaf5e5; background: rgba(16, 20, 16, .88); font-size: 12px; letter-spacing: .08em; }
+    </style>
+  </head>
+  <body><p>AGENT CONTROL · TAKE OVER FROM VILLAGE</p></body>
+</html>`;
+
 export function registerVillageScheme(
   protocolModule: typeof import("electron").protocol,
 ): void {
@@ -69,6 +83,11 @@ export function installVillageProtocol(
     if (url.host !== "app") return new Response("Not found", { status: 404 });
     if (url.pathname === "/" || url.pathname === "/index.html") {
       return new Response(indexHtml, {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    }
+    if (url.pathname === "/shield") {
+      return new Response(shieldHtml, {
         headers: { "content-type": "text/html; charset=utf-8" },
       });
     }

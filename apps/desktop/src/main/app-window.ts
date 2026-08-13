@@ -37,13 +37,25 @@ export interface VillageAppWindow {
 function browserViewAdapter(
   window: BaseWindow,
   browserHost: LocalBrowserHost,
+  inputShield: WebContentsView,
 ): NativeBrowserView {
   return {
-    setBounds: (bounds) => browserHost.view.setBounds(bounds),
-    setVisible: (visible) => browserHost.view.setVisible(visible),
-    setInputEnabled: (enabled) => browserHost.view.setVisible(enabled),
+    setBounds: (bounds) => {
+      browserHost.view.setBounds(bounds);
+      inputShield.setBounds(bounds);
+    },
+    setVisible: (visible) => {
+      browserHost.view.setVisible(visible);
+      if (!visible) inputShield.setVisible(false);
+    },
+    setInputEnabled: (enabled) => inputShield.setVisible(!enabled),
     focus: () => browserHost.view.webContents.focus(),
-    destroy: () => window.contentView.removeChildView(browserHost.view),
+    destroy: () => {
+      window.contentView.removeChildView(inputShield);
+      window.contentView.removeChildView(browserHost.view);
+      if (!inputShield.webContents.isDestroyed())
+        inputShield.webContents.close();
+    },
   };
 }
 
@@ -62,7 +74,12 @@ export async function createVillageAppWindow(
   const appView = new WebContentsView({
     webPreferences: trustedWebPreferences(options.preloadPath),
   });
+  const inputShield = new WebContentsView({
+    webPreferences: trustedWebPreferences(),
+  });
+  inputShield.setBackgroundColor("#00000000");
   const appLoad = appView.webContents.loadURL("village://app/");
+  const shieldLoad = inputShield.webContents.loadURL("village://app/shield");
   let browserHost: LocalBrowserHost | undefined;
   try {
     browserHost = await LocalBrowserHost.create({
@@ -72,22 +89,24 @@ export async function createVillageAppWindow(
       profileRoot: LocalBrowserHost.profileRoot(options.userDataPath),
       initialUrl: options.initialUrl,
     });
-    await appLoad;
+    await Promise.all([appLoad, shieldLoad]);
   } catch (error) {
-    await appLoad.catch(() => undefined);
+    await Promise.allSettled([appLoad, shieldLoad]);
     await browserHost?.close();
     if (!appView.webContents.isDestroyed()) appView.webContents.close();
+    if (!inputShield.webContents.isDestroyed()) inputShield.webContents.close();
     window.destroy();
     throw error;
   }
   if (!browserHost) throw new Error("BROWSER_HOST_CREATION_FAILED");
   const viewport = new BrowserViewportCoordinator(
-    browserViewAdapter(window, browserHost),
+    browserViewAdapter(window, browserHost, inputShield),
   );
   viewport.configure({ splitRatio: 0.42, topInset: 0, minWidth: 360 });
 
   window.contentView.addChildView(appView);
   window.contentView.addChildView(browserHost.view);
+  window.contentView.addChildView(inputShield);
 
   const layout = () => {
     const size = window.getContentSize();
@@ -101,6 +120,7 @@ export async function createVillageAppWindow(
 
   const authorizer = new SensitiveActionAuthorizer();
   const executor = new LocalActionExecutor({ leaseEpoch: 1 });
+  let takeoverCompleted = false;
   const channel = "village:request-takeover";
   const handleTakeover = async (
     event: IpcMainInvokeEvent,
@@ -113,6 +133,7 @@ export async function createVillageAppWindow(
       throw new Error("UNTRUSTED_IPC_SENDER");
     }
     if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
+    if (takeoverCompleted) return "QUIESCED" as const;
     const response = await dialog.showMessageBox({
       type: "question",
       title: "Take control of this browser?",
@@ -135,20 +156,30 @@ export async function createVillageAppWindow(
     if (!consumed.ok) throw new Error(consumed.code);
 
     viewport.beginTakeover();
-    const outcome = await executor.beginOnlineTakeover(2, 5_000);
-    if (outcome.status === "OUTCOME_UNKNOWN") {
-      browserHost.view.webContents.reload();
+    try {
+      const outcome = await executor.beginOnlineTakeover(2, 5_000);
+      if (outcome.status === "OUTCOME_UNKNOWN") {
+        await browserHost.reloadAfterUncertainAction();
+      }
+      takeoverCompleted = true;
+      viewport.acknowledgeTakeover();
+      return outcome.status;
+    } catch (error) {
+      viewport.cancelTakeover();
+      throw error;
     }
-    viewport.acknowledgeTakeover();
-    return outcome.status;
   };
   ipcMain.handle(channel, handleTakeover);
 
-  window.on("closed", () => {
+  let closing = false;
+  window.on("close", (event) => {
+    if (closing) return;
+    event.preventDefault();
+    closing = true;
     ipcMain.removeHandler(channel);
     viewport.destroy();
     if (!appView.webContents.isDestroyed()) appView.webContents.close();
-    void browserHost.close();
+    void browserHost.close().finally(() => window.destroy());
   });
   window.show();
   return { window, browserHost, viewport };

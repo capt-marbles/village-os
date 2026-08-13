@@ -53,4 +53,19 @@ describe("local action lease fencing", () => {
       actionId: "act_01J00000000000000000000000",
     });
   });
+
+  it("requires a fresh reconciled epoch before automation resumes", async () => {
+    const executor = new LocalActionExecutor({ leaseEpoch: 2 });
+    executor.markOfflineTakeover();
+    expect(() => executor.reconcileAgentLease(2)).toThrow("STALE_LEASE_EPOCH");
+    executor.reconcileAgentLease(3);
+    await expect(
+      executor.execute({
+        actionId: "act_01J00000000000000000000000",
+        leaseEpoch: 3,
+        mutationClass: "IDEMPOTENT",
+        run: async () => "SATISFIED",
+      }),
+    ).resolves.toBe("SATISFIED");
+  });
 });

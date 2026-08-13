@@ -46,6 +46,8 @@ function validateEntry(candidate: unknown): ActionJournalEntry {
 }
 
 export class ActionJournal {
+  private tail = Promise.resolve();
+
   constructor(private readonly path: string) {}
 
   async read(): Promise<ActionJournalEntry[]> {
@@ -76,12 +78,23 @@ export class ActionJournal {
   }
 
   async record(entry: ActionJournalEntry): Promise<void> {
-    const next = [...(await this.read()), validateEntry(entry)];
+    const operation = this.tail.then(() => this.writeEntry(entry));
+    this.tail = operation.catch(() => undefined);
+    await operation;
+  }
+
+  private async writeEntry(entry: ActionJournalEntry): Promise<void> {
+    const next = [...(await this.read()), validateEntry(entry)].slice(-10_000);
+    let serialized = JSON.stringify(next);
+    while (Buffer.byteLength(serialized) > 1_048_576 && next.length > 1) {
+      next.shift();
+      serialized = JSON.stringify(next);
+    }
     const directory = dirname(this.path);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     await chmod(directory, 0o700);
     const temporary = `${this.path}.${crypto.randomUUID()}.tmp`;
-    await writeFile(temporary, JSON.stringify(next), {
+    await writeFile(temporary, serialized, {
       flag: "wx",
       mode: 0o600,
     });

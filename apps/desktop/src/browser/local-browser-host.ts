@@ -38,7 +38,7 @@ export class LocalBrowserHost {
     const profile = await ensureProtectedProfile(options.profileRoot, options);
     const profileLock = await ProfileLock.acquire(profile.path);
     try {
-      const browserSession = session.fromPartition(profile.partition, {
+      const browserSession = session.fromPath(profile.path, {
         cache: true,
       });
       configureBrowserSession(browserSession);
@@ -49,9 +49,10 @@ export class LocalBrowserHost {
         },
       });
       configureRemoteContents(view.webContents, options.site);
-      await view.webContents.loadURL(options.initialUrl);
+      await view.webContents.loadURL(options.initialUrl).catch(() => undefined);
       return new LocalBrowserHost(view, profileLock);
     } catch (error) {
+      // The view may exist even when later session setup fails.
       await profileLock.release();
       throw error;
     }
@@ -60,6 +61,28 @@ export class LocalBrowserHost {
   async close(): Promise<void> {
     if (!this.view.webContents.isDestroyed()) this.view.webContents.close();
     await this.profileLock.release();
+  }
+
+  async reloadAfterUncertainAction(timeoutMs = 10_000): Promise<void> {
+    const contents = this.view.webContents;
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(
+        () => finish(new Error("BROWSER_RELOAD_TIMEOUT")),
+        timeoutMs,
+      );
+      const finish = (error?: Error) => {
+        clearTimeout(timeout);
+        contents.removeListener("did-finish-load", loaded);
+        contents.removeListener("did-fail-load", failed);
+        if (error) reject(error);
+        else resolve();
+      };
+      const loaded = () => finish();
+      const failed = () => finish(new Error("BROWSER_RELOAD_FAILED"));
+      contents.once("did-finish-load", loaded);
+      contents.once("did-fail-load", failed);
+      contents.reload();
+    });
   }
 
   static profileRoot(userDataPath: string): string {

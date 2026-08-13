@@ -30,6 +30,31 @@ describe("browser session boundary", () => {
     expect(await readFile(path, "utf8")).not.toContain("pageText");
   });
 
+  it("serializes concurrent journal records without losing a phase", async () => {
+    const root = await mkdtemp(join(tmpdir(), "village-journal-race-"));
+    const journal = new ActionJournal(join(root, "actions.json"));
+    await Promise.all([
+      journal.record({
+        actionId: "act_01J00000000000000000000000",
+        leaseEpoch: 4,
+        phase: "ACCEPTED",
+        mutationClass: "IDEMPOTENT",
+        recordedAt: "2026-08-12T20:00:00.000Z",
+      }),
+      journal.record({
+        actionId: "act_01J00000000000000000000000",
+        leaseEpoch: 4,
+        phase: "DISPATCHED",
+        mutationClass: "IDEMPOTENT",
+        recordedAt: "2026-08-12T20:00:01.000Z",
+      }),
+    ]);
+    expect((await journal.read()).map((entry) => entry.phase)).toEqual([
+      "ACCEPTED",
+      "DISPATCHED",
+    ]);
+  });
+
   it("limits CDP to the owned fixture and closed commands", async () => {
     const transport = {
       isAttached: vi.fn(() => false),
