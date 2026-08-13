@@ -1,6 +1,15 @@
 appId: com.village.desktop
 productName: Village
+electronVersion: 43.2.0
 asar: true
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  grantFileProtocolExtraPrivileges: false
 files:
   - dist/**
   - package.json
@@ -9,9 +18,15 @@ protocols:
     schemes:
       - village-pair
 mac:
-  target: dir
-  identity: "-"
+  target:
+    - dmg
+    - zip
   hardenedRuntime: true
+  notarize: true
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
 artifactName: village-${version}-${arch}.${ext}
+publish:
+  provider: generic
+  url: https://updates.village.run/desktop/alpha
+  channel: alpha

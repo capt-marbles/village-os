@@ -6,7 +6,8 @@
   "main": "dist/main/runtime.js",
   "scripts": {
     "build": "tsc -p tsconfig.json && vite build --config vite.renderer.config.ts && node ../../scripts/copy-desktop-assets.mjs",
-    "package:mac:e2e": "pnpm build && electron-builder --dir --config electron-builder.yml --mac",
+    "package:mac:e2e": "pnpm build && electron-builder --dir --config electron-builder.e2e.yml --mac",
+    "package:mac:release": "node ../../scripts/validate-release-config.mjs --release && pnpm build && electron-builder --config electron-builder.yml --mac",
     "start": "electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
