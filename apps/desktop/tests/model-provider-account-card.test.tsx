@@ -91,6 +91,21 @@ describe("ChatGPT account onboarding", () => {
     expect(village.getModelProviderAccount).toHaveBeenCalledOnce();
   });
 
+  it("returns a bounded unavailable state when an account action rejects", async () => {
+    const village = bridge();
+    village.cancelChatGptLogin = vi.fn(async () => {
+      throw new Error("IPC handler disappeared");
+    });
+
+    await expect(
+      dispatchModelProviderAccountAction(village, "CANCEL_LOGIN"),
+    ).resolves.toEqual({
+      provider: "CHATGPT",
+      state: "UNAVAILABLE",
+      errorCode: "PROVIDER_UNAVAILABLE",
+    });
+  });
+
   it("keeps at most one account refresh in flight", async () => {
     vi.useFakeTimers();
     let resolveFirst!: (value: {
@@ -125,6 +140,37 @@ describe("ChatGPT account onboarding", () => {
     stop();
     await vi.advanceTimersByTimeAsync(100);
     expect(getModelProviderAccount).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("does not publish a poll invalidated by a newer account action", async () => {
+    vi.useFakeTimers();
+    let resolvePoll!: (value: {
+      provider: "CHATGPT";
+      state: "AUTHENTICATING";
+    }) => void;
+    const poll = new Promise<{
+      provider: "CHATGPT";
+      state: "AUTHENTICATING";
+    }>((resolve) => {
+      resolvePoll = resolve;
+    });
+    const publish = vi.fn();
+    let pollIsCurrent = true;
+    const stop = startModelProviderAccountPolling(
+      { getModelProviderAccount: vi.fn(() => poll) },
+      publish,
+      10,
+      () => pollIsCurrent,
+    );
+
+    await vi.advanceTimersByTimeAsync(10);
+    pollIsCurrent = false;
+    resolvePoll({ provider: "CHATGPT", state: "AUTHENTICATING" });
+    await Promise.resolve();
+
+    expect(publish).not.toHaveBeenCalled();
+    stop();
     vi.useRealTimers();
   });
 });

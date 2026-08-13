@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ModelProviderAccountSnapshot } from "@village/contracts";
 
 export type ModelProviderAccountAction =
@@ -34,17 +34,19 @@ export function startModelProviderAccountPolling(
   bridge: Pick<ModelProviderAccountBridge, "getModelProviderAccount">,
   publish: (snapshot: ModelProviderAccountSnapshot) => void,
   intervalMs = 1_500,
+  isCurrent: () => boolean = () => true,
 ): () => void {
   let active = true;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const poll = async () => {
     try {
       const snapshot = await bridge.getModelProviderAccount();
-      if (active) publish(snapshot);
+      if (active && isCurrent()) publish(snapshot);
     } catch {
-      if (active) publish(providerUnavailable);
+      if (active && isCurrent()) publish(providerUnavailable);
     } finally {
-      if (active) timer = setTimeout(() => void poll(), intervalMs);
+      if (active && isCurrent())
+        timer = setTimeout(() => void poll(), intervalMs);
     }
   };
   timer = setTimeout(() => void poll(), intervalMs);
@@ -54,17 +56,21 @@ export function startModelProviderAccountPolling(
   };
 }
 
-export function dispatchModelProviderAccountAction(
+export async function dispatchModelProviderAccountAction(
   bridge: ModelProviderAccountBridge,
   action: ModelProviderAccountAction,
 ): Promise<ModelProviderAccountSnapshot> {
-  switch (action) {
-    case "BEGIN_LOGIN":
-      return bridge.beginChatGptLogin();
-    case "CANCEL_LOGIN":
-      return bridge.cancelChatGptLogin();
-    case "REFRESH":
-      return bridge.getModelProviderAccount();
+  try {
+    switch (action) {
+      case "BEGIN_LOGIN":
+        return await bridge.beginChatGptLogin();
+      case "CANCEL_LOGIN":
+        return await bridge.cancelChatGptLogin();
+      case "REFRESH":
+        return await bridge.getModelProviderAccount();
+    }
+  } catch {
+    return providerUnavailable;
   }
 }
 
@@ -183,15 +189,18 @@ export function ModelProviderAccountOnboarding({
     state: "CHECKING",
   });
   const [pending, setPending] = useState(false);
+  const generation = useRef(0);
   const publish = useCallback((next: ModelProviderAccountSnapshot) => {
     setSnapshot((current) => (sameSnapshot(current, next) ? current : next));
   }, []);
 
   const run = async (action: ModelProviderAccountAction) => {
     if (pending) return;
+    const actionGeneration = ++generation.current;
     setPending(true);
     try {
-      publish(await dispatchModelProviderAccountAction(bridge, action));
+      const next = await dispatchModelProviderAccountAction(bridge, action);
+      if (generation.current === actionGeneration) publish(next);
     } finally {
       setPending(false);
     }
@@ -210,7 +219,13 @@ export function ModelProviderAccountOnboarding({
 
   useEffect(() => {
     if (snapshot.state !== "AUTHENTICATING") return;
-    return startModelProviderAccountPolling(bridge, publish);
+    const pollGeneration = generation.current;
+    return startModelProviderAccountPolling(
+      bridge,
+      publish,
+      1_500,
+      () => generation.current === pollGeneration,
+    );
   }, [bridge, publish, snapshot.state]);
 
   return (

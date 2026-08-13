@@ -72,7 +72,7 @@ export class ModelProviderAccountController implements ModelProviderAccountOpera
             : { provider: "CHATGPT", state: "AUTHENTICATION_REQUIRED" },
         );
       } catch {
-        return this.unavailable("PROVIDER_UNAVAILABLE");
+        return this.recoverUnavailable("PROVIDER_UNAVAILABLE");
       }
     });
   }
@@ -113,21 +113,31 @@ export class ModelProviderAccountController implements ModelProviderAccountOpera
         }
         return this.update({ provider: "CHATGPT", state: "AUTHENTICATING" });
       } catch {
-        return this.unavailable("PROVIDER_UNAVAILABLE");
+        return this.recoverUnavailable("PROVIDER_UNAVAILABLE");
       }
     });
   }
 
   cancelLogin(): Promise<ModelProviderAccountSnapshot> {
     return this.enqueue(async () => {
-      const loginId = this.activeLoginId;
-      this.activeLoginId = undefined;
-      if (loginId) {
-        try {
-          await this.provider.cancelManagedChatGptLogin(loginId);
-        } catch {
-          return this.unavailable("PROVIDER_UNAVAILABLE");
+      try {
+        await this.ensureStarted();
+        const account = await this.provider.accountStatus();
+        if (account.status === "authenticated") {
+          this.activeLoginId = undefined;
+          return this.update({
+            provider: "CHATGPT",
+            state: "AUTHENTICATED",
+            accountType: account.accountType,
+          });
         }
+        const loginId = this.activeLoginId;
+        if (loginId) {
+          await this.provider.cancelManagedChatGptLogin(loginId);
+          this.activeLoginId = undefined;
+        }
+      } catch {
+        return this.recoverUnavailable("PROVIDER_UNAVAILABLE");
       }
       return this.update({
         provider: "CHATGPT",
@@ -169,6 +179,25 @@ export class ModelProviderAccountController implements ModelProviderAccountOpera
       state: "UNAVAILABLE",
       errorCode,
     });
+  }
+
+  /** Reset a failed provider so the next operation can create a fresh transport. */
+  private async recoverUnavailable(
+    errorCode: Extract<
+      ModelProviderAccountSnapshot,
+      { state: "UNAVAILABLE" }
+    >["errorCode"],
+  ): Promise<ModelProviderAccountSnapshot> {
+    const loginId = this.activeLoginId;
+    this.activeLoginId = undefined;
+    if (this.started && loginId) {
+      await this.provider
+        .cancelManagedChatGptLogin(loginId)
+        .catch(() => undefined);
+    }
+    this.started = false;
+    await this.provider.close().catch(() => undefined);
+    return this.unavailable(errorCode);
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {

@@ -112,6 +112,81 @@ describe("model provider account controller", () => {
     });
   });
 
+  it("restarts the provider after a post-start account-status failure", async () => {
+    const provider = account({
+      accountStatus: vi
+        .fn()
+        .mockResolvedValueOnce({ status: "authentication_required" as const })
+        .mockRejectedValueOnce(new Error("app server exited"))
+        .mockResolvedValueOnce({ status: "authentication_required" as const }),
+    });
+    const controller = new ModelProviderAccountController(
+      provider,
+      async () => undefined,
+    );
+
+    await expect(controller.refresh()).resolves.toMatchObject({
+      state: "AUTHENTICATION_REQUIRED",
+    });
+    await expect(controller.refresh()).resolves.toMatchObject({
+      state: "UNAVAILABLE",
+      errorCode: "PROVIDER_UNAVAILABLE",
+    });
+    await expect(controller.refresh()).resolves.toMatchObject({
+      state: "AUTHENTICATION_REQUIRED",
+    });
+
+    expect(provider.close).toHaveBeenCalledOnce();
+    expect(provider.start).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels an active login before recovering from a status failure", async () => {
+    const provider = account({
+      accountStatus: vi
+        .fn()
+        .mockResolvedValueOnce({ status: "authentication_required" as const })
+        .mockRejectedValueOnce(new Error("app server exited")),
+    });
+    const controller = new ModelProviderAccountController(
+      provider,
+      async () => undefined,
+    );
+
+    await controller.beginLogin();
+    await expect(controller.refresh()).resolves.toMatchObject({
+      state: "UNAVAILABLE",
+      errorCode: "PROVIDER_UNAVAILABLE",
+    });
+
+    expect(provider.cancelManagedChatGptLogin).toHaveBeenCalledWith("login-1");
+    expect(provider.close).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a just-completed OAuth login when cancel is requested", async () => {
+    let signedIn = false;
+    const provider = account({
+      accountStatus: vi.fn(async () =>
+        signedIn
+          ? ({ status: "authenticated", accountType: "chatgpt" } as const)
+          : ({ status: "authentication_required" } as const),
+      ),
+    });
+    const controller = new ModelProviderAccountController(
+      provider,
+      async () => undefined,
+    );
+
+    await controller.beginLogin();
+    signedIn = true;
+
+    await expect(controller.cancelLogin()).resolves.toEqual({
+      provider: "CHATGPT",
+      state: "AUTHENTICATED",
+      accountType: "chatgpt",
+    });
+    expect(provider.cancelManagedChatGptLogin).not.toHaveBeenCalled();
+  });
+
   it("keeps the renderer account contract closed to credential-shaped fields", () => {
     expect(
       modelProviderAccountSnapshotSchema.safeParse({
