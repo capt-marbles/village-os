@@ -62,6 +62,15 @@ importers:
       '@village/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@village/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      react:
+        specifier: 19.2.8
+        version: 19.2.8
+      react-dom:
+        specifier: 19.2.8
+        version: 19.2.8(react@19.2.8)
     devDependencies:
       electron:
         specifier: 43.2.0
@@ -69,6 +78,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@village/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@village/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -93,9 +105,16 @@ importers:
 
   packages/ui:
     dependencies:
+      '@village/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       react:
         specifier: 19.2.8
         version: 19.2.8
+    devDependencies:
+      react-dom:
+        specifier: 19.2.8
+        version: 19.2.8(react@19.2.8)
 
 packages:
 

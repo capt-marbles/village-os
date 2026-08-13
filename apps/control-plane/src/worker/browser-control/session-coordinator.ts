@@ -142,6 +142,10 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
           window_started_at TEXT PRIMARY KEY,
           request_count INTEGER NOT NULL CHECK (request_count >= 0)
         );
+        CREATE TABLE IF NOT EXISTS notification_quota_windows (
+          window_started_at TEXT PRIMARY KEY,
+          request_count INTEGER NOT NULL CHECK (request_count >= 0)
+        );
         INSERT OR IGNORE INTO _sql_schema_migrations (id, applied_at)
         VALUES (1, datetime('now'));
       `);
@@ -693,6 +697,53 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
       sequence,
       "AUTOMATION_CANCELED",
       { leaseEpoch: transitioned.state.leaseEpoch },
+      timestamp.data,
+    );
+    return { ok: true };
+  }
+
+  notifyDesktop(
+    principalId: unknown,
+    now: unknown,
+  ): { ok: true } | { ok: false; code: string } {
+    const identity = principalIdSchema.safeParse(principalId);
+    const timestamp = instantSchema.safeParse(now);
+    const metadata = this.metadata();
+    const row = this.control();
+    if (!identity.success || !timestamp.success) {
+      return { ok: false, code: "INVALID_NOTIFICATION" };
+    }
+    if (!metadata || !row) return { ok: false, code: "NOT_INITIALIZED" };
+    if (metadata.principal_id !== identity.data) {
+      return { ok: false, code: "IDENTITY_MISMATCH" };
+    }
+    const window = timestamp.data.slice(0, 16);
+    const usage =
+      this.ctx.storage.sql
+        .exec<{ request_count: number }>(
+          "SELECT request_count FROM notification_quota_windows WHERE window_started_at = ?",
+          window,
+        )
+        .toArray()[0]?.request_count ?? 0;
+    if (usage >= 10) {
+      return { ok: false, code: "NOTIFICATION_QUOTA_EXCEEDED" };
+    }
+    this.ctx.storage.sql.exec(
+      `INSERT INTO notification_quota_windows (window_started_at, request_count)
+       VALUES (?, 1)
+       ON CONFLICT(window_started_at) DO UPDATE SET request_count = request_count + 1`,
+      window,
+    );
+    const state = browserControlStateSchema.parse(JSON.parse(row.state_json));
+    const sequence = metadata.event_sequence + 1;
+    this.ctx.storage.sql.exec(
+      "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
+      sequence,
+    );
+    this.appendEventAt(
+      sequence,
+      "DESKTOP_NOTIFICATION_REQUESTED",
+      { deviceId: state.deviceId },
       timestamp.data,
     );
     return { ok: true };

@@ -13,9 +13,13 @@ import {
 } from "../browser/local-browser-host.js";
 import {
   BrowserViewportCoordinator,
+  calculateNativeViewVisibility,
   type NativeBrowserView,
 } from "./browser-viewport-coordinator.js";
 import { SensitiveActionAuthorizer } from "./sensitive-action-authorizer.js";
+import { DesktopBrowserUiState } from "./desktop-browser-ui-state.js";
+import { ControlTransferGate } from "./control-transfer-gate.js";
+import { BrowserControlTransfer } from "./browser-control-transfer.js";
 import { isTrustedVillageSender, trustedWebPreferences } from "./security.js";
 
 export interface VillageAppWindowOptions {
@@ -39,16 +43,34 @@ function browserViewAdapter(
   browserHost: LocalBrowserHost,
   inputShield: WebContentsView,
 ): NativeBrowserView {
+  let visible = true;
+  let inputEnabled = false;
+  let lastBrowserVisible: boolean | undefined;
+  let lastShieldVisible: boolean | undefined;
+  const applyVisibility = () => {
+    const state = calculateNativeViewVisibility(visible, inputEnabled);
+    if (state.browserVisible !== lastBrowserVisible) {
+      browserHost.view.setVisible(state.browserVisible);
+      lastBrowserVisible = state.browserVisible;
+    }
+    if (state.shieldVisible !== lastShieldVisible) {
+      inputShield.setVisible(state.shieldVisible);
+      lastShieldVisible = state.shieldVisible;
+    }
+  };
   return {
     setBounds: (bounds) => {
       browserHost.view.setBounds(bounds);
       inputShield.setBounds(bounds);
     },
-    setVisible: (visible) => {
-      browserHost.view.setVisible(visible);
-      if (!visible) inputShield.setVisible(false);
+    setVisible: (nextVisible) => {
+      visible = nextVisible;
+      applyVisibility();
     },
-    setInputEnabled: (enabled) => inputShield.setVisible(!enabled),
+    setInputEnabled: (enabled) => {
+      inputEnabled = enabled;
+      applyVisibility();
+    },
     focus: () => browserHost.view.webContents.focus(),
     destroy: () => {
       window.contentView.removeChildView(inputShield);
@@ -78,7 +100,6 @@ export async function createVillageAppWindow(
     webPreferences: trustedWebPreferences(),
   });
   inputShield.setBackgroundColor("#00000000");
-  const appLoad = appView.webContents.loadURL("village://app/");
   const shieldLoad = inputShield.webContents.loadURL("village://app/shield");
   let browserHost: LocalBrowserHost | undefined;
   try {
@@ -89,9 +110,9 @@ export async function createVillageAppWindow(
       profileRoot: LocalBrowserHost.profileRoot(options.userDataPath),
       initialUrl: options.initialUrl,
     });
-    await Promise.all([appLoad, shieldLoad]);
+    await shieldLoad;
   } catch (error) {
-    await Promise.allSettled([appLoad, shieldLoad]);
+    await Promise.allSettled([shieldLoad]);
     await browserHost?.close();
     if (!appView.webContents.isDestroyed()) appView.webContents.close();
     if (!inputShield.webContents.isDestroyed()) inputShield.webContents.close();
@@ -120,11 +141,23 @@ export async function createVillageAppWindow(
 
   const authorizer = new SensitiveActionAuthorizer();
   const executor = new LocalActionExecutor({ leaseEpoch: 1 });
-  let takeoverCompleted = false;
-  const channel = "village:request-takeover";
-  const handleTakeover = async (
+  const transferGate = new ControlTransferGate();
+  const uiState = new DesktopBrowserUiState();
+  const controlTransfer = new BrowserControlTransfer(
+    uiState,
+    viewport,
+    executor,
+    () => browserHost.reloadAfterUncertainAction(),
+  );
+  const unsubscribeUiState = uiState.subscribe((snapshot) => {
+    if (!appView.webContents.isDestroyed()) {
+      appView.webContents.send("village:browser-ui-state", snapshot);
+    }
+  });
+  const takeoverChannel = "village:request-takeover";
+  const assertTrustedRequest = (
     event: IpcMainInvokeEvent,
-    ...arguments_: unknown[]
+    arguments_: unknown[],
   ) => {
     if (
       event.sender !== appView.webContents ||
@@ -133,54 +166,178 @@ export async function createVillageAppWindow(
       throw new Error("UNTRUSTED_IPC_SENDER");
     }
     if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
-    if (takeoverCompleted) return "QUIESCED" as const;
-    const response = await dialog.showMessageBox({
-      type: "question",
-      title: "Take control of this browser?",
-      message:
-        "Village will stop automated browser actions before enabling input.",
-      buttons: ["Take control", "Cancel"],
-      defaultId: 0,
-      cancelId: 1,
-      noLink: true,
-    });
-    if (response.response !== 0) return "DECLINED" as const;
-    const binding = {
-      principalId: options.principalId,
-      deviceId: options.deviceId,
-      browserSessionId: options.browserSessionId,
-      operation: "TAKEOVER" as const,
-    };
-    const authorization = authorizer.mint(binding, 15_000);
-    const consumed = authorizer.consume(authorization.token, binding);
-    if (!consumed.ok) throw new Error(consumed.code);
-
-    viewport.beginTakeover();
-    try {
-      const outcome = await executor.beginOnlineTakeover(2, 5_000);
-      if (outcome.status === "OUTCOME_UNKNOWN") {
-        await browserHost.reloadAfterUncertainAction();
-      }
-      takeoverCompleted = true;
-      viewport.acknowledgeTakeover();
-      return outcome.status;
-    } catch (error) {
-      viewport.cancelTakeover();
-      throw error;
-    }
   };
-  ipcMain.handle(channel, handleTakeover);
+  const handleTakeover = async (
+    event: IpcMainInvokeEvent,
+    ...arguments_: unknown[]
+  ) => {
+    assertTrustedRequest(event, arguments_);
+    return transferGate.run(async () => {
+      if (uiState.current().controller === "USER") return "QUIESCED" as const;
+      const response = await dialog.showMessageBox({
+        type: "question",
+        title: "Take control of this browser?",
+        message:
+          "Village will stop automated browser actions before enabling input.",
+        buttons: ["Take control", "Cancel"],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      });
+      if (response.response !== 0) return "DECLINED" as const;
+      const binding = {
+        principalId: options.principalId,
+        deviceId: options.deviceId,
+        browserSessionId: options.browserSessionId,
+        operation: "TAKEOVER" as const,
+      };
+      const authorization = authorizer.mint(binding, 15_000);
+      const consumed = authorizer.consume(authorization.token, binding);
+      if (!consumed.ok) throw new Error(consumed.code);
+
+      return controlTransfer.takeover(5_000);
+    });
+  };
+  ipcMain.handle(takeoverChannel, handleTakeover);
+  ipcMain.handle("village:get-browser-ui-state", (event, ...arguments_) => {
+    assertTrustedRequest(event, arguments_);
+    return uiState.current();
+  });
+  ipcMain.handle(
+    "village:request-return-control",
+    async (event, ...arguments_) => {
+      assertTrustedRequest(event, arguments_);
+      return transferGate.run(async () => {
+        const response = await dialog.showMessageBox({
+          type: "question",
+          title: "Return control to Village?",
+          message:
+            "Village will reconcile the last browser state before automation resumes.",
+          buttons: ["Return control", "Keep control"],
+          defaultId: 0,
+          cancelId: 1,
+          noLink: true,
+        });
+        if (response.response !== 0) return "DECLINED" as const;
+        const binding = {
+          principalId: options.principalId,
+          deviceId: options.deviceId,
+          browserSessionId: options.browserSessionId,
+          operation: "TAKEOVER" as const,
+        };
+        const authorization = authorizer.mint(binding, 15_000);
+        const consumed = authorizer.consume(authorization.token, binding);
+        if (!consumed.ok) throw new Error(consumed.code);
+        return controlTransfer.returnControl();
+      });
+    },
+  );
+  ipcMain.handle("village:set-browser-pane", (event, input: unknown) => {
+    if (
+      event.sender !== appView.webContents ||
+      !isTrustedVillageSender(event.sender)
+    ) {
+      throw new Error("UNTRUSTED_IPC_SENDER");
+    }
+    if (
+      !input ||
+      typeof input !== "object" ||
+      Object.keys(input).some((key) => !["visible", "splitRatio"].includes(key))
+    ) {
+      throw new Error("MALFORMED_IPC_REQUEST");
+    }
+    const candidate = input as { visible?: unknown; splitRatio?: unknown };
+    if (
+      typeof candidate.visible !== "boolean" ||
+      typeof candidate.splitRatio !== "number" ||
+      !Number.isFinite(candidate.splitRatio) ||
+      candidate.splitRatio < 0.25 ||
+      candidate.splitRatio > 0.75
+    ) {
+      throw new Error("MALFORMED_IPC_REQUEST");
+    }
+    viewport.setSplitRatio(candidate.splitRatio);
+    viewport.setVisible(candidate.visible);
+    if (!candidate.visible) appView.webContents.focus();
+    layout();
+  });
+  ipcMain.handle(
+    "village:record-verification-decision",
+    (event, decision: unknown, ...arguments_) => {
+      if (
+        event.sender !== appView.webContents ||
+        !isTrustedVillageSender(event.sender) ||
+        arguments_.length !== 0 ||
+        (decision !== "CONFIRM" && decision !== "REJECT")
+      ) {
+        throw new Error("MALFORMED_IPC_REQUEST");
+      }
+      uiState.recordVerification(
+        decision === "CONFIRM" ? "confirmed_by_user" : "unknown",
+      );
+    },
+  );
+  ipcMain.handle(
+    "village:request-forget-session",
+    async (event, ...arguments_) => {
+      assertTrustedRequest(event, arguments_);
+      uiState.requireStepUpForErasure();
+      await dialog.showMessageBox({
+        type: "info",
+        title: "Step-up authentication required",
+        message:
+          "Forgetting a session is separate from canceling work. Complete step-up authentication before Village can remove this local profile.",
+        buttons: ["OK"],
+        noLink: true,
+      });
+      return "STEP_UP_REQUIRED" as const;
+    },
+  );
+  ipcMain.handle(
+    "village:request-observer-intent",
+    (event, intent: unknown, ...arguments_) => {
+      if (
+        event.sender !== appView.webContents ||
+        !isTrustedVillageSender(event.sender) ||
+        arguments_.length !== 0 ||
+        (intent !== "CANCEL_FUTURE_AUTOMATION" && intent !== "NOTIFY_DESKTOP")
+      ) {
+        throw new Error("MALFORMED_IPC_REQUEST");
+      }
+      if (intent === "CANCEL_FUTURE_AUTOMATION") {
+        executor.markOfflineTakeover();
+        uiState.cancelFutureAutomation();
+      }
+    },
+  );
 
   let closing = false;
   window.on("close", (event) => {
     if (closing) return;
     event.preventDefault();
     closing = true;
-    ipcMain.removeHandler(channel);
+    unsubscribeUiState();
+    for (const channel of [
+      takeoverChannel,
+      "village:get-browser-ui-state",
+      "village:request-return-control",
+      "village:set-browser-pane",
+      "village:record-verification-decision",
+      "village:request-forget-session",
+      "village:request-observer-intent",
+    ]) {
+      ipcMain.removeHandler(channel);
+    }
     viewport.destroy();
     if (!appView.webContents.isDestroyed()) appView.webContents.close();
     void browserHost.close().finally(() => window.destroy());
   });
+  try {
+    await appView.webContents.loadURL("village://app/");
+  } catch (error) {
+    window.close();
+    throw error;
+  }
   window.show();
   return { window, browserHost, viewport };
 }

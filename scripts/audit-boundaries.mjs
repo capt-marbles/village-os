@@ -5,11 +5,11 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const allowedWorkspaceDependencies = new Map([
   ["apps/control-plane", new Set(["@village/contracts"])],
-  ["apps/desktop", new Set(["@village/contracts"])],
-  ["apps/web", new Set(["@village/ui"])],
+  ["apps/desktop", new Set(["@village/contracts", "@village/ui"])],
+  ["apps/web", new Set(["@village/contracts", "@village/ui"])],
   ["packages/contracts", new Set()],
   ["packages/test-auth-site", new Set(["@village/contracts"])],
-  ["packages/ui", new Set()],
+  ["packages/ui", new Set(["@village/contracts"])],
 ]);
 const errors = [];
 

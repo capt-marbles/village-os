@@ -12,6 +12,13 @@ import { authenticateRequest } from "../auth.js";
 const principalId = "prn_01J00000000000000000000000";
 const otherPrincipalId = "prn_01J00000000000000000000001";
 const csrf = "csrf_csrf_csrf_csrf_csrf_csrf_1234";
+const pairingSecret = "a".repeat(43);
+
+async function hashSecret(secret: string): Promise<string> {
+  return Buffer.from(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(secret)),
+  ).toString("base64url");
+}
 
 const ownerHeaders = {
   "content-type": "application/json",
@@ -102,6 +109,27 @@ describe("authenticated pairing routes", () => {
         browserSessionId,
       ).snapshot(principalId),
     ).toMatchObject({ ok: true, eventSequence: 1 });
+
+    const notified = await SELF.fetch(
+      new Request(
+        `https://village.test/api/browser-sessions/${browserSessionId}/notify`,
+        { method: "POST", headers: ownerHeaders },
+      ),
+    );
+    expect(notified.status).toBe(200);
+    const events = await SELF.fetch(
+      new Request(
+        `https://village.test/api/browser-sessions/${browserSessionId}/events`,
+        { headers: ownerHeaders },
+      ),
+    );
+    await expect(events.json()).resolves.toMatchObject({
+      ok: true,
+      events: [
+        { sequence: 1, type: "SESSION_INITIALIZED" },
+        { sequence: 2, type: "DESKTOP_NOTIFICATION_REQUESTED" },
+      ],
+    });
   });
 
   it("rejects CSRF and exact-origin violations", async () => {
@@ -110,6 +138,7 @@ describe("authenticated pairing routes", () => {
       deviceDisplayName: "Andrew's Mac",
       publicKey: { kty: "OKP", crv: "Ed25519", x: "cHVibGljX2tleQ" },
       protection: "HARDWARE_NON_EXPORTABLE",
+      secretHash: await hashSecret(pairingSecret),
     });
     const missing = await SELF.fetch(
       new Request("https://village.test/api/pairing/challenges", {
@@ -147,13 +176,13 @@ describe("authenticated pairing routes", () => {
           deviceDisplayName: "Andrew's Mac",
           publicKey: { kty: "OKP", crv: "Ed25519", x: "cHVibGljX2tleQ" },
           protection: "HARDWARE_NON_EXPORTABLE",
+          secretHash: await hashSecret(pairingSecret),
         }),
       }),
     );
     expect(begunResponse.status).toBe(201);
     const begun = await begunResponse.json<{
       pairingId: string;
-      secret: string;
     }>();
 
     const wrongOwner = await SELF.fetch(
@@ -178,17 +207,41 @@ describe("authenticated pairing routes", () => {
     );
     expect(confirmed.status).toBe(200);
 
+    const confirmedStatus = await SELF.fetch(
+      new Request(`https://village.test/api/pairing/${begun.pairingId}`, {
+        headers: ownerHeaders,
+      }),
+    );
+    await expect(confirmedStatus.json()).resolves.toMatchObject({
+      ok: true,
+      pairing: {
+        principalId,
+        pairingId: begun.pairingId,
+        state: "CONFIRMED",
+      },
+    });
+
     const consumed = await SELF.fetch(
       new Request(
         `https://village.test/api/pairing/${begun.pairingId}/consume`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ principalId, secret: begun.secret }),
+          body: JSON.stringify({ principalId, secret: pairingSecret }),
         },
       ),
     );
     expect(consumed.status).toBe(200);
+
+    const consumedStatus = await SELF.fetch(
+      new Request(`https://village.test/api/pairing/${begun.pairingId}`, {
+        headers: ownerHeaders,
+      }),
+    );
+    await expect(consumedStatus.json()).resolves.toMatchObject({
+      ok: true,
+      pairing: { state: "CONSUMED" },
+    });
 
     const wrongRevoke = await SELF.fetch(
       new Request(

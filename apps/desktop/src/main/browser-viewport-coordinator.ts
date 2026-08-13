@@ -16,6 +16,16 @@ export interface ViewportBounds {
   height: number;
 }
 
+export function calculateNativeViewVisibility(
+  visible: boolean,
+  inputEnabled: boolean,
+): { browserVisible: boolean; shieldVisible: boolean } {
+  return {
+    browserVisible: visible,
+    shieldVisible: visible && !inputEnabled,
+  };
+}
+
 const whole = (value: number) => Math.max(0, Math.round(value));
 
 export function calculateBrowserBounds(
@@ -59,6 +69,11 @@ export class BrowserViewportCoordinator {
     this.options = { ...options };
   }
 
+  setSplitRatio(splitRatio: number): void {
+    if (this.destroyed) return;
+    this.options = { ...this.options, splitRatio };
+  }
+
   layout(size: Size): void {
     if (this.destroyed) return;
     this.view.setBounds(calculateBrowserBounds(size, this.options));
@@ -86,10 +101,17 @@ export class BrowserViewportCoordinator {
     this.view.focus();
   }
 
-  cancelTakeover(): void {
+  restoreAgentControl(): void {
+    if (this.destroyed) return;
+    this.inputBlocked = true;
+    this.view.setInputEnabled(false);
+  }
+
+  restoreUserControl(): void {
     if (this.destroyed) return;
     this.inputBlocked = false;
     this.view.setInputEnabled(true);
+    this.view.focus();
   }
 
   destroy(): void {
