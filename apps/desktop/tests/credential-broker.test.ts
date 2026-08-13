@@ -289,6 +289,19 @@ describe("one-use credential broker", () => {
     });
   });
 
+  it("bounds abandoned authorization retention", async () => {
+    const context = await setup();
+    await context.broker.authorize(context.binding, 5_000);
+    context.advance(65_001);
+    await context.broker.authorize(context.binding, 5_000);
+
+    const authorizations = Reflect.get(context.broker, "authorizations") as Map<
+      string,
+      unknown
+    >;
+    expect(authorizations.size).toBe(1);
+  });
+
   it("revalidates navigation, document, node, field, frame, takeover, and revocation before write", async () => {
     const mutations: Partial<CredentialFillBinding>[] = [
       { exactOrigin: "https://evil.example" },

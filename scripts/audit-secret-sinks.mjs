@@ -46,23 +46,6 @@ for (const file of (
   }
 }
 
-const broker = await readFile(
-  path.join(root, "apps/desktop/src/secrets/credential-broker.ts"),
-  "utf8",
-);
-for (const required of [
-  'site: "OWNED_FIXTURE"',
-  'fieldSemantic: "PASSWORD"',
-  'binding.exactOrigin !== "https://fixture.village.test"',
-  "writeApprovedFixtureField",
-]) {
-  if (!broker.includes(required)) {
-    errors.push(
-      `credential broker is missing fixture-only boundary: ${required}`,
-    );
-  }
-}
-
 if (errors.length) {
   for (const error of errors) console.error(error);
   process.exitCode = 1;

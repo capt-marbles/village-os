@@ -1,26 +1,8 @@
-const typedChallenges = new Set([
-  "CREDENTIAL",
-  "CAPTCHA",
-  "PASSKEY",
-  "TWO_FACTOR",
-  "PASSWORD_RESET",
-  "FEDERATED_IDENTITY",
-  "TERMS_OR_CONSENT",
-  "SECURITY_WARNING",
-]);
+import { humanGateReasonSchema } from "@village/contracts";
 
 export function classifyOwnedFixtureChallenge(input: { kind: string }) {
-  const reason = typedChallenges.has(input.kind)
-    ? (input.kind as
-        | "CREDENTIAL"
-        | "CAPTCHA"
-        | "PASSKEY"
-        | "TWO_FACTOR"
-        | "PASSWORD_RESET"
-        | "FEDERATED_IDENTITY"
-        | "TERMS_OR_CONSENT"
-        | "SECURITY_WARNING")
-    : "UNKNOWN_CHALLENGE";
+  const parsed = humanGateReasonSchema.safeParse(input.kind);
+  const reason = parsed.success ? parsed.data : "UNKNOWN_CHALLENGE";
   return {
     reason,
     resolver: "OWNER_ONLY" as const,

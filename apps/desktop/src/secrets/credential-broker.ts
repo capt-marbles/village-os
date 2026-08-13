@@ -1,17 +1,23 @@
+import {
+  OWNED_FIXTURE_ORIGIN,
+  type CredentialFillRequest,
+} from "@village/contracts";
 import type { SecretVault } from "./secret-vault.js";
 
-export type CredentialFillBinding = {
-  principalId: string;
-  deviceId: string;
-  jobId: string;
-  browserSessionId: string;
-  actionId: string;
-  leaseEpoch: number;
-  exactOrigin: string;
-  documentId: string;
-  mainFrameId: string;
-  nodeId: string;
-  fieldSemantic: "PASSWORD";
+export type CredentialFillBinding = Pick<
+  CredentialFillRequest,
+  | "principalId"
+  | "deviceId"
+  | "jobId"
+  | "browserSessionId"
+  | "actionId"
+  | "leaseEpoch"
+  | "exactOrigin"
+  | "documentId"
+  | "mainFrameId"
+  | "nodeId"
+  | "fieldSemantic"
+> & {
   secretRef: string;
   site: "OWNED_FIXTURE";
 };
@@ -46,6 +52,7 @@ type Authorization = {
   binding: CredentialFillBinding;
   expiresAt: number;
   state: "ACTIVE" | "CONSUMED" | "INVALIDATED";
+  terminalAt?: number;
 };
 
 type FillFailureCode =
@@ -98,7 +105,7 @@ function assertBinding(binding: CredentialFillBinding): void {
   if (
     origin.protocol !== "https:" ||
     origin.origin !== binding.exactOrigin ||
-    binding.exactOrigin !== "https://fixture.village.test" ||
+    binding.exactOrigin !== OWNED_FIXTURE_ORIGIN ||
     binding.site !== "OWNED_FIXTURE" ||
     binding.fieldSemantic !== "PASSWORD" ||
     !Number.isSafeInteger(binding.leaseEpoch) ||
@@ -119,6 +126,7 @@ export class CredentialBroker {
   ) {}
 
   async authorize(binding: CredentialFillBinding, lifetimeMs: number) {
+    this.purge();
     assertBinding(binding);
     if (
       !Number.isInteger(lifetimeMs) ||
@@ -146,6 +154,7 @@ export class CredentialBroker {
     authorizationId: string,
     binding: CredentialFillBinding,
   ): Promise<{ ok: true } | { ok: false; code: FillFailureCode }> {
+    this.purge();
     const authorization = this.authorizations.get(authorizationId);
     if (!authorization) return { ok: false, code: "AUTHORIZATION_UNKNOWN" };
     if (authorization.state === "CONSUMED") {
@@ -156,13 +165,16 @@ export class CredentialBroker {
     }
     if (this.now() > authorization.expiresAt) {
       authorization.state = "CONSUMED";
+      authorization.terminalAt = this.now();
       return { ok: false, code: "AUTHORIZATION_EXPIRED" };
     }
     if (!sameBinding(authorization.binding, binding)) {
       authorization.state = "CONSUMED";
+      authorization.terminalAt = this.now();
       return { ok: false, code: "AUTHORIZATION_BINDING_MISMATCH" };
     }
     authorization.state = "CONSUMED";
+    authorization.terminalAt = this.now();
     try {
       return await this.vault.withSecret(
         binding.secretRef,
@@ -231,7 +243,7 @@ export class CredentialBroker {
   }
 
   invalidateForTakeover(browserSessionId: string): void {
-    this.invalidate((binding) => binding.browserSessionId === browserSessionId);
+    this.invalidateForNavigation(browserSessionId);
   }
 
   private invalidate(
@@ -243,6 +255,17 @@ export class CredentialBroker {
         authorization.state === "ACTIVE"
       ) {
         authorization.state = "INVALIDATED";
+        authorization.terminalAt = this.now();
+      }
+    }
+  }
+
+  private purge(): void {
+    const now = this.now();
+    for (const [authorizationId, authorization] of this.authorizations) {
+      const terminalAt = authorization.terminalAt ?? authorization.expiresAt;
+      if (terminalAt + 60_000 < now) {
+        this.authorizations.delete(authorizationId);
       }
     }
   }

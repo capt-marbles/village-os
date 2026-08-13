@@ -1,4 +1,6 @@
-export const ownedFixtureOrigin = "https://fixture.village.test" as const;
+import { OWNED_FIXTURE_ORIGIN } from "@village/contracts";
+
+export const ownedFixtureOrigin = OWNED_FIXTURE_ORIGIN;
 
 export function renderOwnedFixtureLogin(): string {
   return '<form method="post" action="/login"><input name="username" autocomplete="username"><input name="password" type="password" autocomplete="current-password"><button type="submit">Sign in</button></form>';

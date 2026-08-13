@@ -290,8 +290,8 @@ export class SecretVault {
     if (process.platform !== "win32" && (metadata.mode & 0o077) !== 0) {
       throw new Error("SECRET_VAULT_PERMISSIONS_TOO_BROAD");
     }
+    if (metadata.size > 1_048_576) throw new Error("SECRET_VAULT_CORRUPT");
     const raw = await readFile(this.path, "utf8");
-    if (raw.length > 1_048_576) throw new Error("SECRET_VAULT_CORRUPT");
     return parseVault(raw);
   }
 

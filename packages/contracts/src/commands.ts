@@ -186,6 +186,8 @@ const linkedInCapabilities = allCapabilities.filter(
     capability !== "FIXTURE_INPUT" && capability !== "REQUEST_SECRET_FILL",
 );
 
+export const OWNED_FIXTURE_ORIGIN = "https://fixture.village.test" as const;
+
 function capabilityPolicy(capability: (typeof allCapabilities)[number]) {
   const ownerOnly =
     capability === "REQUEST_HUMAN_GATE" || capability === "REQUEST_SECRET_FILL";
@@ -209,7 +211,7 @@ function capabilityPolicy(capability: (typeof allCapabilities)[number]) {
 const siteCommandPolicies = {
   OWNED_FIXTURE: siteCommandPolicySchema.parse({
     site: "OWNED_FIXTURE",
-    allowedOrigins: ["https://fixture.village.test"],
+    allowedOrigins: [OWNED_FIXTURE_ORIGIN],
     capabilities: allCapabilities.map(capabilityPolicy),
   }),
   LINKEDIN: siteCommandPolicySchema.parse({

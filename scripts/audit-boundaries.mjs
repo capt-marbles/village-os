@@ -8,7 +8,7 @@ const allowedWorkspaceDependencies = new Map([
   ["apps/desktop", new Set(["@village/contracts"])],
   ["apps/web", new Set(["@village/ui"])],
   ["packages/contracts", new Set()],
-  ["packages/test-auth-site", new Set()],
+  ["packages/test-auth-site", new Set(["@village/contracts"])],
   ["packages/ui", new Set()],
 ]);
 const errors = [];
