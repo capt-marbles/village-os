@@ -19,6 +19,7 @@ import {
   acceptBrowserCommand,
   transitionBrowserControl,
 } from "./transitions.js";
+import { reconcileBrowserRecovery } from "../jobs/reconciler.js";
 
 const initializeSchema = z.strictObject({
   principalId: principalIdSchema,
@@ -637,17 +638,41 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
     if (state.connection !== "OFFLINE" || state.controller !== "NONE") {
       return { ok: false, code: "ILLEGAL_TRANSITION" };
     }
-    const next = browserControlStateSchema.parse({
+    const online = browserControlStateSchema.parse({
       ...state,
       connection: "ONLINE",
       takeover: "RECONCILING",
       automationBlocked: true,
       leaseExpiresAt: null,
     });
+    const retainedActions = this.ctx.storage.sql
+      .exec<ActionRow>("SELECT action_json FROM accepted_actions")
+      .toArray()
+      .map((action) => JSON.parse(action.action_json) as BrowserAction);
+    const recovery = reconcileBrowserRecovery({
+      state: online,
+      actions: retainedActions,
+      now: parsed.data.now,
+    });
+    for (const reconciled of recovery.actions) {
+      const existing = retainedActions.find(
+        (action) => action.actionId === reconciled.actionId,
+      );
+      if (!existing || existing.phase === reconciled.phase) continue;
+      this.ctx.storage.sql.exec(
+        "UPDATE accepted_actions SET action_json = ? WHERE action_id = ?",
+        JSON.stringify({
+          ...existing,
+          phase: reconciled.phase,
+          updatedAt: parsed.data.now,
+        }),
+        existing.actionId,
+      );
+    }
     const sequence = metadata.event_sequence + 1;
     this.ctx.storage.sql.exec(
       "UPDATE control_state SET state_json = ? WHERE singleton = 1",
-      JSON.stringify(next),
+      JSON.stringify(recovery.control),
     );
     this.ctx.storage.sql.exec(
       "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
@@ -656,7 +681,10 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
     this.appendEventAt(
       sequence,
       "HOST_RECONNECTED",
-      { priorLeaseEpoch: state.leaseEpoch },
+      {
+        priorLeaseEpoch: state.leaseEpoch,
+        continuation: recovery.continuation,
+      },
       parsed.data.now,
     );
     return { ok: true };

@@ -105,9 +105,11 @@ export async function planPrincipalDeletion(
 export async function executePrincipalDeletion(
   db: D1Database,
   candidate: unknown,
+  executedAtCandidate: unknown = new Date().toISOString(),
 ) {
   const request = deletionRequestSchema.safeParse(candidate);
-  if (!request.success)
+  const executedAt = instantSchema.safeParse(executedAtCandidate);
+  if (!request.success || !executedAt.success)
     return { ok: false as const, code: "INVALID_DELETION_REQUEST" };
   const plan = await db
     .prepare(
@@ -130,12 +132,17 @@ export async function executePrincipalDeletion(
   await db
     .prepare(
       `UPDATE principal_deletion_plans
-       SET status = ?, completed_at = ?
+       SET status = ?,
+           completed_at = CASE
+             WHEN ? = 'COMPLETED' THEN COALESCE(completed_at, ?)
+             ELSE NULL
+           END
        WHERE principal_id = ? AND deletion_request_id = ?`,
     )
     .bind(
       verification.verified ? "COMPLETED" : "VERIFICATION_FAILED",
-      verification.verified ? request.data.requestedAt : null,
+      verification.verified ? "COMPLETED" : "VERIFICATION_FAILED",
+      executedAt.data,
       request.data.principalId,
       request.data.deletionRequestId,
     )

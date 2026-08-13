@@ -7,7 +7,7 @@ import {
   planPrincipalDeletion,
   verifyPrincipalDeletion,
 } from "../deletion.js";
-import { recordRetentionPolicies } from "../policy.js";
+import { executeRetentionBatch, recordRetentionPolicies } from "../policy.js";
 
 const principalId = "prn_01J00000000000000000000020";
 const otherPrincipalId = "prn_01J00000000000000000000021";
@@ -151,19 +151,35 @@ describe("principal data lifecycle", () => {
       status: "PLANNED",
     });
     await expect(
-      executePrincipalDeletion(env.VILLAGE_DB, request),
+      executePrincipalDeletion(
+        env.VILLAGE_DB,
+        request,
+        "2026-08-12T18:05:00.000Z",
+      ),
     ).resolves.toMatchObject({
       ok: true,
       status: "COMPLETED",
       verification: { verified: true },
     });
     await expect(
-      executePrincipalDeletion(env.VILLAGE_DB, request),
+      executePrincipalDeletion(
+        env.VILLAGE_DB,
+        request,
+        "2026-08-12T18:10:00.000Z",
+      ),
     ).resolves.toMatchObject({
       ok: true,
       status: "COMPLETED",
       verification: { verified: true },
     });
+    await expect(
+      env.VILLAGE_DB.prepare(
+        `SELECT completed_at AS completedAt FROM principal_deletion_plans
+         WHERE principal_id = ? AND deletion_request_id = ?`,
+      )
+        .bind(principalId, request.deletionRequestId)
+        .first(),
+    ).resolves.toEqual({ completedAt: "2026-08-12T18:05:00.000Z" });
     await expect(
       verifyPrincipalDeletion(env.VILLAGE_DB, principalId),
     ).resolves.toEqual({
@@ -176,5 +192,43 @@ describe("principal data lifecycle", () => {
       principalId: otherPrincipalId,
       receipts: [expect.any(Object)],
     });
+  });
+
+  it("expires bounded records only for terminal jobs", async () => {
+    await env.VILLAGE_DB.prepare(
+      "UPDATE jobs SET state = 'SUCCEEDED', updated_at = ? WHERE principal_id = ?",
+    )
+      .bind("2026-06-01T00:00:00.000Z", principalId)
+      .run();
+    await env.VILLAGE_DB.batch([
+      env.VILLAGE_DB.prepare(
+        "UPDATE job_events SET occurred_at = ? WHERE principal_id = ?",
+      ).bind("2026-06-01T00:00:00.000Z", principalId),
+      env.VILLAGE_DB.prepare(
+        "UPDATE checkpoints SET created_at = ? WHERE principal_id = ?",
+      ).bind("2026-06-01T00:00:00.000Z", principalId),
+      env.VILLAGE_DB.prepare(
+        "UPDATE browser_session_event_projections SET occurred_at = ? WHERE principal_id = ?",
+      ).bind("2026-06-01T00:00:00.000Z", principalId),
+      env.VILLAGE_DB.prepare(
+        "UPDATE action_receipts SET recorded_at = ? WHERE principal_id = ?",
+      ).bind("2026-06-01T00:00:00.000Z", principalId),
+    ]);
+
+    await expect(
+      executeRetentionBatch(env.VILLAGE_DB, now, 1),
+    ).resolves.toEqual({ deleted: 4, hasMore: true });
+    const exported = await exportPrincipalRecords(env.VILLAGE_DB, principalId);
+    expect(exported).toMatchObject({
+      projections: [],
+      events: [],
+      checkpoints: [],
+      receipts: [],
+    });
+    const active = await exportPrincipalRecords(
+      env.VILLAGE_DB,
+      otherPrincipalId,
+    );
+    expect(active.events).toHaveLength(1);
   });
 });

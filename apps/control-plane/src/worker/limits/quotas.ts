@@ -87,9 +87,9 @@ function quotaColumn(kind: QuotaKind, scope: "device" | "principal") {
 }
 
 function quotaWindow(now: string) {
-  const date = new Date(now);
-  date.setUTCSeconds(0, 0);
-  return date.toISOString();
+  // Preserve the minute key format used by the existing coordinator tables so
+  // an upgrade cannot create a second budget for the same minute.
+  return now.slice(0, 16);
 }
 
 function backpressure(now: string) {

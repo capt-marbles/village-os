@@ -99,7 +99,7 @@ describe("authenticated protocol quotas", () => {
        (principal_id, window_started_at, connections, commands, replays, notifications, retained_records)
        VALUES (?, ?, 30, 0, 0, 0, 0)`,
     )
-      .bind(principalId, "2026-08-12T18:00:00.000Z")
+      .bind(principalId, "2026-08-12T18:00")
       .run();
 
     await expect(
@@ -120,7 +120,7 @@ describe("authenticated protocol quotas", () => {
         `SELECT connections FROM authenticated_quota_usage
          WHERE principal_id = ? AND device_id = ? AND window_started_at = ?`,
       )
-        .bind(principalId, secondDeviceId, now)
+        .bind(principalId, secondDeviceId, "2026-08-12T18:00")
         .first<{ connections: number }>(),
     ).resolves.toBeNull();
 
@@ -142,5 +142,41 @@ describe("authenticated protocol quotas", () => {
         usage: { device: 1, principal: 1 },
       });
     }
+  });
+
+  it("continues the persisted pre-upgrade minute budget", async () => {
+    await env.VILLAGE_DB.batch([
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO authenticated_quota_usage
+         (principal_id, device_id, window_started_at, commands)
+         VALUES (?, ?, ?, 120)`,
+      ).bind(principalId, deviceId, "2026-08-12T18:00"),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO authenticated_principal_quota_usage
+         (principal_id, window_started_at, commands)
+         VALUES (?, ?, 119)`,
+      ).bind(principalId, "2026-08-12T18:00"),
+    ]);
+
+    await expect(
+      consumeAuthenticatedQuota(
+        env.VILLAGE_DB,
+        principalId,
+        deviceId,
+        "commands",
+        "2026-08-12T18:00:59.999Z",
+      ),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: "AUTHENTICATED_QUOTA_EXCEEDED",
+    });
+    await expect(
+      env.VILLAGE_DB.prepare(
+        `SELECT commands FROM authenticated_principal_quota_usage
+         WHERE principal_id = ? AND window_started_at = ?`,
+      )
+        .bind(principalId, "2026-08-12T18:00")
+        .first<{ commands: number }>(),
+    ).resolves.toEqual({ commands: 119 });
   });
 });

@@ -4,6 +4,9 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-12",
   "workers_dev": true,
+  "triggers": {
+    "crons": ["17 3 * * *"],
+  },
   "durable_objects": {
     "bindings": [
       {

@@ -5,7 +5,7 @@ import {
   runInDurableObject,
 } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import type { BrowserControlState } from "@village/contracts";
+import type { BrowserAction, BrowserControlState } from "@village/contracts";
 import type { BrowserSessionCoordinator } from "../session-coordinator.js";
 
 const principalId = "prn_01J00000000000000000000000" as const;
@@ -137,6 +137,26 @@ describe("BrowserSessionCoordinator lease contention", () => {
       now: issuedAt,
       expiresAt,
     });
+    const orphan: BrowserAction = {
+      actionId: "act_01J00000000000000000000009",
+      browserSessionId: continuitySessionId,
+      phase: "DISPATCHED",
+      mutationClass: "NON_IDEMPOTENT",
+      acceptedAt: issuedAt,
+      updatedAt: issuedAt,
+      postcondition: "UNKNOWN",
+    };
+    await runInDurableObject(
+      stub,
+      async (_instance: BrowserSessionCoordinator, state) => {
+        state.storage.sql.exec(
+          `INSERT INTO accepted_actions
+           (action_id, command_sequence, action_json) VALUES (?, 1, ?)`,
+          orphan.actionId,
+          JSON.stringify(orphan),
+        );
+      },
+    );
 
     expect(await runDurableObjectAlarm(stub)).toBe(true);
     expect(await stub.snapshot(principalId)).toMatchObject({
@@ -163,6 +183,10 @@ describe("BrowserSessionCoordinator lease contention", () => {
     expect(
       await stub.hostReconnected(principalId, deviceId, reconnectedAt),
     ).toEqual({ ok: true });
+    expect(await stub.action(principalId, orphan.actionId)).toMatchObject({
+      ok: true,
+      action: { phase: "RECONCILIATION_REQUIRED" },
+    });
     const resumed = await stub.claimAgentLease({
       principalId,
       deviceId,
