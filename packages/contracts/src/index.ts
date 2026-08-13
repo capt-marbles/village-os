@@ -23,3 +23,4 @@ export * from "./hosts.js";
 export * from "./jobs.js";
 export * from "./redaction.js";
 export * from "./secrets.js";
+export * from "./signatures.js";
