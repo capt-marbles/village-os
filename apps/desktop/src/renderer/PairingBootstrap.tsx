@@ -22,6 +22,25 @@ export type PairingViewState =
   | "EXPIRED"
   | "PAIRED";
 
+export async function pairingFingerprint(
+  publicKey: PairingRequestView["publicKey"],
+): Promise<string> {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(JSON.stringify(publicKey)),
+    ),
+  );
+  let binary = "";
+  for (const byte of digest) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "")
+    .slice(0, 16)
+    .toUpperCase();
+}
+
 export function PairingBootstrap({
   bridge = globalThis.window?.villagePairing,
 }: {
@@ -31,6 +50,7 @@ export function PairingBootstrap({
   const [state, setState] = useState<PairingViewState>(
     "WAITING_FOR_CONFIRMATION",
   );
+  const [fingerprint, setFingerprint] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -44,7 +64,12 @@ export function PairingBootstrap({
     });
     void bridge
       .getPairingRequest()
-      .then((next) => active && setRequest(next))
+      .then(async (next) => {
+        if (!active) return;
+        setRequest(next);
+        const nextFingerprint = await pairingFingerprint(next.publicKey);
+        if (active) setFingerprint(nextFingerprint);
+      })
       .catch(() => active && setError("Secure device setup is unavailable."));
     return () => {
       active = false;
@@ -63,9 +88,15 @@ export function PairingBootstrap({
         enter this page.
       </p>
       {request ? (
-        <pre aria-label="Public pairing request">
-          {JSON.stringify(request, null, 2)}
-        </pre>
+        <>
+          <p>Confirm this fingerprint matches Village on the web:</p>
+          <output className="pairing-bootstrap__fingerprint">
+            {fingerprint ?? "Calculating…"}
+          </output>
+          <pre aria-label="Public pairing request">
+            {JSON.stringify(request, null, 2)}
+          </pre>
+        </>
       ) : (
         <p role="status">Preparing a protected device identity...</p>
       )}

@@ -148,6 +148,7 @@ export async function createVillageAppWindow(
     viewport,
     executor,
     () => browserHost.reloadAfterUncertainAction(),
+    () => browserHost.reloadAfterUncertainAction(),
   );
   const unsubscribeUiState = uiState.subscribe((snapshot) => {
     if (!appView.webContents.isDestroyed()) {
@@ -228,7 +229,7 @@ export async function createVillageAppWindow(
         const authorization = authorizer.mint(binding, 15_000);
         const consumed = authorizer.consume(authorization.token, binding);
         if (!consumed.ok) throw new Error(consumed.code);
-        return controlTransfer.returnControl();
+        return await controlTransfer.returnControl();
       });
     },
   );
@@ -300,7 +301,7 @@ export async function createVillageAppWindow(
         event.sender !== appView.webContents ||
         !isTrustedVillageSender(event.sender) ||
         arguments_.length !== 0 ||
-        (intent !== "CANCEL_FUTURE_AUTOMATION" && intent !== "NOTIFY_DESKTOP")
+        intent !== "CANCEL_FUTURE_AUTOMATION"
       ) {
         throw new Error("MALFORMED_IPC_REQUEST");
       }

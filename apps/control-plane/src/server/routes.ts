@@ -330,7 +330,7 @@ export async function routeRequest(
     }
 
     const sessionOperation = url.pathname.match(
-      /^\/api\/browser-sessions\/([^/]+)\/(connect|commands|results|events|stream|cancel|notify|project|rebuild-projection)$/,
+      /^\/api\/browser-sessions\/([^/]+)\/(connect|commands|results|events|stream|cancel|project|rebuild-projection)$/,
     );
     if (sessionOperation) {
       const sessionId = browserSessionIdSchema.safeParse(sessionOperation[1]);
@@ -444,15 +444,6 @@ export async function routeRequest(
         const csrf = authorizeBrowserMutation(request, environment);
         if (!csrf.ok) return json(request, environment, csrf, 403);
         const result = await coordinator.cancel(
-          auth.principalId,
-          new Date().toISOString(),
-        );
-        return json(request, environment, result, result.ok ? 200 : 409);
-      }
-      if (request.method === "POST" && operation === "notify") {
-        const csrf = authorizeBrowserMutation(request, environment);
-        if (!csrf.ok) return json(request, environment, csrf, 403);
-        const result = await coordinator.notifyDesktop(
           auth.principalId,
           new Date().toISOString(),
         );

@@ -26,5 +26,7 @@ describe("desktop browser accessibility", () => {
     expect(html).toContain('type="button"');
     expect(html).toContain("Take control");
     expect(html).toContain('aria-label="Browser pane width"');
+    expect(html).toContain('class="desktop-workspace"');
+    expect(html).toContain('style="width:58%"');
   });
 });

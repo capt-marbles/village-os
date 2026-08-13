@@ -20,9 +20,7 @@ export interface VillageDesktopBridge {
   }): Promise<void>;
   recordVerificationDecision(decision: "CONFIRM" | "REJECT"): Promise<void>;
   requestForgetSession(): Promise<"STEP_UP_REQUIRED">;
-  requestObserverIntent(
-    intent: "CANCEL_FUTURE_AUTOMATION" | "NOTIFY_DESKTOP",
-  ): Promise<void>;
+  requestObserverIntent(intent: "CANCEL_FUTURE_AUTOMATION"): Promise<void>;
 }
 
 export async function dispatchDesktopBrowserAction(
@@ -48,9 +46,6 @@ export async function dispatchDesktopBrowserAction(
       return;
     case "CANCEL_AUTOMATION":
       await bridge.requestObserverIntent("CANCEL_FUTURE_AUTOMATION");
-      return;
-    case "NOTIFY_DESKTOP":
-      await bridge.requestObserverIntent("NOTIFY_DESKTOP");
       return;
   }
 }
@@ -127,7 +122,14 @@ export function DesktopBrowserPane({
   };
 
   return (
-    <>
+    <div
+      className="desktop-workspace"
+      style={{
+        width: collapsed
+          ? "100%"
+          : `${Math.round((1 - splitRatio) * 1_000) / 10}%`,
+      }}
+    >
       <BrowserPane
         snapshot={snapshot}
         collapsed={collapsed}
@@ -142,6 +144,6 @@ export function DesktopBrowserPane({
           {actionError}
         </p>
       ) : null}
-    </>
+    </div>
   );
 }

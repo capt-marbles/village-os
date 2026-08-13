@@ -61,7 +61,7 @@ describe("observer API client", () => {
     });
   });
 
-  it("sends closed cancel and notify intents with CSRF protection", async () => {
+  it("sends the closed cancel intent with CSRF protection", async () => {
     const request = vi
       .fn<typeof fetch>()
       .mockImplementation(async () => Response.json({ ok: true }));
@@ -72,11 +72,8 @@ describe("observer API client", () => {
     );
 
     await client.sendIntent(selection, "CANCEL_AUTOMATION");
-    await client.sendIntent(selection, "NOTIFY_DESKTOP");
-
     expect(request.mock.calls.map(([url]) => String(url))).toEqual([
       `https://village.test/api/browser-sessions/${selection.browserSessionId}/cancel`,
-      `https://village.test/api/browser-sessions/${selection.browserSessionId}/notify`,
     ]);
     expect(request.mock.calls[0]![1]).toMatchObject({
       method: "POST",

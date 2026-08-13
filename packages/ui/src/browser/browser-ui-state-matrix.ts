@@ -32,7 +32,6 @@ export type HumanGateReason = HumanGate["reason"];
 export type BrowserUiAction =
   | "TAKE_OVER"
   | "RETURN_TO_AGENT"
-  | "NOTIFY_DESKTOP"
   | "CANCEL_AUTOMATION"
   | "CONFIRM_ACCOUNT"
   | "REJECT_ACCOUNT"
@@ -133,8 +132,8 @@ export function deriveBrowserUiModel(
       "Session removal needs attention",
       "Some local session data could not be removed. Retry to finish safely.",
       "DANGER",
-      snapshot.surface === "DESKTOP" ? "RETRY_ERASURE" : "NOTIFY_DESKTOP",
-      true,
+      snapshot.surface === "DESKTOP" ? "RETRY_ERASURE" : null,
+      snapshot.surface === "DESKTOP",
       secondaryActions,
       snapshot,
       false,
@@ -160,8 +159,8 @@ export function deriveBrowserUiModel(
       "Desktop browser unavailable",
       "Work is paused. Village will not start a remote browser automatically.",
       "ATTENTION",
-      snapshot.surface === "OBSERVER" ? "NOTIFY_DESKTOP" : null,
-      snapshot.surface === "OBSERVER",
+      null,
+      false,
       secondaryActions,
       snapshot,
       false,
@@ -199,8 +198,8 @@ export function deriveBrowserUiModel(
         ? "Manual browsing can continue, but agent hand-back waits for reconnection."
         : "Village automation is fenced until you return control.",
       offline ? "ATTENTION" : "SUCCESS",
-      snapshot.surface === "OBSERVER" ? "NOTIFY_DESKTOP" : "RETURN_TO_AGENT",
-      snapshot.surface === "OBSERVER" || !offline,
+      snapshot.surface === "OBSERVER" ? null : "RETURN_TO_AGENT",
+      snapshot.surface !== "OBSERVER" && !offline,
       secondaryActions,
       snapshot,
       snapshot.surface === "DESKTOP",
@@ -211,8 +210,8 @@ export function deriveBrowserUiModel(
       "Signed in",
       "The local verification predicate found an authenticated session.",
       "SUCCESS",
-      snapshot.surface === "OBSERVER" ? "NOTIFY_DESKTOP" : null,
-      snapshot.surface === "OBSERVER",
+      null,
+      false,
       secondaryActions,
       snapshot,
       false,
@@ -235,8 +234,8 @@ export function deriveBrowserUiModel(
       "Browser work stopped",
       "Review the last safe event before retrying.",
       "DANGER",
-      snapshot.surface === "OBSERVER" ? "NOTIFY_DESKTOP" : null,
-      snapshot.surface === "OBSERVER",
+      null,
+      false,
       secondaryActions,
       snapshot,
       false,
@@ -247,8 +246,8 @@ export function deriveBrowserUiModel(
       "Future automation canceled",
       "No new automated browser action will start. The local profile is preserved.",
       "NEUTRAL",
-      snapshot.surface === "OBSERVER" ? "NOTIFY_DESKTOP" : null,
-      snapshot.surface === "OBSERVER",
+      null,
+      false,
       snapshot.surface === "DESKTOP" ? ["BEGIN_FORGET_SESSION"] : [],
       snapshot,
       false,
@@ -261,8 +260,8 @@ export function deriveBrowserUiModel(
       ? "Take over on the paired desktop to complete the human-only step."
       : "Village can act in the visible local browser. You can interrupt at any time.",
     snapshot.humanGate ? "ATTENTION" : "ACTIVE",
-    snapshot.surface === "OBSERVER" ? "NOTIFY_DESKTOP" : "TAKE_OVER",
-    true,
+    snapshot.surface === "OBSERVER" ? null : "TAKE_OVER",
+    snapshot.surface !== "OBSERVER",
     secondaryActions,
     snapshot,
     false,
@@ -295,7 +294,6 @@ function makeModel(
 export const browserActionLabel: Record<BrowserUiAction, string> = {
   TAKE_OVER: "Take control",
   RETURN_TO_AGENT: "Return control to Village",
-  NOTIFY_DESKTOP: "Notify desktop",
   CANCEL_AUTOMATION: "Cancel future automation",
   CONFIRM_ACCOUNT: "Yes, this is my account",
   REJECT_ACCOUNT: "No, keep status unknown",

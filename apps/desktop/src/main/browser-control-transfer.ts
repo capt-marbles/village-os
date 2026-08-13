@@ -13,6 +13,7 @@ export class BrowserControlTransfer {
     private readonly viewport: BrowserViewportCoordinator,
     private readonly executor: LocalActionExecutor,
     private readonly reloadAfterUncertainAction: () => Promise<void>,
+    private readonly reconcileAfterUserControl: () => Promise<void>,
   ) {}
 
   async takeover(timeoutMs: number): Promise<TakeoverResult> {
@@ -32,6 +33,9 @@ export class BrowserControlTransfer {
           this.state.completeTakeover("UNKNOWN_CHALLENGE");
           return "RECOVERY_REQUIRED";
         }
+        this.viewport.acknowledgeTakeover();
+        this.state.completeTakeover("UNKNOWN_CHALLENGE");
+        return "OUTCOME_UNKNOWN";
       }
       this.viewport.acknowledgeTakeover();
       this.state.completeTakeover();
@@ -48,11 +52,12 @@ export class BrowserControlTransfer {
     }
   }
 
-  returnControl(): "RETURNED" {
+  async returnControl(): Promise<"RETURNED"> {
     this.state.beginReturnControl();
     this.viewport.beginTakeover();
     try {
       this.leaseEpoch += 1;
+      await this.reconcileAfterUserControl();
       this.executor.reconcileAgentLease(this.leaseEpoch);
       this.state.completeReturnControl();
       return "RETURNED";

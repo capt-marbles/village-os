@@ -9,10 +9,7 @@ import {
   type ObserverSelection,
 } from "../browser/observer-client.js";
 
-type ObserverIntent = Extract<
-  BrowserUiAction,
-  "NOTIFY_DESKTOP" | "CANCEL_AUTOMATION"
->;
+type ObserverIntent = Extract<BrowserUiAction, "CANCEL_AUTOMATION">;
 
 export function ChatPage({
   client,

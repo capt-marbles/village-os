@@ -11,10 +11,7 @@ export interface ObserverSelection {
   browserSessionId: string;
 }
 
-type ObserverIntent = Extract<
-  BrowserUiAction,
-  "CANCEL_AUTOMATION" | "NOTIFY_DESKTOP"
->;
+type ObserverIntent = Extract<BrowserUiAction, "CANCEL_AUTOMATION">;
 
 function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object"
@@ -143,6 +140,9 @@ export class ObserverApiClient {
     candidate: ObserverSelection,
     intent: ObserverIntent,
   ): Promise<void> {
+    if (intent !== "CANCEL_AUTOMATION") {
+      throw new Error("OBSERVER_INTENT_INVALID");
+    }
     const browserSessionId = browserSessionIdSchema.safeParse(
       candidate.browserSessionId,
     );
@@ -152,10 +152,9 @@ export class ObserverApiClient {
     }
     const csrf = this.csrfToken();
     if (!csrf || csrf.length < 32) throw new Error("OBSERVER_CSRF_UNAVAILABLE");
-    const operation = intent === "CANCEL_AUTOMATION" ? "cancel" : "notify";
     const response = await this.request(
       new URL(
-        `/api/browser-sessions/${browserSessionId.data}/${operation}`,
+        `/api/browser-sessions/${browserSessionId.data}/cancel`,
         this.baseUrl,
       ),
       {

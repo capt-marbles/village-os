@@ -33,6 +33,7 @@ describe("browser control transfer", () => {
       async () => {
         throw new Error("reload failed");
       },
+      async () => undefined,
     );
 
     await expect(transfer.takeover(0)).resolves.toBe("RECOVERY_REQUIRED");
@@ -43,7 +44,7 @@ describe("browser control transfer", () => {
     });
     expect(input.at(-1)).toBe(true);
 
-    expect(() => transfer.returnControl()).toThrow(
+    await expect(transfer.returnControl()).rejects.toThrow(
       "ACTION_RECONCILIATION_REQUIRED",
     );
     expect(executor.isAutomationBlocked()).toBe(true);
@@ -52,5 +53,78 @@ describe("browser control transfer", () => {
 
     finish();
     await inFlight;
+  });
+
+  it("keeps an unknown action gated even when recovery reload succeeds", async () => {
+    const viewport = new BrowserViewportCoordinator({
+      setBounds: () => undefined,
+      setVisible: () => undefined,
+      setInputEnabled: () => undefined,
+      focus: () => undefined,
+      destroy: () => undefined,
+    });
+    const state = new DesktopBrowserUiState();
+    const executor = new LocalActionExecutor({ leaseEpoch: 1 });
+    let finish!: () => void;
+    const inFlight = executor.execute({
+      actionId: "act_01J00000000000000000000000",
+      leaseEpoch: 1,
+      mutationClass: "NON_IDEMPOTENT",
+      run: () =>
+        new Promise((resolve) => {
+          finish = () => resolve("UNKNOWN");
+        }),
+    });
+    const transfer = new BrowserControlTransfer(
+      state,
+      viewport,
+      executor,
+      async () => undefined,
+      async () => undefined,
+    );
+
+    await expect(transfer.takeover(0)).resolves.toBe("OUTCOME_UNKNOWN");
+    expect(state.current()).toMatchObject({
+      controller: "USER",
+      humanGate: "UNKNOWN_CHALLENGE",
+    });
+    finish();
+    await inFlight;
+  });
+
+  it("reconciles the visible browser before returning control", async () => {
+    const input: boolean[] = [];
+    const viewport = new BrowserViewportCoordinator({
+      setBounds: () => undefined,
+      setVisible: () => undefined,
+      setInputEnabled: (enabled) => input.push(enabled),
+      focus: () => undefined,
+      destroy: () => undefined,
+    });
+    const state = new DesktopBrowserUiState({
+      jobState: "RUNNING_USER",
+      controller: "USER",
+    });
+    const executor = new LocalActionExecutor({ leaseEpoch: 1 });
+    executor.markOfflineTakeover();
+    const transfer = new BrowserControlTransfer(
+      state,
+      viewport,
+      executor,
+      async () => undefined,
+      async () => {
+        throw new Error("browser reconciliation failed");
+      },
+    );
+
+    await expect(transfer.returnControl()).rejects.toThrow(
+      "browser reconciliation failed",
+    );
+    expect(state.current()).toMatchObject({
+      controller: "USER",
+      humanGate: "UNKNOWN_CHALLENGE",
+    });
+    expect(executor.isAutomationBlocked()).toBe(true);
+    expect(input.at(-1)).toBe(true);
   });
 });

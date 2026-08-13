@@ -66,7 +66,7 @@ describe("browser UI state matrix", () => {
     expect(
       deriveBrowserUiModel({ ...snapshot, surface: "OBSERVER" }),
     ).toMatchObject({
-      primaryAction: "NOTIFY_DESKTOP",
+      primaryAction: null,
       browserInputEnabled: false,
       liveBrowserAvailable: false,
     });

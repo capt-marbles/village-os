@@ -109,27 +109,6 @@ describe("authenticated pairing routes", () => {
         browserSessionId,
       ).snapshot(principalId),
     ).toMatchObject({ ok: true, eventSequence: 1 });
-
-    const notified = await SELF.fetch(
-      new Request(
-        `https://village.test/api/browser-sessions/${browserSessionId}/notify`,
-        { method: "POST", headers: ownerHeaders },
-      ),
-    );
-    expect(notified.status).toBe(200);
-    const events = await SELF.fetch(
-      new Request(
-        `https://village.test/api/browser-sessions/${browserSessionId}/events`,
-        { headers: ownerHeaders },
-      ),
-    );
-    await expect(events.json()).resolves.toMatchObject({
-      ok: true,
-      events: [
-        { sequence: 1, type: "SESSION_INITIALIZED" },
-        { sequence: 2, type: "DESKTOP_NOTIFICATION_REQUESTED" },
-      ],
-    });
   });
 
   it("rejects CSRF and exact-origin violations", async () => {

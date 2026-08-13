@@ -12,9 +12,7 @@ export function ObserverBrowserCard({
   intentPending = false,
 }: {
   snapshot: BrowserUiSnapshot;
-  onIntent?: (
-    intent: Extract<BrowserUiAction, "NOTIFY_DESKTOP" | "CANCEL_AUTOMATION">,
-  ) => void;
+  onIntent?: (intent: Extract<BrowserUiAction, "CANCEL_AUTOMATION">) => void;
   intentPending?: boolean;
 }) {
   const observerSnapshot = { ...snapshot, surface: "OBSERVER" } as const;
@@ -44,13 +42,6 @@ export function ObserverBrowserCard({
           </div>
         </dl>
         <div className="observer-card__actions">
-          <button
-            type="button"
-            disabled={!onIntent || intentPending}
-            onClick={() => onIntent?.("NOTIFY_DESKTOP")}
-          >
-            {browserActionLabel.NOTIFY_DESKTOP}
-          </button>
           <button
             type="button"
             className="button-secondary"

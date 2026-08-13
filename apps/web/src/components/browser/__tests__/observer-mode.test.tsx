@@ -22,7 +22,6 @@ describe("observer browser status", () => {
       />,
     );
     expect(html).toContain("Browser stays on your paired desktop");
-    expect(html).toContain("Notify desktop");
     expect(html).toContain("Cancel future automation");
     expect(html).not.toContain("Take control");
   });
@@ -45,6 +44,6 @@ describe("observer browser status", () => {
         }}
       />,
     );
-    expect(html.match(/disabled=""/g)).toHaveLength(2);
+    expect(html.match(/disabled=""/g)).toHaveLength(1);
   });
 });
