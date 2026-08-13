@@ -1,9 +1,10 @@
 import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   ProfileLock,
+  eraseProfileHoldingLock,
   eraseScopedProfile,
   ensureProtectedProfile,
   profilePartition,
@@ -11,6 +12,24 @@ import {
 } from "../src/browser/profile-protection.js";
 
 describe("protected browser profile", () => {
+  it("keeps the scope lock held until profile deletion succeeds", async () => {
+    const release = vi.fn(async () => undefined);
+    const failedErase = vi.fn(async () => {
+      throw new Error("disk busy");
+    });
+
+    await expect(
+      eraseProfileHoldingLock("/scoped/profile", { release }, failedErase),
+    ).rejects.toThrow("disk busy");
+    expect(release).not.toHaveBeenCalled();
+
+    await eraseProfileHoldingLock(
+      "/scoped/profile",
+      { release },
+      async () => undefined,
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
   it("creates a private scoped directory and stable persistent partition", async () => {
     const root = await mkdtemp(join(tmpdir(), "village-profile-"));
     const profile = await ensureProtectedProfile(

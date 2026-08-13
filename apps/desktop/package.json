@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && vite build --config vite.renderer.config.ts && node ../../scripts/copy-desktop-assets.mjs",
     "package:mac:e2e": "pnpm build && electron-builder --dir --config electron-builder.e2e.yml --mac && node ../../scripts/verify-packaged-mac.mjs",
-    "package:mac:release": "pnpm --dir ../.. audit:provenance && pnpm --dir ../.. audit:licenses && pnpm --dir ../.. audit:assets && pnpm --dir ../.. audit:boundaries && pnpm --dir ../.. audit:secret-sinks && pnpm --dir ../.. audit:telemetry-egress && node ../../scripts/validate-release-config.mjs --release && pnpm build && electron-builder --config electron-builder.yml --mac && node ../../scripts/verify-packaged-mac.mjs",
+    "package:mac:release": "pnpm --dir ../.. audit:provenance && pnpm --dir ../.. audit:licenses && pnpm --dir ../.. audit:assets && pnpm --dir ../.. audit:boundaries && pnpm --dir ../.. audit:secret-sinks && pnpm --dir ../.. audit:telemetry-egress && node ../../scripts/validate-release-config.mjs --release && pnpm build && electron-builder --config electron-builder.yml --mac && node ../../scripts/verify-packaged-mac.mjs --release",
     "start": "electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

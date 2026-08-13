@@ -49,6 +49,15 @@ export async function eraseScopedProfile(profilePath: string): Promise<void> {
   await rm(profilePath, { recursive: true, force: true, maxRetries: 2 });
 }
 
+export async function eraseProfileHoldingLock(
+  profilePath: string,
+  profileLock: Pick<ProfileLock, "release">,
+  erase: (path: string) => Promise<void> = eraseScopedProfile,
+): Promise<void> {
+  await erase(profilePath);
+  await profileLock.release();
+}
+
 /** File-system proof used after a destructive lifecycle and app restart. */
 export async function scopedProfileAbsent(
   profilePath: string,

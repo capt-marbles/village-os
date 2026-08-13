@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { access } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -12,6 +13,47 @@ const fuseEnabled = 49;
 const execFileAsync = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+export function parseCertificateFingerprint(output) {
+  const match = /sha256 Fingerprint=([0-9A-F:]{95})/i.exec(output);
+  return match?.[1].replaceAll(":", "").toLowerCase();
+}
+
+export function assertReleaseSigner(actual, expected) {
+  if (!/^[a-f0-9]{64}$/.test(expected ?? "")) {
+    throw new Error("INVALID_RELEASE_SIGNER_PIN");
+  }
+  if (actual !== expected) throw new Error("PACKAGED_SIGNER_MISMATCH");
+}
+
+async function signingCertificateSha256(applicationPath) {
+  const temporaryDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "village-signing-certificate-"),
+  );
+  const certificatePrefix = path.join(temporaryDirectory, "certificate");
+  try {
+    await execFileAsync("/usr/bin/codesign", [
+      "--display",
+      `--extract-certificates=${certificatePrefix}`,
+      applicationPath,
+    ]);
+    const { stdout } = await execFileAsync("/usr/bin/openssl", [
+      "x509",
+      "-inform",
+      "DER",
+      "-in",
+      `${certificatePrefix}0`,
+      "-noout",
+      "-fingerprint",
+      "-sha256",
+    ]);
+    const fingerprint = parseCertificateFingerprint(stdout);
+    if (!fingerprint) throw new Error("PACKAGED_SIGNER_FINGERPRINT_UNREADABLE");
+    return fingerprint;
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+}
+
 export async function verifyPackagedMac(
   applicationPath = path.join(
     root,
@@ -19,6 +61,7 @@ export async function verifyPackagedMac(
     process.arch === "arm64" ? "mac-arm64" : "mac",
     "Village.app",
   ),
+  { expectedSignerSha256 } = {},
 ) {
   await access(applicationPath);
   await execFileAsync("/usr/bin/codesign", [
@@ -43,10 +86,24 @@ export async function verifyPackagedMac(
       throw new Error(`PACKAGED_FUSE_MISMATCH_${fuse}`);
     }
   }
+  if (expectedSignerSha256 !== undefined) {
+    assertReleaseSigner(
+      await signingCertificateSha256(applicationPath),
+      expectedSignerSha256,
+    );
+  }
   return { signature: "VALID", fuses: "VALID" };
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  await verifyPackagedMac(process.argv[2]);
+  const release = process.argv.includes("--release");
+  const applicationPath = process.argv
+    .slice(2)
+    .find((argument) => argument !== "--release");
+  await verifyPackagedMac(applicationPath, {
+    expectedSignerSha256: release
+      ? process.env.VILLAGE_RELEASE_SIGNER_SHA256
+      : undefined,
+  });
   console.log("Packaged macOS signature and fuses are valid.");
 }

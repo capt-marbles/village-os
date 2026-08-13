@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { session, WebContentsView } from "electron";
 import {
-  eraseScopedProfile,
+  eraseProfileHoldingLock,
   ensureProtectedProfile,
   ProfileLock,
   scopedProfileAbsent,
@@ -89,11 +89,7 @@ export class LocalBrowserHost {
   }
 
   async removeScopedProfile(): Promise<void> {
-    try {
-      await eraseScopedProfile(this.profilePath);
-    } finally {
-      await this.profileLock.release();
-    }
+    await eraseProfileHoldingLock(this.profilePath, this.profileLock);
   }
 
   async scopedProfileAbsent(): Promise<boolean> {
