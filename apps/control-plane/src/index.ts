@@ -1,6 +1,5 @@
-export interface Environment {
-  VILLAGE_DEPLOYMENT_NAME?: string;
-}
+import type { Environment } from "./env.js";
+export { BrowserSessionCoordinator } from "./worker/browser-control/session-coordinator.js";
 
 const jsonHeaders = {
   "content-type": "application/json; charset=utf-8",

@@ -4,4 +4,31 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-12",
   "workers_dev": true,
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "BROWSER_SESSION_COORDINATOR",
+        "class_name": "BrowserSessionCoordinator",
+      },
+    ],
+  },
+  "exports": {
+    "BrowserSessionCoordinator": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
+  },
+  "d1_databases": [
+    {
+      "binding": "VILLAGE_DB",
+      "database_name": "village-control-plane",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "vars": {
+    "VILLAGE_DEPLOYMENT_NAME": "self-hosted",
+    "VILLAGE_AUTH_MODE": "development-header",
+    "VILLAGE_ALLOWED_ORIGINS": "http://localhost:5173",
+  },
 }

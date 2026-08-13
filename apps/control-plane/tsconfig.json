@@ -4,7 +4,10 @@
     "emitDeclarationOnly": true,
     "outDir": "dist/types",
     "rootDir": "src",
-    "types": ["@cloudflare/workers-types"]
+    "types": [
+      "@cloudflare/workers-types",
+      "@cloudflare/vitest-pool-workers/types"
+    ]
   },
   "include": ["src/**/*.ts"],
   "references": [{ "path": "../../packages/contracts" }]

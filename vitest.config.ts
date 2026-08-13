@@ -14,6 +14,7 @@ export default defineConfig({
       "apps/**/*.{test,spec}.{ts,tsx}",
       "packages/**/*.{test,spec}.{ts,tsx}",
     ],
+    exclude: ["**/node_modules/**", "**/dist/**", "apps/**/*.worker.test.ts"],
     passWithNoTests: true,
   },
 });
