@@ -1,0 +1,17 @@
+appId: com.village.desktop
+productName: Village
+asar: true
+files:
+  - dist/**
+  - package.json
+protocols:
+  - name: Village Pairing
+    schemes:
+      - village-pair
+mac:
+  target: dir
+  identity: "-"
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+artifactName: village-${version}-${arch}.${ext}

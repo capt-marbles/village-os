@@ -61,7 +61,7 @@ export class ObserverApiClient {
 
   constructor(
     baseUrl: string | URL,
-    private readonly request: typeof fetch = fetch,
+    private readonly request: typeof fetch = fetch.bind(globalThis),
     private readonly csrfToken: () => string | undefined = readCsrfCookie,
   ) {
     this.baseUrl = new URL(baseUrl);

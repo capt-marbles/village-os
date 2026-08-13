@@ -40,6 +40,13 @@ function record(value: unknown): Record<string, unknown> | null {
 
 function readCsrfCookie(): string | undefined {
   if (typeof document === "undefined") return undefined;
+  if (
+    import.meta.env.DEV &&
+    (window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1")
+  ) {
+    return "village-local-e2e-csrf-token-00000001";
+  }
   for (const pair of document.cookie.split(";")) {
     const [name, ...value] = pair.trim().split("=");
     if (name === "village_csrf") return decodeURIComponent(value.join("="));
@@ -124,7 +131,7 @@ export class PairingSetupClient {
 
   constructor(
     baseUrl: string | URL,
-    private readonly request: typeof fetch = fetch,
+    private readonly request: typeof fetch = fetch.bind(globalThis),
     private readonly csrfToken: () => string | undefined = readCsrfCookie,
   ) {
     this.baseUrl = new URL(baseUrl);

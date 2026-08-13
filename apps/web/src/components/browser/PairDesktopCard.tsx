@@ -38,9 +38,11 @@ export function PairDesktopCard({ client }: { client?: PairingSetupClient }) {
       );
       setChallenge(next);
       setStep("CONFIRM");
-    } catch {
+    } catch (caught) {
       setError(
-        "That public request is invalid or expired. Copy a fresh request from Village Desktop.",
+        import.meta.env.DEV && caught instanceof Error
+          ? `Pairing failed: ${caught.message}`
+          : "That public request is invalid or expired. Copy a fresh request from Village Desktop.",
       );
     } finally {
       setPending(false);
