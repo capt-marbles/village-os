@@ -1,3 +1,4 @@
+import { browserSessionIdSchema } from "@village/contracts";
 import { app, shell, type WebContents } from "electron";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { readFile, rename, writeFile } from "node:fs/promises";
@@ -7,8 +8,23 @@ import {
   internalProofIdentitySource,
   internalProofUserDataPath,
 } from "./internal-delegated-proof.js";
-import { runVillageApplication } from "./runtime.js";
+import {
+  resolveRuntimeControlPlaneUrl,
+  runVillageApplication,
+} from "./runtime.js";
 import { createRuntimeModelProviderComposition } from "./runtime-model-provider.js";
+import {
+  assertDistinctBrowserSessionIdentity,
+  createPairedWorkflowRuntimeComposition,
+} from "./runtime-control-plane.js";
+import { DeviceIdentityVault } from "./device-identity-vault.js";
+import { ElectronSafeStorageProtector } from "./electron-safe-storage.js";
+import { SecretVault } from "../secrets/secret-vault.js";
+import { SecretRuntimeIdentityStore } from "./runtime-identity-store.js";
+import {
+  resolveRuntimeIdentity,
+  type PairedRuntimeIdentitySource,
+} from "./runtime-identity.js";
 
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -203,12 +219,67 @@ async function run(): Promise<void> {
   const modelProviders = createRuntimeModelProviderComposition((url) =>
     shell.openExternal(url),
   );
+  const coordinationMode = argument("--village-proof-coordinator");
+  if (coordinationMode && coordinationMode !== "paired") {
+    throw new Error("PACKAGED_DELEGATED_WORKFLOW_COORDINATOR_INVALID");
+  }
+  if (providerMode === "CHATGPT_ACCOUNT" && coordinationMode !== "paired") {
+    throw new Error("PACKAGED_DELEGATED_WORKFLOW_PAIRED_COORDINATOR_REQUIRED");
+  }
+  let applicationIdentitySource: PairedRuntimeIdentitySource =
+    internalProofIdentitySource();
+  let coordination:
+    | Awaited<ReturnType<typeof createPairedWorkflowRuntimeComposition>>
+    | undefined;
+  let fixtureBrowserSessionId: string | undefined;
+  if (coordinationMode === "paired") {
+    fixtureBrowserSessionId = browserSessionIdSchema.parse(
+      argument("--village-proof-fixture-session"),
+    );
+    const protector = new ElectronSafeStorageProtector();
+    const identityDirectory = join(app.getPath("userData"), "identity");
+    const runtimeIdentityStore = new SecretRuntimeIdentityStore(
+      new SecretVault(join(identityDirectory, "runtime-vault.json"), protector),
+    );
+    const pairedIdentity = await resolveRuntimeIdentity({
+      isPackaged: true,
+      pairedIdentitySource: runtimeIdentityStore,
+    });
+    assertDistinctBrowserSessionIdentity(
+      pairedIdentity.browserSessionId,
+      fixtureBrowserSessionId,
+    );
+    applicationIdentitySource = { load: async () => pairedIdentity };
+    coordination = await createPairedWorkflowRuntimeComposition({
+      controlPlaneUrl: resolveRuntimeControlPlaneUrl(
+        pairedIdentity.controlPlaneOrigin,
+      ),
+      userDataPath: app.getPath("userData"),
+      identity: {
+        ...pairedIdentity,
+        browserSessionId: fixtureBrowserSessionId,
+      },
+      deviceIdentitySource: new DeviceIdentityVault(
+        join(identityDirectory, "device.json"),
+        protector,
+      ),
+    });
+  }
   const proof = await createInternalDelegatedProof({
     userDataPath: proofProfilePath
       ? join(internalProofUserDataPath(), "proof-state")
       : join(internalProofUserDataPath(), "proof-runs", String(process.pid)),
     providerMode,
     modelProvider: modelProviders.provider,
+    ...(coordination
+      ? {
+          coordination: {
+            initialSnapshot: coordination.initialSnapshot,
+            coordinator: coordination.workflowCoordinator,
+            automationFence: coordination.automationFence,
+          },
+        }
+      : {}),
     ...(variantId ? { variantId } : {}),
     interruptAfterEffectBeforeReceipt:
       interruption === "post-effect-before-receipt",
@@ -226,13 +297,10 @@ async function run(): Promise<void> {
     await modelProviders.modelProviderAccount.close();
     throw error;
   });
-  const application = await runVillageApplication(
-    internalProofIdentitySource(),
-    {
-      delegatedWorkflow: proof.delegatedWorkflow,
-      modelProviders,
-    },
-  ).catch(async (error: unknown) => {
+  const application = await runVillageApplication(applicationIdentitySource, {
+    delegatedWorkflow: proof.delegatedWorkflow,
+    modelProviders,
+  }).catch(async (error: unknown) => {
     await proof.close();
     await modelProviders.modelProviderAccount.close();
     throw error;
@@ -412,6 +480,13 @@ async function run(): Promise<void> {
                 ? "INTERRUPTED"
                 : "STOPPED",
         provider: providerMode,
+        coordinator: coordinationMode === "paired" ? "PAIRED" : "LOCAL_PROOF",
+        ...(coordination
+          ? {
+              coordinatorJobId: coordination.initialSnapshot.jobId,
+              fixtureBrowserSessionId,
+            }
+          : {}),
         readyLabel,
         terminal,
         finalizationEffects: evidence.finalizationEffects,

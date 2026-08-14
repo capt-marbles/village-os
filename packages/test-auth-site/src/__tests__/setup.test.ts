@@ -310,6 +310,38 @@ describe("owned fixture setup service", () => {
     }
   });
 
+  it("accepts a new effect only from the exact coordinator-bound workflow", async () => {
+    const service = new LocalOwnedFixtureService(binding, {
+      effectGrants: [
+        { effectId: effects.display, logicalStep: "SET_DISPLAY_NAME" },
+      ],
+    });
+    const coordinatorEffect = {
+      ...binding,
+      logicalStep: "SELECT_ROLE" as const,
+      effectId: effects.role,
+    };
+
+    service.authorizeCoordinatorEffect(coordinatorEffect);
+    service.authorizeCoordinatorEffect(coordinatorEffect);
+    await expect(service.observe(coordinatorEffect)).resolves.toMatchObject({
+      logicalStep: "SELECT_ROLE",
+      effectId: effects.role,
+    });
+    expect(() =>
+      service.authorizeCoordinatorEffect({
+        ...coordinatorEffect,
+        logicalStep: "SET_DISPLAY_NAME",
+      }),
+    ).toThrow("EFFECT_BINDING_CONFLICT");
+    expect(() =>
+      service.authorizeCoordinatorEffect({
+        ...coordinatorEffect,
+        jobId: "job_01J00000000000000000000001",
+      }),
+    ).toThrow("FIXTURE_BINDING_DENIED");
+  });
+
   it("resets the one local profile only for a new bound effect", async () => {
     const service = createService();
     await completeFields(service);

@@ -43,7 +43,7 @@ app.on("open-url", (event, url) => {
   pairingInbox.accept(url);
 });
 
-function controlPlaneUrl(storedOrigin?: string): URL {
+export function resolveRuntimeControlPlaneUrl(storedOrigin?: string): URL {
   const configured = storedOrigin ?? process.env.VILLAGE_CONTROL_PLANE_URL;
   if (!configured) throw new Error("VILLAGE_CONTROL_PLANE_URL_REQUIRED");
   const url = new URL(configured);
@@ -99,7 +99,7 @@ export async function startVillageRuntime(
       if (!app.setAsDefaultProtocolClient("village-pair")) {
         throw new Error("PAIRING_DEEP_LINK_REGISTRATION_FAILED");
       }
-      const pairingUrl = controlPlaneUrl();
+      const pairingUrl = resolveRuntimeControlPlaneUrl();
       const pairingService = new PairingBootstrapService(
         new DeviceIdentityVault(
           join(identityDirectory, "device.json"),
@@ -125,7 +125,9 @@ export async function startVillageRuntime(
   const automationFence =
     app.isPackaged && !internalComposition
       ? await createRuntimeControlPlaneAutomationFence({
-          controlPlaneUrl: controlPlaneUrl(identity.controlPlaneOrigin),
+          controlPlaneUrl: resolveRuntimeControlPlaneUrl(
+            identity.controlPlaneOrigin,
+          ),
           userDataPath: app.getPath("userData"),
           identity,
           deviceIdentitySource: new DeviceIdentityVault(

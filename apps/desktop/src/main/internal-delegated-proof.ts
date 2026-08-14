@@ -13,6 +13,8 @@ import { FixtureCdpAdapter } from "../browser/cdp-adapter.js";
 import { LocalBrowserHost } from "../browser/local-browser-host.js";
 import type { BoundedSetupModelProvider } from "../model-provider/codex-app-server.js";
 import {
+  type AuthenticatedAutomationFence,
+  type AuthenticatedWorkflowCoordinator,
   DelegatedWorkflowController,
   type CoordinatorSnapshot,
   type SetupLogicalStep,
@@ -21,6 +23,8 @@ import {
 import { DesktopDelegatedWorkflow } from "./desktop-delegated-workflow.js";
 import { installFixtureSessionHandler } from "./fixture-session-handler.js";
 import { createInternalProofId } from "./internal-proof-ids.js";
+import { PairedProofCoordination } from "./paired-proof-coordination.js";
+import { proofProjectionState } from "./proof-projection.js";
 
 const identity = Object.freeze({
   principalId: "prn_01J00000000000000000000000",
@@ -44,6 +48,7 @@ type FixtureService = {
   observe(input: Record<string, unknown>): Promise<unknown>;
   execute(input: Record<string, unknown>): Promise<{ postcondition?: unknown }>;
   attempts(input: Record<string, unknown>): Promise<{ count: number }>;
+  authorizeCoordinatorEffect(input: Record<string, unknown>): void;
 };
 
 interface InternalProofCoordinatorState {
@@ -216,6 +221,10 @@ class InternalProofCoordinator {
     return this.snapshot();
   }
 
+  async refreshFor(): Promise<CoordinatorSnapshot> {
+    return this.snapshot();
+  }
+
   async acceptAction(input: {
     actionId: string;
     logicalStep: SetupLogicalStep;
@@ -314,7 +323,7 @@ class InternalProofCoordinator {
         : null;
     const snapshot = this.snapshot();
     const terminal = this.completedEffects.length === steps.length;
-    const state = projectionState(result, terminal);
+    const state = proofProjectionState(result, terminal);
     return {
       workflowKind: objective.kind,
       state,
@@ -359,39 +368,6 @@ class InternalProofCoordinator {
   }
 }
 
-const terminalProviderFailures = new Set<
-  Extract<WorkflowRuntimeResult, { status: "WAITING_FOR_USER" }>["reason"]
->([
-  "PROVIDER_UNAVAILABLE",
-  "AUTHENTICATION_REQUIRED",
-  "MALFORMED_PROVIDER_OUTPUT",
-  "NO_SAFE_ACTION",
-  "SITE_POLICY_DENIED",
-  "TIME_BUDGET_EXHAUSTED",
-  "TURN_BUDGET_EXHAUSTED",
-]);
-
-function projectionState(
-  result: WorkflowRuntimeResult | undefined,
-  terminal: boolean,
-): DelegatedWorkflowSnapshot["state"] {
-  if (terminal) return "RECEIPTED_SUCCESS";
-  if (!result) return "WORKING";
-  switch (result.status) {
-    case "OWNER_CONTROL":
-      return "OWNER_CONTROL";
-    case "WAITING_FOR_USER":
-      return terminalProviderFailures.has(result.reason)
-        ? "FAILED"
-        : "HUMAN_GATE";
-    case "FENCED":
-      return result.reason === "CANCELED" ? "CANCELLED" : "OFFLINE";
-    case "RECEIPTED":
-    case "OWNER_STATE_ACCEPTED":
-      return "WORKING";
-  }
-}
-
 function fixtureUrl(snapshot: CoordinatorSnapshot): string {
   const url = new URL("/setup", OWNED_FIXTURE_ORIGIN);
   url.searchParams.set("logicalStep", snapshot.logicalStep);
@@ -407,6 +383,11 @@ export async function createInternalDelegatedProof(options: {
   interruptAfterEffectBeforeReceipt?: boolean;
   abruptlyExitAfterFinalEffect?: () => void;
   delayProviderAfterFirstStepMs?: number;
+  coordination?: {
+    initialSnapshot: CoordinatorSnapshot;
+    coordinator: AuthenticatedWorkflowCoordinator;
+    automationFence: AuthenticatedAutomationFence;
+  };
 }) {
   const fixtureRoot = join(
     process.resourcesPath,
@@ -417,26 +398,74 @@ export async function createInternalDelegatedProof(options: {
       import(pathToFileURL(join(fixtureRoot, "local-service.js")).href),
       import(pathToFileURL(join(fixtureRoot, "request-handler.js")).href),
     ]);
-  const binding = { ...identity, sessionKind: "OWNED_FIXTURE" as const };
+  const localCoordinator = options.coordination
+    ? undefined
+    : await InternalProofCoordinator.open(
+        join(options.userDataPath, "internal-proof/coordinator-state.json"),
+        options.interruptAfterEffectBeforeReceipt === true,
+      );
+  const pairedCoordinator = options.coordination
+    ? new PairedProofCoordination(
+        options.coordination.initialSnapshot,
+        options.coordination.coordinator,
+      )
+    : undefined;
+  const coordinator = pairedCoordinator ?? localCoordinator!;
+  const automationFence = pairedCoordinator?.createAutomationFence(
+    options.coordination!.automationFence,
+  );
+  const initialSnapshot = coordinator.snapshot();
+  const workflowIdentity = {
+    principalId: initialSnapshot.principalId,
+    deviceId: initialSnapshot.deviceId,
+    jobId: initialSnapshot.jobId,
+    browserSessionId: initialSnapshot.browserSessionId,
+  };
+  const binding = {
+    ...workflowIdentity,
+    sessionKind: "OWNED_FIXTURE" as const,
+  };
+  const initialEffectGrants = [
+    ...initialSnapshot.completedEffects,
+    {
+      logicalStep: initialSnapshot.logicalStep,
+      effectId: initialSnapshot.effectId,
+    },
+  ].filter(
+    (effect, index, all) =>
+      all.findIndex((candidate) => candidate.effectId === effect.effectId) ===
+      index,
+  );
+  const effectGrants = options.coordination
+    ? initialEffectGrants
+    : steps.map((logicalStep, index) => ({
+        logicalStep,
+        effectId: effectIds[index]!,
+      }));
   const service = (await LocalOwnedFixtureService.open(binding, {
     variantId: options.variantId ?? "setup-stacked",
-    effectGrants: steps.map((logicalStep, index) => ({
-      logicalStep,
-      effectId: effectIds[index]!,
-    })),
+    effectGrants,
     createFinalizationId: () => "local-finalization-packaged-proof",
     stateFilePath: join(
       options.userDataPath,
       "internal-proof/fixture-state.json",
     ),
   })) as FixtureService;
+  const authorizedEffects = new Set(
+    effectGrants.map((effect) => `${effect.logicalStep}:${effect.effectId}`),
+  );
+  const ensureCoordinatorEffectAuthorized = (effect: {
+    logicalStep: SetupLogicalStep;
+    effectId: string;
+  }) => {
+    const key = `${effect.logicalStep}:${effect.effectId}`;
+    if (authorizedEffects.has(key)) return;
+    service.authorizeCoordinatorEffect({ ...binding, ...effect });
+    authorizedEffects.add(key);
+  };
   const handler = createOwnedFixtureRequestHandler({ service, binding }) as (
     request: Request,
   ) => Promise<Response>;
-  const coordinator = await InternalProofCoordinator.open(
-    join(options.userDataPath, "internal-proof/coordinator-state.json"),
-    options.interruptAfterEffectBeforeReceipt === true,
-  );
   let fixtureHost: LocalBrowserHost | undefined;
   let adapter: FixtureCdpAdapter | undefined;
   const provider =
@@ -449,33 +478,47 @@ export async function createInternalDelegatedProof(options: {
   const controller = new DelegatedWorkflowController({
     binding: coordinator.snapshot(),
     coordinator,
-    automationFence: {
-      synchronize: async () => {
-        const current = coordinator.snapshot();
-        return {
-          ok: true,
-          cursor: current.cursor,
-          jobId: current.jobId,
-          controller: current.controller,
-          connection: current.connection,
-          leaseEpoch: current.leaseEpoch,
-          automationBlocked: current.automationBlocked,
-          canceled: current.canceled,
-          workflow: null,
-        };
-      },
-    },
+    automationFence:
+      automationFence ??
+      ({
+        synchronize: async () => {
+          const current = coordinator.snapshot();
+          return {
+            ok: true,
+            cursor: current.cursor,
+            jobId: current.jobId,
+            controller: current.controller,
+            connection: current.connection,
+            leaseEpoch: current.leaseEpoch,
+            automationBlocked: current.automationBlocked,
+            canceled: current.canceled,
+            workflow: null,
+          };
+        },
+      } satisfies AuthenticatedAutomationFence),
     fixture: {
-      captureOwnerState: async () => {
+      captureOwnerState: async (input) => {
         if (!adapter) throw new Error("FIXTURE_BROWSER_UNAVAILABLE");
+        ensureCoordinatorEffectAuthorized({
+          logicalStep: input.logicalStep,
+          effectId: input.effectId,
+        });
         return adapter.captureOwnerState();
       },
-      observe: async () => {
+      observe: async (input) => {
         if (!adapter) throw new Error("FIXTURE_BROWSER_UNAVAILABLE");
+        ensureCoordinatorEffectAuthorized({
+          logicalStep: input.logicalStep,
+          effectId: input.effectId,
+        });
         return adapter.observeSetup();
       },
       execute: async (input) => {
         if (!adapter) throw new Error("FIXTURE_BROWSER_UNAVAILABLE");
+        ensureCoordinatorEffectAuthorized({
+          logicalStep: input.logicalStep,
+          effectId: input.effectId,
+        });
         const postcondition = await adapter.performSetupAction(input.command);
         if (
           input.logicalStep === "FINALIZE_SETUP" &&
@@ -522,7 +565,7 @@ export async function createInternalDelegatedProof(options: {
     providerConnected: () => true,
     createFixtureHost: async () => {
       fixtureHost = await LocalBrowserHost.create({
-        ...identity,
+        ...workflowIdentity,
         site: "OWNED_FIXTURE",
         profileRoot: LocalBrowserHost.profileRoot(options.userDataPath),
         initialUrl: fixtureUrl(coordinator.snapshot()),
@@ -536,9 +579,14 @@ export async function createInternalDelegatedProof(options: {
       return fixtureHost;
     },
     readCanonicalSnapshot: async (result) => {
+      const current = await coordinator.refreshFor(result);
+      ensureCoordinatorEffectAuthorized({
+        logicalStep: current.logicalStep,
+        effectId: current.effectId,
+      });
       const projection = coordinator.projection(result);
       if (fixtureHost && !fixtureHost.view.webContents.isDestroyed()) {
-        const target = fixtureUrl(coordinator.snapshot());
+        const target = fixtureUrl(current);
         if (fixtureHost.view.webContents.getURL() !== target) {
           await fixtureHost.view.webContents.loadURL(target);
         }
@@ -550,19 +598,31 @@ export async function createInternalDelegatedProof(options: {
     delegatedWorkflow: workflow,
     evidence: async () => ({
       snapshot: workflow.snapshot(),
-      finalizationEffects: (
-        await service.attempts({
-          ...binding,
-          effectId: effectIds[3],
-        })
-      ).count,
+      finalizationEffects: await (async () => {
+        const current = coordinator.snapshot();
+        const finalization = [...current.completedEffects, current].find(
+          (effect) => effect.logicalStep === "FINALIZE_SETUP",
+        );
+        return finalization
+          ? (
+              await service.attempts({
+                ...binding,
+                effectId: finalization.effectId,
+              })
+            ).count
+          : 0;
+      })(),
       stopReason: coordinator.stopReason(),
       leaseEpoch: coordinator.snapshot().leaseEpoch,
       cursor: coordinator.snapshot().cursor,
       completedEffectCount: coordinator.snapshot().completedEffects.length,
     }),
     cancelFromObserver: async () => {
-      await coordinator.cancel();
+      if (localCoordinator) {
+        await localCoordinator.cancel();
+      } else {
+        throw new Error("PAIRED_OBSERVER_CANCELLATION_REQUIRED");
+      }
       return workflow.cancel();
     },
     close: async () => {

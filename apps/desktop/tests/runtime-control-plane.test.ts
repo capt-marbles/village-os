@@ -7,6 +7,8 @@ import { generateDeviceSigningKey } from "../src/main/device-identity.js";
 import { exportPublicDeviceJwk } from "../src/main/device-identity.js";
 import { deviceIdForPublicKey } from "../src/main/pairing-bootstrap.js";
 import {
+  assertDistinctBrowserSessionIdentity,
+  createPairedWorkflowRuntimeComposition,
   createRuntimeControlPlaneAutomationFence,
   createRuntimeControlPlaneComposition,
 } from "../src/main/runtime-control-plane.js";
@@ -20,6 +22,15 @@ describe("packaged runtime control-plane composition", () => {
         .splice(0)
         .map((path) => rm(path, { recursive: true, force: true })),
     );
+  });
+
+  it("rejects an owned fixture that reuses the personal browser session", () => {
+    expect(() =>
+      assertDistinctBrowserSessionIdentity(
+        "brs_01J00000000000000000000000",
+        "brs_01J00000000000000000000000",
+      ),
+    ).toThrow("PACKAGED_DELEGATED_WORKFLOW_FIXTURE_SESSION_NOT_DISTINCT");
   });
 
   it("loads the paired device key and resumes signed synchronization after restart", async () => {
@@ -174,5 +185,91 @@ describe("packaged runtime control-plane composition", () => {
 
     expect(composition.automationFence).toBeDefined();
     expect(composition.workflowCoordinator).toBeDefined();
+  });
+
+  it("bootstraps the delegated workflow binding from authenticated coordinator state", async () => {
+    const userDataPath = await mkdtemp(join(tmpdir(), "village-runtime-cp-"));
+    temporaryDirectories.push(userDataPath);
+    const keys = await generateDeviceSigningKey();
+    const publicJwk = await exportPublicDeviceJwk(keys.publicKey);
+    const identity = {
+      principalId: "prn_01J00000000000000000000000",
+      deviceId: await deviceIdForPublicKey(publicJwk),
+      browserSessionId: "brs_01J00000000000000000000009",
+    };
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        ok: true,
+        cursor: 7,
+        jobId: "job_01J00000000000000000000009",
+        controller: "AGENT",
+        connection: "ONLINE",
+        leaseEpoch: 3,
+        automationBlocked: false,
+        canceled: false,
+        workflow: {
+          objective: {
+            kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+            version: 1,
+          },
+          jobRevision: 2,
+          logicalStep: "SELECT_ROLE",
+          effectId: "efx_01J00000000000000000000009",
+          completedEffects: [
+            {
+              logicalStep: "SET_DISPLAY_NAME",
+              effectId: "efx_01J00000000000000000000008",
+            },
+          ],
+          actionPhase: "ACCEPTED",
+          outstandingAction: null,
+        },
+      }),
+    );
+
+    const composition = await createPairedWorkflowRuntimeComposition({
+      controlPlaneUrl: new URL("https://village.test"),
+      userDataPath,
+      identity,
+      deviceIdentitySource: {
+        load: async () => ({
+          privateKey: keys.privateKey,
+          publicKey: keys.publicKey,
+          publicJwk,
+          protectionBackend: "keychain",
+        }),
+      },
+      connectionId: "desktop-paired-workflow",
+      request,
+    });
+
+    expect(composition.initialSnapshot).toEqual({
+      authenticated: true,
+      cursor: 7,
+      principalId: identity.principalId,
+      deviceId: identity.deviceId,
+      jobId: "job_01J00000000000000000000009",
+      browserSessionId: identity.browserSessionId,
+      objective: {
+        kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+        version: 1,
+      },
+      jobRevision: 2,
+      logicalStep: "SELECT_ROLE",
+      effectId: "efx_01J00000000000000000000009",
+      leaseEpoch: 3,
+      connection: "ONLINE",
+      controller: "AGENT",
+      automationBlocked: false,
+      canceled: false,
+      completedEffects: [
+        {
+          logicalStep: "SET_DISPLAY_NAME",
+          effectId: "efx_01J00000000000000000000008",
+        },
+      ],
+      actionPhase: "ACCEPTED",
+      outstandingAction: null,
+    });
   });
 });

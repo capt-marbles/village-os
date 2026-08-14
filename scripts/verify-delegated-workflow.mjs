@@ -20,7 +20,11 @@ function requireTrue(value, code) {
   if (value !== true) throw new Error(code);
 }
 
-export function assertPackagedDelegatedWorkflowRun(report, provider) {
+export function assertPackagedDelegatedWorkflowRun(
+  report,
+  provider,
+  expectedFixtureBrowserSessionId,
+) {
   if (report.status !== "PASS") {
     throw new Error(
       `PACKAGED_DELEGATED_WORKFLOW_DID_NOT_COMPLETE_${report.stopReason ?? report.terminal?.state ?? "UNKNOWN"}`,
@@ -28,6 +32,14 @@ export function assertPackagedDelegatedWorkflowRun(report, provider) {
   }
   if (report.provider !== provider) {
     throw new Error("PACKAGED_DELEGATED_WORKFLOW_PROVIDER_MISMATCH");
+  }
+  if (
+    provider === "CHATGPT_ACCOUNT" &&
+    (report.coordinator !== "PAIRED" ||
+      !/^job_[0-9A-HJKMNP-TV-Z]{26}$/.test(report.coordinatorJobId ?? "") ||
+      report.fixtureBrowserSessionId !== expectedFixtureBrowserSessionId)
+  ) {
+    throw new Error("PACKAGED_DELEGATED_WORKFLOW_COORDINATOR_EVIDENCE_MISSING");
   }
   if (report.readyLabel !== "Ready for delegated setup") {
     throw new Error("PACKAGED_DELEGATED_WORKFLOW_NOT_OWNER_LEGIBLE");
@@ -160,11 +172,13 @@ export function packagedDelegatedWorkflowArguments({
   reportPath,
   profilePath,
   provider,
+  coordinator = "LOCAL_PROOF",
+  fixtureBrowserSessionId,
 }) {
   if (!path.isAbsolute(profilePath)) {
     throw new Error("PACKAGED_DELEGATED_WORKFLOW_PROFILE_UNSAFE");
   }
-  return [
+  const arguments_ = [
     "--village-proof-report",
     reportPath,
     "--village-proof-provider",
@@ -172,6 +186,23 @@ export function packagedDelegatedWorkflowArguments({
     "--village-proof-profile",
     profilePath,
   ];
+  if (coordinator === "PAIRED") {
+    if (
+      typeof fixtureBrowserSessionId !== "string" ||
+      !/^brs_[0-9A-HJKMNP-TV-Z]{26}$/.test(fixtureBrowserSessionId)
+    ) {
+      throw new Error("PACKAGED_DELEGATED_WORKFLOW_FIXTURE_SESSION_REQUIRED");
+    }
+    arguments_.push(
+      "--village-proof-coordinator",
+      "paired",
+      "--village-proof-fixture-session",
+      fixtureBrowserSessionId,
+    );
+  } else if (coordinator !== "LOCAL_PROOF" || fixtureBrowserSessionId) {
+    throw new Error("PACKAGED_DELEGATED_WORKFLOW_COORDINATOR_INVALID");
+  }
+  return arguments_;
 }
 
 export function packagedDelegatedWorkflowRecoveryArguments({
@@ -208,6 +239,8 @@ export async function runPackagedDelegatedWorkflow({
   profilePath,
   interruption,
   resumedFrom,
+  coordinator = "LOCAL_PROOF",
+  fixtureBrowserSessionId,
   timeoutMs = 180_000,
 } = {}) {
   await verifyPackagedMac(applicationPath);
@@ -224,6 +257,8 @@ export async function runPackagedDelegatedWorkflow({
       reportPath,
       profilePath: effectiveProfilePath,
       provider,
+      coordinator,
+      ...(fixtureBrowserSessionId ? { fixtureBrowserSessionId } : {}),
     });
     if (interruption) {
       arguments_.push("--village-proof-interrupt", interruption);
@@ -238,7 +273,11 @@ export async function runPackagedDelegatedWorkflow({
     const report = JSON.parse(await readFile(reportPath, "utf8"));
     return interruption
       ? assertPackagedDelegatedWorkflowInterruption(report, provider)
-      : assertPackagedDelegatedWorkflowRun(report, provider);
+      : assertPackagedDelegatedWorkflowRun(
+          report,
+          provider,
+          fixtureBrowserSessionId,
+        );
   } finally {
     await rm(temporaryDirectory, { recursive: true, force: true });
   }
@@ -571,11 +610,20 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     : "DETERMINISTIC";
   const applicationIndex = process.argv.indexOf("--app");
   const profileIndex = process.argv.indexOf("--profile");
+  const fixtureSessionIndex = process.argv.indexOf("--fixture-session");
   const repeatIndex = process.argv.indexOf("--repeat");
   const recovery = process.argv.includes("--recovery");
   const abruptRecovery = process.argv.includes("--abrupt-recovery");
   const ownerRecovery = process.argv.includes("--owner-recovery");
   const observerRecovery = process.argv.includes("--observer-recovery");
+  if (
+    provider === "CHATGPT_ACCOUNT" &&
+    (recovery || abruptRecovery || ownerRecovery || observerRecovery)
+  ) {
+    throw new Error(
+      "PACKAGED_DELEGATED_WORKFLOW_PAIRED_RECOVERY_NOT_CONFIGURED",
+    );
+  }
   const repeat =
     repeatIndex === -1 ? 1 : Number.parseInt(process.argv[repeatIndex + 1], 10);
   if (!Number.isInteger(repeat) || repeat < 1 || repeat > 10) {
@@ -636,6 +684,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       );
       process.exitCode = 0;
     } else {
+      if (provider === "CHATGPT_ACCOUNT" && profileIndex === -1) {
+        throw new Error("PACKAGED_DELEGATED_WORKFLOW_PAIRED_PROFILE_REQUIRED");
+      }
+      if (provider === "CHATGPT_ACCOUNT" && fixtureSessionIndex === -1) {
+        throw new Error("PACKAGED_DELEGATED_WORKFLOW_FIXTURE_SESSION_REQUIRED");
+      }
       const profilePath =
         profileIndex === -1
           ? repeat === 1
@@ -655,6 +709,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
                 : process.argv[applicationIndex + 1],
             provider,
             ...(profilePath ? { profilePath } : {}),
+            ...(provider === "CHATGPT_ACCOUNT"
+              ? {
+                  coordinator: "PAIRED",
+                  fixtureBrowserSessionId:
+                    process.argv[fixtureSessionIndex + 1],
+                }
+              : {}),
           }),
         );
       }

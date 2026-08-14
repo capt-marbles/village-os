@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  assertPackagedDelegatedWorkflowRun,
   assertPackagedDelegatedWorkflowAbruptRecovery,
   assertPackagedDelegatedWorkflowOwnerRecovery,
   assertPackagedDelegatedWorkflowObserverRecovery,
@@ -35,6 +36,57 @@ test("the packaged proof rejects relative profile paths", () => {
         provider: "DETERMINISTIC",
       }),
     /PACKAGED_DELEGATED_WORKFLOW_PROFILE_UNSAFE/,
+  );
+});
+
+test("the genuine proof selects the paired coordinator and a distinct fixture session", () => {
+  const arguments_ = packagedDelegatedWorkflowArguments({
+    reportPath: "/tmp/village-proof-report.json",
+    profilePath: "/tmp/village-paired-profile",
+    provider: "CHATGPT_ACCOUNT",
+    coordinator: "PAIRED",
+    fixtureBrowserSessionId: "brs_01J00000000000000000000009",
+  });
+
+  assert.deepEqual(arguments_.slice(-4), [
+    "--village-proof-coordinator",
+    "paired",
+    "--village-proof-fixture-session",
+    "brs_01J00000000000000000000009",
+  ]);
+});
+
+test("the genuine report must prove the paired coordinator and fixture session", () => {
+  const fixtureBrowserSessionId = "brs_01J00000000000000000000009";
+  const report = {
+    status: "PASS",
+    provider: "CHATGPT_ACCOUNT",
+    readyLabel: "Ready for delegated setup",
+    terminal: { state: "RECEIPTED_SUCCESS" },
+    finalizationEffects: 1,
+    fixtureSurfaceVisible: true,
+  };
+
+  assert.throws(
+    () =>
+      assertPackagedDelegatedWorkflowRun(
+        report,
+        "CHATGPT_ACCOUNT",
+        fixtureBrowserSessionId,
+      ),
+    /COORDINATOR_EVIDENCE_MISSING/,
+  );
+  assert.doesNotThrow(() =>
+    assertPackagedDelegatedWorkflowRun(
+      {
+        ...report,
+        coordinator: "PAIRED",
+        coordinatorJobId: "job_01J00000000000000000000009",
+        fixtureBrowserSessionId,
+      },
+      "CHATGPT_ACCOUNT",
+      fixtureBrowserSessionId,
+    ),
   );
 });
 

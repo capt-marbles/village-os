@@ -25,6 +25,32 @@ describe("paired desktop connector", () => {
         .map((path) => rm(path, { recursive: true, force: true })),
     );
   });
+  it("bounds a stalled control-plane request", async () => {
+    const keys = await generateDeviceSigningKey();
+    const request = vi.fn<typeof fetch>(() => new Promise(() => {}));
+    const client = new ControlPlaneClient(
+      "https://village.test",
+      "connector-desktop",
+      keys.privateKey,
+      { reserveNext: async () => 1 },
+      request,
+      5,
+    );
+
+    await expect(
+      client.connect(
+        {
+          principalId: "prn_01J00000000000000000000000",
+          deviceId: "dev_01J00000000000000000000000",
+          jobId: "job_01J00000000000000000000000",
+          browserSessionId: "brs_01J00000000000000000000000",
+        },
+        "act_01J00000000000000000000000",
+        "OWNED_FIXTURE",
+        1,
+      ),
+    ).rejects.toThrow("CONTROL_PLANE_TIMEOUT");
+  });
   it("reserves monotonic sequence before sending and binds one connection", async () => {
     const keys = await generateDeviceSigningKey();
     let sequence = 0;

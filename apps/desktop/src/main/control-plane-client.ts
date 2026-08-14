@@ -425,6 +425,7 @@ export class ControlPlaneClient {
     private readonly privateKey: CryptoKey,
     private readonly sequences: ProtocolSequenceStore,
     private readonly request: typeof fetch = fetch,
+    private readonly requestTimeoutMs = 30_000,
   ) {}
 
   async connect(
@@ -514,7 +515,7 @@ export class ControlPlaneClient {
       },
       this.privateKey,
     );
-    const response = await this.request(
+    const response = await this.requestWithTimeout(
       new URL(
         `/api/browser-sessions/${identity.browserSessionId}/automation-sync`,
         this.baseUrl,
@@ -565,7 +566,7 @@ export class ControlPlaneClient {
       },
       this.privateKey,
     );
-    const response = await this.request(
+    const response = await this.requestWithTimeout(
       new URL(
         `/api/browser-sessions/${identity.browserSessionId}/workflow-operations`,
         this.baseUrl,
@@ -624,7 +625,7 @@ export class ControlPlaneClient {
     operation: "connect" | "commands" | "results",
     envelope: SignedCommandEnvelope | SignedResultEnvelope,
   ) {
-    const response = await this.request(
+    const response = await this.requestWithTimeout(
       new URL(
         `/api/browser-sessions/${browserSessionId}/${operation}`,
         this.baseUrl,
@@ -649,5 +650,34 @@ export class ControlPlaneClient {
       throw new Error(result.code ?? "CONTROL_PLANE_REJECTED");
     }
     return result;
+  }
+
+  private async requestWithTimeout(
+    url: URL,
+    init: RequestInit,
+  ): Promise<Response> {
+    const controller = new AbortController();
+    let timedOut = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+        reject(new Error("CONTROL_PLANE_TIMEOUT"));
+      }, this.requestTimeoutMs);
+    });
+    try {
+      return await Promise.race([
+        this.request(url, { ...init, signal: controller.signal }),
+        deadline,
+      ]);
+    } catch (error) {
+      if (timedOut || (error instanceof Error && error.name === "AbortError")) {
+        throw new Error("CONTROL_PLANE_TIMEOUT");
+      }
+      throw error;
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
   }
 }

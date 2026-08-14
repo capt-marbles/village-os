@@ -9,6 +9,7 @@ import {
   FileProtocolSequenceStore,
 } from "./control-plane-client.js";
 import { join } from "node:path";
+import type { CoordinatorSnapshot } from "./delegated-workflow-controller.js";
 
 interface DeviceIdentitySource {
   load(): Promise<DeviceIdentity>;
@@ -21,6 +22,15 @@ export interface RuntimeControlPlaneOptions {
   deviceIdentitySource: DeviceIdentitySource;
   connectionId?: string;
   request?: typeof fetch;
+}
+
+export function assertDistinctBrowserSessionIdentity(
+  personalBrowserSessionId: string,
+  fixtureBrowserSessionId: string,
+): void {
+  if (personalBrowserSessionId === fixtureBrowserSessionId) {
+    throw new Error("PACKAGED_DELEGATED_WORKFLOW_FIXTURE_SESSION_NOT_DISTINCT");
+  }
 }
 
 export async function createRuntimeControlPlaneAutomationFence(
@@ -55,5 +65,40 @@ export async function createRuntimeControlPlaneComposition(
   return {
     automationFence: new ControlPlaneAutomationFence(client, cursors),
     workflowCoordinator: new ControlPlaneWorkflowCoordinator(client, cursors),
+  };
+}
+
+export async function createPairedWorkflowRuntimeComposition(
+  options: RuntimeControlPlaneOptions,
+): Promise<{
+  automationFence: ControlPlaneAutomationFence;
+  workflowCoordinator: ControlPlaneWorkflowCoordinator;
+  initialSnapshot: CoordinatorSnapshot;
+}> {
+  const composition = await createRuntimeControlPlaneComposition(options);
+  const state = await composition.automationFence.synchronize({
+    principalId: options.identity.principalId,
+    deviceId: options.identity.deviceId,
+    browserSessionId: options.identity.browserSessionId,
+  });
+  if (state.workflow === null || state.connection === "ABSENT") {
+    throw new Error("PAIRED_WORKFLOW_BINDING_UNAVAILABLE");
+  }
+  return {
+    ...composition,
+    initialSnapshot: {
+      authenticated: true,
+      principalId: options.identity.principalId,
+      deviceId: options.identity.deviceId,
+      jobId: state.jobId,
+      browserSessionId: options.identity.browserSessionId,
+      ...state.workflow,
+      cursor: state.cursor,
+      connection: state.connection,
+      controller: state.controller,
+      leaseEpoch: state.leaseEpoch,
+      automationBlocked: state.automationBlocked,
+      canceled: state.canceled,
+    },
   };
 }

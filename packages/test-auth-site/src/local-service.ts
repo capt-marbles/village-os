@@ -444,6 +444,15 @@ export class LocalOwnedFixtureService {
     this.requireBinding(candidate);
   }
 
+  authorizeCoordinatorEffect(candidate: FixtureStepBinding): void {
+    const binding = this.requireStepBinding(candidate);
+    const existing = this.effectGrants.get(binding.effectId);
+    if (existing !== undefined && existing !== binding.logicalStep) {
+      throw new FixtureServiceError("EFFECT_BINDING_CONFLICT");
+    }
+    this.effectGrants.set(binding.effectId, binding.logicalStep);
+  }
+
   private parseInitialBinding(binding: FixtureCallBinding): FixtureCallBinding {
     try {
       if (binding.sessionKind !== "OWNED_FIXTURE") throw new Error();
