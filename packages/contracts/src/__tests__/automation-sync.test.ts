@@ -50,6 +50,7 @@ describe("automation synchronization contracts", () => {
         connection: "ONLINE",
         leaseEpoch: 5,
         automationBlocked: true,
+        canceled: true,
       }),
     ).toEqual({
       ok: true,
@@ -59,6 +60,7 @@ describe("automation synchronization contracts", () => {
       connection: "ONLINE",
       leaseEpoch: 5,
       automationBlocked: true,
+      canceled: true,
     });
     expect(
       automationSyncResponseSchema.safeParse({
@@ -69,6 +71,7 @@ describe("automation synchronization contracts", () => {
         connection: "ONLINE",
         leaseEpoch: 5,
         automationBlocked: true,
+        canceled: true,
         pageTitle: "private",
       }).success,
     ).toBe(false);

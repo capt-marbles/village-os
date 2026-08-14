@@ -66,6 +66,9 @@ async function harness(
   options: {
     snapshots?: CoordinatorSnapshot[];
     fixture?: Partial<OwnedFixtureRuntime>;
+    automationFence?: {
+      synchronize: ReturnType<typeof vi.fn>;
+    };
     maxProviderTurns?: number;
     now?: () => number;
   } = {},
@@ -111,9 +114,22 @@ async function harness(
     leaseEpoch: context.leaseEpoch,
     command: { capability: "REPLACE_DISPLAY_NAME" as const },
   }));
+  const automationFence = options.automationFence ?? {
+    synchronize: vi.fn(async () => ({
+      ok: true as const,
+      cursor: 1,
+      jobId: ids.jobId,
+      controller: "AGENT" as const,
+      connection: "ONLINE" as const,
+      leaseEpoch: 1,
+      automationBlocked: false,
+      canceled: false,
+    })),
+  };
   const controller = new DelegatedWorkflowController({
     binding,
     coordinator,
+    automationFence,
     fixture,
     journal: new ActionJournal(join(root, "journal.json")),
     provider,
@@ -127,7 +143,14 @@ async function harness(
       maxDurationMs: 1_000,
     },
   });
-  return { controller, coordinator, fixture, provider, root };
+  return {
+    controller,
+    coordinator,
+    fixture,
+    provider,
+    automationFence,
+    root,
+  };
 }
 
 describe("delegated workflow runtime", () => {
@@ -243,6 +266,98 @@ describe("delegated workflow runtime", () => {
     expect(fixture.execute).not.toHaveBeenCalled();
   });
 
+  it("applies a remote cancellation before the next local mutation", async () => {
+    const synchronize = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        cursor: 1,
+        jobId: ids.jobId,
+        controller: "AGENT",
+        connection: "ONLINE",
+        leaseEpoch: 1,
+        automationBlocked: false,
+        canceled: false,
+      })
+      .mockResolvedValue({
+        ok: true,
+        cursor: 2,
+        jobId: ids.jobId,
+        controller: "NONE",
+        connection: "ONLINE",
+        leaseEpoch: 2,
+        automationBlocked: true,
+        canceled: true,
+      });
+    const { controller, coordinator, fixture } = await harness({
+      automationFence: { synchronize },
+    });
+
+    await expect(controller.runOnce()).resolves.toEqual({
+      status: "FENCED",
+      reason: "CANCELED",
+    });
+    expect(synchronize).toHaveBeenCalledTimes(2);
+    expect(coordinator.acceptAction).not.toHaveBeenCalled();
+    expect(fixture.execute).not.toHaveBeenCalled();
+  });
+
+  it("rechecks remote fencing after action acceptance and before dispatch", async () => {
+    const available = {
+      ok: true as const,
+      cursor: 1,
+      jobId: ids.jobId,
+      controller: "AGENT" as const,
+      connection: "ONLINE" as const,
+      leaseEpoch: 1,
+      automationBlocked: false,
+      canceled: false,
+    };
+    const synchronize = vi
+      .fn()
+      .mockResolvedValueOnce(available)
+      .mockResolvedValueOnce(available)
+      .mockResolvedValue({
+        ...available,
+        cursor: 3,
+        controller: "NONE",
+        leaseEpoch: 2,
+        automationBlocked: true,
+        canceled: true,
+      });
+    const { controller, coordinator, fixture } = await harness({
+      automationFence: { synchronize },
+    });
+
+    await expect(controller.runOnce()).resolves.toEqual({
+      status: "FENCED",
+      reason: "CANCELED",
+    });
+    expect(coordinator.acceptAction).toHaveBeenCalledTimes(1);
+    expect(fixture.execute).not.toHaveBeenCalled();
+    expect(
+      (await controller.journalEntries()).map((entry) => entry.phase),
+    ).toEqual(["ACCEPTED"]);
+  });
+
+  it("fails closed when authenticated automation synchronization is unavailable", async () => {
+    const { controller, coordinator, fixture, provider } = await harness({
+      automationFence: {
+        synchronize: vi.fn(async () => {
+          throw new Error("NETWORK_UNAVAILABLE");
+        }),
+      },
+    });
+
+    await expect(controller.runOnce()).resolves.toEqual({
+      status: "FENCED",
+      reason: "COORDINATOR_UNAVAILABLE",
+    });
+    expect(coordinator.synchronize).not.toHaveBeenCalled();
+    expect(provider).not.toHaveBeenCalled();
+    expect(fixture.execute).not.toHaveBeenCalled();
+  });
+
   it("keeps valid owner edits and gates invalid required fields on hand-back", async () => {
     const valid = await harness({
       fixture: { observe: vi.fn(async () => observation("MISMATCH")) },
@@ -312,6 +427,18 @@ describe("delegated workflow runtime", () => {
     const controller = new DelegatedWorkflowController({
       binding,
       coordinator,
+      automationFence: {
+        synchronize: vi.fn(async () => ({
+          ok: true,
+          cursor: 1,
+          jobId: ids.jobId,
+          controller: "AGENT",
+          connection: "ONLINE",
+          leaseEpoch: 1,
+          automationBlocked: false,
+          canceled: false,
+        })),
+      },
       fixture,
       journal,
       provider: vi.fn(),

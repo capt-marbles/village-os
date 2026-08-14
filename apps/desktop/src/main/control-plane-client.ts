@@ -24,6 +24,17 @@ export interface AutomationSyncCursorStore {
   save(browserSessionId: string, cursor: number): Promise<void>;
 }
 
+export class ControlPlaneAutomationFence {
+  constructor(
+    private readonly client: Pick<ControlPlaneClient, "synchronizeAutomation">,
+    private readonly cursors: AutomationSyncCursorStore,
+  ) {}
+
+  synchronize(identity: AutomationSyncIdentity) {
+    return this.client.synchronizeAutomation(identity, this.cursors);
+  }
+}
+
 export class MemoryAutomationSyncCursorStore implements AutomationSyncCursorStore {
   constructor(private cursor = 0) {}
 

@@ -215,6 +215,21 @@ async function deterministicWorkflowHarness(variantId = "setup-stacked") {
     new DelegatedWorkflowController({
       binding: coordinator.current(),
       coordinator,
+      automationFence: {
+        synchronize: async () => {
+          const current = coordinator.current();
+          return {
+            ok: true,
+            cursor: current.cursor,
+            jobId: current.jobId,
+            controller: "AGENT" as const,
+            connection: "ONLINE" as const,
+            leaseEpoch: current.leaseEpoch,
+            automationBlocked: false,
+            canceled: false,
+          };
+        },
+      },
       fixture,
       journal,
       provider,

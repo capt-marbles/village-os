@@ -657,6 +657,7 @@ describe("authenticated pairing routes", () => {
       connection: "ONLINE",
       leaseEpoch: 5,
       automationBlocked: true,
+      canceled: true,
     });
     const replay = await synchronize();
     expect(replay.status).toBe(409);
@@ -687,6 +688,7 @@ describe("authenticated pairing routes", () => {
       cursor: 2,
       leaseEpoch: 5,
       automationBlocked: true,
+      canceled: true,
     });
   });
 });

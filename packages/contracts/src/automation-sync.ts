@@ -45,6 +45,7 @@ export const automationSyncResponseSchema = z.strictObject({
   connection: connectionStateSchema,
   leaseEpoch: z.number().int().nonnegative(),
   automationBlocked: z.boolean(),
+  canceled: z.boolean(),
 });
 
 export type UnsignedAutomationSyncRequest = z.infer<

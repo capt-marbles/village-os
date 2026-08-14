@@ -152,6 +152,7 @@ describe("paired desktop connector", () => {
         connection: "ONLINE",
         leaseEpoch: 5,
         automationBlocked: true,
+        canceled: true,
       }),
     );
     const client = new ControlPlaneClient(
@@ -217,6 +218,7 @@ describe("paired desktop connector", () => {
           connection: "ONLINE",
           leaseEpoch: 5,
           automationBlocked: true,
+          canceled: true,
         }),
       );
     const client = new ControlPlaneClient(

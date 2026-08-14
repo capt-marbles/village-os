@@ -449,6 +449,21 @@ export async function createInternalDelegatedProof(options: {
   const controller = new DelegatedWorkflowController({
     binding: coordinator.snapshot(),
     coordinator,
+    automationFence: {
+      synchronize: async () => {
+        const current = coordinator.snapshot();
+        return {
+          ok: true,
+          cursor: current.cursor,
+          jobId: current.jobId,
+          controller: current.controller,
+          connection: current.connection,
+          leaseEpoch: current.leaseEpoch,
+          automationBlocked: current.automationBlocked,
+          canceled: current.canceled,
+        };
+      },
+    },
     fixture: {
       captureOwnerState: async () => {
         if (!adapter) throw new Error("FIXTURE_BROWSER_UNAVAILABLE");

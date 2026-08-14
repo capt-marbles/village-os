@@ -430,5 +430,6 @@ export async function dispatchAuthenticatedAutomationSync(
     connection: snapshot.control.connection,
     leaseEpoch: snapshot.control.leaseEpoch,
     automationBlocked: snapshot.control.automationBlocked,
+    canceled: snapshot.canceled,
   };
 }

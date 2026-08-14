@@ -1,4 +1,5 @@
 import {
+  type AutomationSyncResponse,
   isSetupCommandAllowedForStep,
   setupObservationSchema,
   validateSetupModelProviderResult,
@@ -107,6 +108,14 @@ export interface AuthenticatedWorkflowCoordinator {
   >;
 }
 
+export interface AuthenticatedAutomationFence {
+  synchronize(input: {
+    principalId: string;
+    deviceId: string;
+    browserSessionId: string;
+  }): Promise<AutomationSyncResponse>;
+}
+
 type SetupObservation = ReturnType<typeof setupObservationSchema.parse>;
 
 export interface OwnedFixtureRuntime {
@@ -130,6 +139,7 @@ type ProviderContext = Parameters<typeof validateSetupModelProviderResult>[0];
 export interface DelegatedWorkflowControllerOptions {
   binding: WorkflowRuntimeBinding;
   coordinator: AuthenticatedWorkflowCoordinator;
+  automationFence: AuthenticatedAutomationFence;
   fixture: OwnedFixtureRuntime;
   journal: ActionJournal;
   provider(context: ProviderContext): Promise<ProviderResult>;
@@ -330,10 +340,11 @@ export class DelegatedWorkflowController {
     const context = this.providerContext(observed.observation);
     const rawResult = await this.options.provider(context);
     const result = validateSetupModelProviderResult(context, rawResult);
-    const current = await this.synchronize();
-    if (generation !== this.generation || !current.ok) {
+    if (generation !== this.generation) {
       return { status: "WAITING_FOR_USER", reason: "STALE_PROVIDER_RESULT" };
     }
+    const current = await this.synchronize();
+    if (!current.ok) return current.result;
     if (result.status === "waiting") {
       if (result.reason === "HUMAN_GATE_REQUIRED") {
         return { status: "WAITING_FOR_USER", reason: "HUMAN_GATE_REQUIRED" };
@@ -426,7 +437,7 @@ export class DelegatedWorkflowController {
   }
 
   async handBack(): Promise<WorkflowRuntimeResult> {
-    const synchronized = await this.synchronize();
+    const synchronized = await this.synchronize(false);
     if (!synchronized.ok) return synchronized.result;
     if (synchronized.snapshot.canceled) {
       return { status: "FENCED", reason: "CANCELED" };
@@ -551,6 +562,8 @@ export class DelegatedWorkflowController {
     actionId: string,
     command: OwnedFixtureSetupCommand,
   ): Promise<WorkflowRuntimeResult> {
+    const remoteFence = await this.refreshAutomationFence();
+    if (remoteFence) return remoteFence;
     const mutationClass =
       this.binding.logicalStep === "FINALIZE_SETUP"
         ? "NON_IDEMPOTENT"
@@ -670,10 +683,16 @@ export class DelegatedWorkflowController {
     return { status: "RECEIPTED", actionId, effectId: this.binding.effectId };
   }
 
-  private async synchronize(): Promise<
+  private async synchronize(
+    requireAutomation = true,
+  ): Promise<
     | { ok: true; snapshot: CoordinatorSnapshot }
     | { ok: false; result: WorkflowRuntimeResult }
   > {
+    if (requireAutomation) {
+      const remoteFence = await this.refreshAutomationFence();
+      if (remoteFence) return { ok: false, result: remoteFence };
+    }
     let snapshot: CoordinatorSnapshot;
     try {
       snapshot = await this.options.coordinator.synchronize({
@@ -719,6 +738,42 @@ export class DelegatedWorkflowController {
       leaseEpoch: snapshot.leaseEpoch,
     };
     return { ok: true, snapshot };
+  }
+
+  private async refreshAutomationFence(): Promise<
+    WorkflowRuntimeResult | undefined
+  > {
+    let state: AutomationSyncResponse;
+    try {
+      state = await this.options.automationFence.synchronize({
+        principalId: this.binding.principalId,
+        deviceId: this.binding.deviceId,
+        browserSessionId: this.binding.browserSessionId,
+      });
+    } catch {
+      this.executor.markOfflineTakeover();
+      return { status: "FENCED", reason: "COORDINATOR_UNAVAILABLE" };
+    }
+    if (
+      state.jobId !== this.binding.jobId ||
+      state.leaseEpoch < this.binding.leaseEpoch
+    ) {
+      this.executor.markOfflineTakeover();
+      return { status: "FENCED", reason: "COORDINATOR_UNAVAILABLE" };
+    }
+    if (state.canceled) {
+      this.cancelFutureAutomation();
+      return { status: "FENCED", reason: "CANCELED" };
+    }
+    if (
+      state.connection !== "ONLINE" ||
+      state.controller !== "AGENT" ||
+      state.automationBlocked
+    ) {
+      this.executor.markOfflineTakeover();
+      return { status: "FENCED", reason: "AUTOMATION_UNAVAILABLE" };
+    }
+    return undefined;
   }
 
   private availability(

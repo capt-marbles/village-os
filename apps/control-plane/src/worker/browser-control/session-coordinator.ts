@@ -1357,6 +1357,7 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
         site: Site;
         eventSequence: number;
         projectionLag: number;
+        canceled: boolean;
       }
     | { ok: false; code: string } {
     const parsed = principalIdSchema.safeParse(principalId);
@@ -1373,6 +1374,12 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
       site: metadata.site,
       eventSequence: metadata.event_sequence,
       projectionLag: metadata.event_sequence - metadata.projected_sequence,
+      canceled:
+        (this.ctx.storage.sql
+          .exec<{ count: number }>(
+            "SELECT COUNT(*) AS count FROM coordinator_events WHERE type = 'AUTOMATION_CANCELED'",
+          )
+          .toArray()[0]?.count ?? 0) > 0,
     };
   }
 
