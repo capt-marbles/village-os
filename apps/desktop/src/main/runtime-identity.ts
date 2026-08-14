@@ -8,6 +8,7 @@ export interface RuntimeIdentity {
   principalId: string;
   deviceId: string;
   browserSessionId: string;
+  controlPlaneOrigin?: string;
 }
 
 export interface PairedRuntimeIdentitySource {
@@ -35,14 +36,41 @@ function parsePairedRuntimeIdentity(value: unknown): RuntimeIdentity {
   const browserSessionId = browserSessionIdSchema.safeParse(
     candidate.browserSessionId,
   );
-  if (!principalId.success || !deviceId.success || !browserSessionId.success) {
+  const controlPlaneOrigin = parseControlPlaneOrigin(
+    candidate.controlPlaneOrigin,
+  );
+  if (
+    !principalId.success ||
+    !deviceId.success ||
+    !browserSessionId.success ||
+    controlPlaneOrigin === null
+  ) {
     throw new Error("PAIRED_RUNTIME_IDENTITY_REQUIRED");
   }
   return {
     principalId: principalId.data,
     deviceId: deviceId.data,
     browserSessionId: browserSessionId.data,
+    ...(controlPlaneOrigin ? { controlPlaneOrigin } : {}),
   };
+}
+
+export function parseControlPlaneOrigin(
+  value: unknown,
+): string | undefined | null {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") return null;
+  try {
+    const url = new URL(value);
+    const loopback =
+      url.hostname === "127.0.0.1" || url.hostname === "localhost";
+    return url.origin === value &&
+      (url.protocol === "https:" || (url.protocol === "http:" && loopback))
+      ? url.origin
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function resolveRuntimeIdentity(

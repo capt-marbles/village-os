@@ -20,6 +20,7 @@ describe("runtime identity store", () => {
       principalId: "prn_01J00000000000000000000000",
       deviceId: "dev_01J00000000000000000000000",
       browserSessionId: "brs_01J00000000000000000000000",
+      controlPlaneOrigin: "https://village.example",
     };
     await store.store(identity);
     await expect(store.load()).resolves.toEqual(identity);

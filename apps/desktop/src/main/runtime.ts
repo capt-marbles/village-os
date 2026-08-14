@@ -33,6 +33,7 @@ import {
   createRuntimeModelProviderComposition,
   type RuntimeModelProviderComposition,
 } from "./runtime-model-provider.js";
+import { createRuntimeControlPlaneAutomationFence } from "./runtime-control-plane.js";
 
 registerVillageScheme(protocol);
 installGlobalSecurityPolicy(app);
@@ -42,8 +43,8 @@ app.on("open-url", (event, url) => {
   pairingInbox.accept(url);
 });
 
-function controlPlaneUrl(): URL {
-  const configured = process.env.VILLAGE_CONTROL_PLANE_URL;
+function controlPlaneUrl(storedOrigin?: string): URL {
+  const configured = storedOrigin ?? process.env.VILLAGE_CONTROL_PLANE_URL;
   if (!configured) throw new Error("VILLAGE_CONTROL_PLANE_URL_REQUIRED");
   const url = new URL(configured);
   const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost";
@@ -98,15 +99,18 @@ export async function startVillageRuntime(
       if (!app.setAsDefaultProtocolClient("village-pair")) {
         throw new Error("PAIRING_DEEP_LINK_REGISTRATION_FAILED");
       }
+      const pairingUrl = controlPlaneUrl();
       const pairingService = new PairingBootstrapService(
         new DeviceIdentityVault(
           join(identityDirectory, "device.json"),
           protector,
         ),
-        new PairingClient(controlPlaneUrl().origin),
+        new PairingClient(pairingUrl.origin),
         runtimeStore,
         deviceIdForPublicKey,
         hostname().slice(0, 80) || "Village Mac",
+        undefined,
+        pairingUrl.origin,
       );
       identity = await createPairingWindow({
         preloadPath,
@@ -118,6 +122,18 @@ export async function startVillageRuntime(
   const modelProviders =
     internalComposition?.modelProviders ??
     createRuntimeModelProviderComposition((url) => shell.openExternal(url));
+  const automationFence =
+    app.isPackaged && !internalComposition
+      ? await createRuntimeControlPlaneAutomationFence({
+          controlPlaneUrl: controlPlaneUrl(identity.controlPlaneOrigin),
+          userDataPath: app.getPath("userData"),
+          identity,
+          deviceIdentitySource: new DeviceIdentityVault(
+            join(app.getPath("userData"), "identity/device.json"),
+            new ElectronSafeStorageProtector(),
+          ),
+        })
+      : undefined;
   return createVillageAppWindow({
     ...identity,
     site: "LINKEDIN",
@@ -126,6 +142,7 @@ export async function startVillageRuntime(
     preloadPath,
     modelProviderAccount: modelProviders.modelProviderAccount,
     personalAgentTask: modelProviders.personalAgentTask,
+    ...(automationFence ? { automationFence } : {}),
     ...(internalComposition
       ? { delegatedWorkflow: internalComposition.delegatedWorkflow }
       : {}),

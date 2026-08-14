@@ -42,6 +42,7 @@ import type {
   DelegatedWorkflowTask,
 } from "@village/ui";
 import type { BrowserHostManager } from "./browser-host-manager.js";
+import type { AuthenticatedAutomationFence } from "./delegated-workflow-controller.js";
 
 export interface InternalDelegatedWorkflowOperations {
   createFixtureHost(): Promise<LocalBrowserHost>;
@@ -71,6 +72,8 @@ export interface VillageAppWindowOptions {
   revokeCredentialReferences: (binding: SessionErasureBinding) => Promise<void>;
   modelProviderAccount: ModelProviderAccountOperations;
   personalAgentTask: PersonalAgentTaskOperations;
+  /** Signed paired-device synchronization used by production workflow controllers. */
+  automationFence?: AuthenticatedAutomationFence;
   /** Internal/dev proof composition. Release runtime never supplies this. */
   delegatedWorkflow?: InternalDelegatedWorkflowOperations;
 }
@@ -81,6 +84,7 @@ export interface VillageAppWindow {
   trustedRenderer: WebContents;
   fixtureBrowserHost?: LocalBrowserHost;
   viewport: BrowserViewportCoordinator;
+  automationFence?: AuthenticatedAutomationFence;
   /** Control-plane revocation seam; it fences all future trusted IPC work. */
   revokeDevice(): void;
 }
@@ -663,6 +667,9 @@ export async function createVillageAppWindow(
     trustedRenderer: appView.webContents,
     ...(fixtureBrowserHost ? { fixtureBrowserHost } : {}),
     viewport,
+    ...(options.automationFence
+      ? { automationFence: options.automationFence }
+      : {}),
     revokeDevice,
   };
 }
