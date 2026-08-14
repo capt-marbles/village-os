@@ -1131,4 +1131,188 @@ describe("authenticated pairing routes", () => {
       code: "STALE_WORKFLOW_BINDING",
     });
   });
+
+  it("records signed takeover and owner progress against one durable cursor", async () => {
+    const deviceId = "dev_01J00000000000000000000011" as const;
+    const jobId = "job_01J00000000000000000000011" as const;
+    const browserSessionId = "brs_01J00000000000000000000011" as const;
+    const effectId = "efx_01J00000000000000000000011" as const;
+    const connectionId = "connector-owner-progress";
+    const nowDate = new Date();
+    const now = nowDate.toISOString();
+    const expiresAt = new Date(nowDate.getTime() + 30_000).toISOString();
+    const keys = await crypto.subtle.generateKey("Ed25519", true, [
+      "sign",
+      "verify",
+    ]);
+    const publicKey = await crypto.subtle.exportKey("jwk", keys.publicKey);
+    await env.VILLAGE_DB.batch([
+      env.VILLAGE_DB.prepare(
+        "INSERT OR IGNORE INTO principals (principal_id, created_at) VALUES (?, ?)",
+      ).bind(principalId, now),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO devices
+         (principal_id, device_id, public_key, credential_status, protocol_version,
+          last_accepted_sequence, created_at) VALUES (?, ?, ?, 'ACTIVE', 1, 0, ?)`,
+      ).bind(principalId, deviceId, JSON.stringify(publicKey), now),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO jobs
+         (principal_id, job_id, state, version, last_event_sequence, created_at,
+          updated_at, objective_kind, objective_version)
+         VALUES (?, ?, 'RUNNING_AGENT', 2, 2, ?, ?,
+                 'OWNED_FIXTURE_ACCOUNT_SETUP_V1', 1)`,
+      ).bind(principalId, jobId, now, now),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO browser_sessions
+         (principal_id, browser_session_id, job_id, device_id, host_id, site,
+          controller, connection_state, lease_epoch, last_accepted_sequence,
+          automation_blocked, takeover_state, profile_state, updated_at)
+         VALUES (?, ?, ?, ?, 'hst_01J00000000000000000000011', 'OWNED_FIXTURE',
+                 'AGENT', 'ONLINE', 1, 0, 0, 'NONE', 'PRESENT', ?)`,
+      ).bind(principalId, browserSessionId, jobId, deviceId, now),
+    ]);
+    const coordinator =
+      env.BROWSER_SESSION_COORDINATOR.getByName(browserSessionId);
+    await coordinator.initialize({
+      principalId,
+      browserSessionId,
+      site: "OWNED_FIXTURE",
+      initializedAt: now,
+      control: {
+        principalId,
+        deviceId,
+        jobId,
+        browserSessionId,
+        controller: "NONE",
+        connection: "ONLINE",
+        leaseEpoch: 0,
+        leaseExpiresAt: null,
+        lastAcceptedSequence: 0,
+        automationBlocked: true,
+        takeover: "NONE",
+        profile: "PRESENT",
+      },
+    });
+    await coordinator.initializeWorkflow({
+      principalId,
+      deviceId,
+      jobId,
+      browserSessionId,
+      objective: { kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1", version: 1 },
+      jobRevision: 2,
+      logicalStep: "SET_DISPLAY_NAME",
+      effectId,
+      initializedAt: now,
+    });
+    await coordinator.claimAgentLease({
+      principalId,
+      deviceId,
+      connectionId,
+      now,
+      expiresAt,
+    });
+    const requestOperation = async (
+      unsigned: Parameters<typeof canonicalWorkflowOperationRequestBytes>[0],
+    ) => {
+      const signature = await crypto.subtle.sign(
+        "Ed25519",
+        keys.privateKey,
+        canonicalWorkflowOperationRequestBytes(unsigned),
+      );
+      return SELF.fetch(
+        new Request(
+          `https://village.test/api/browser-sessions/${browserSessionId}/workflow-operations`,
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-village-connection-id": connectionId,
+            },
+            body: JSON.stringify({
+              ...unsigned,
+              signature: Buffer.from(signature).toString("base64url"),
+            }),
+          },
+        ),
+      );
+    };
+    const common = {
+      protocolVersion: 1 as const,
+      principalId,
+      deviceId,
+      jobId,
+      browserSessionId,
+      connectionId,
+      issuedAt: now,
+      expiresAt,
+    };
+    const takeover = {
+      ...common,
+      sequence: 1,
+      operation: "TAKEOVER" as const,
+      expectedLeaseEpoch: 1,
+      cursor: 3,
+    };
+    const takeoverResponse = await requestOperation(takeover);
+    const takeoverBody = await takeoverResponse.json();
+    expect(takeoverResponse.status, JSON.stringify(takeoverBody)).toBe(200);
+    expect(takeoverBody).toEqual({
+      ok: true,
+      operation: "TAKEOVER",
+      cursor: 4,
+      leaseEpoch: 2,
+    });
+    await expect(coordinator.snapshot(principalId)).resolves.toMatchObject({
+      eventSequence: 4,
+      control: {
+        controller: "USER",
+        leaseEpoch: 2,
+        automationBlocked: true,
+        takeover: "NONE",
+      },
+    });
+    const replay = await requestOperation(takeover);
+    expect(replay.status).toBe(409);
+    await expect(replay.json()).resolves.toEqual({
+      ok: false,
+      code: "REPLAYED_SEQUENCE",
+    });
+
+    const ownerProgress = {
+      ...common,
+      sequence: 2,
+      operation: "RECORD_OWNER_PROGRESS" as const,
+      objective: {
+        kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1" as const,
+        version: 1 as const,
+      },
+      jobRevision: 2,
+      logicalStep: "SET_DISPLAY_NAME" as const,
+      effectId,
+      actionPhase: "EFFECT_OBSERVED" as const,
+      leaseEpoch: 2,
+      cursor: 4,
+      actor: "OWNER" as const,
+      occurredAt: now,
+    };
+    const progressResponse = await requestOperation(ownerProgress);
+    expect(progressResponse.status).toBe(200);
+    await expect(progressResponse.json()).resolves.toEqual({
+      ok: true,
+      operation: "RECORD_OWNER_PROGRESS",
+      cursor: 5,
+    });
+    await expect(
+      coordinator.workflowSnapshot(principalId),
+    ).resolves.toMatchObject({
+      eventSequence: 5,
+      effects: [
+        expect.objectContaining({
+          logicalStep: "SET_DISPLAY_NAME",
+          effectId,
+          phase: "EFFECT_OBSERVED",
+        }),
+      ],
+    });
+  });
 });

@@ -71,6 +71,7 @@ async function harness(
     };
     maxProviderTurns?: number;
     now?: () => number;
+    takeover?: ReturnType<typeof vi.fn>;
   } = {},
 ) {
   const root = await mkdtemp(join(tmpdir(), "village-u4-"));
@@ -95,6 +96,7 @@ async function harness(
       leaseEpoch: 2,
       cursor: 4,
     })),
+    ...(options.takeover ? { takeover: options.takeover } : {}),
   };
   let matched = false;
   const fixture = {
@@ -252,6 +254,38 @@ describe("delegated workflow runtime", () => {
     });
     expect(coordinator.acceptAction).not.toHaveBeenCalled();
     expect(fixture.execute).not.toHaveBeenCalled();
+  });
+
+  it("publishes owner control only after the local action barrier settles", async () => {
+    let release!: () => void;
+    let settled = false;
+    const takeover = vi.fn(async () => {
+      expect(settled).toBe(true);
+      return { ok: true as const, leaseEpoch: 2, cursor: 4 };
+    });
+    const { controller, fixture } = await harness({
+      takeover,
+      fixture: {
+        execute: vi.fn(async () => {
+          await new Promise<void>((resolve) => (release = resolve));
+          settled = true;
+          return { postcondition: "SATISFIED" as const };
+        }),
+      },
+    });
+    const running = controller.runOnce();
+    await vi.waitFor(() => expect(fixture.execute).toHaveBeenCalled());
+    const transferring = controller.takeover(100);
+    await Promise.resolve();
+    expect(takeover).not.toHaveBeenCalled();
+    release();
+
+    await expect(transferring).resolves.toEqual({
+      status: "OWNER_CONTROL",
+      outcome: "QUIESCED",
+      coordinatorSynchronized: true,
+    });
+    await running;
   });
 
   it("fences dispatch when coordinator synchronization is unavailable", async () => {

@@ -200,6 +200,21 @@ describe("paired desktop connector", () => {
           cursor: 8,
           leaseEpoch: 3,
         }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          ok: true,
+          operation: "TAKEOVER",
+          cursor: 9,
+          leaseEpoch: 4,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          ok: true,
+          operation: "RECORD_OWNER_PROGRESS",
+          cursor: 10,
+        }),
       );
     const client = new ControlPlaneClient(
       "https://village.test",
@@ -317,6 +332,30 @@ describe("paired desktop connector", () => {
         cursor: 7,
       }),
     ).resolves.toEqual({ ok: true, leaseEpoch: 3, cursor: 8 });
+    await expect(
+      coordinator.takeover({
+        ...identity,
+        expectedLeaseEpoch: 3,
+        cursor: 8,
+      }),
+    ).resolves.toEqual({ ok: true, leaseEpoch: 4, cursor: 9 });
+    await expect(
+      coordinator.recordOwnerProgress({
+        ...identity,
+        objective: {
+          kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+          version: 1,
+        },
+        jobRevision: 2,
+        logicalStep: "SELECT_ROLE",
+        effectId: "efx_01J00000000000000000000001",
+        actionPhase: "RECEIPTED",
+        leaseEpoch: 4,
+        cursor: 9,
+        actor: "OWNER",
+        occurredAt: "2026-08-14T12:00:02.000Z",
+      }),
+    ).resolves.toEqual({ ok: true, cursor: 10 });
 
     const operations = request.mock.calls
       .slice(3)
@@ -328,6 +367,8 @@ describe("paired desktop connector", () => {
     expect(operations.map((operation) => operation.operation)).toEqual([
       "RECORD_RECEIPT",
       "CLAIM_FRESH_LEASE",
+      "TAKEOVER",
+      "RECORD_OWNER_PROGRESS",
     ]);
   });
 

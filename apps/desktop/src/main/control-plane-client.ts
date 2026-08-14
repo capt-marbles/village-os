@@ -203,6 +203,90 @@ export class ControlPlaneWorkflowCoordinator {
       };
     }
   }
+
+  async takeover(
+    input: CommandIdentity & {
+      expectedLeaseEpoch: number;
+      cursor: number;
+    },
+  ): Promise<
+    | { ok: true; leaseEpoch: number; cursor: number }
+    | { ok: false; code: string }
+  > {
+    try {
+      const response = await this.client.workflowOperation(input, {
+        operation: "TAKEOVER",
+        expectedLeaseEpoch: input.expectedLeaseEpoch,
+        cursor: input.cursor,
+      });
+      if (
+        response.operation !== "TAKEOVER" ||
+        response.leaseEpoch <= input.expectedLeaseEpoch ||
+        response.cursor <= input.cursor
+      ) {
+        return { ok: false, code: "INVALID_WORKFLOW_OPERATION_RESPONSE" };
+      }
+      return {
+        ok: true,
+        leaseEpoch: response.leaseEpoch,
+        cursor: response.cursor,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        code: error instanceof Error ? error.message : "CONTROL_PLANE_REJECTED",
+      };
+    }
+  }
+
+  async recordOwnerProgress(
+    input: CommandIdentity & {
+      objective: {
+        kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1";
+        version: 1;
+      };
+      jobRevision: number;
+      logicalStep: WorkflowCommandBinding["logicalStep"];
+      effectId: string;
+      actionPhase:
+        | "ACCEPTED"
+        | "DISPATCHED"
+        | "EFFECT_OBSERVED"
+        | "RECEIPTED"
+        | "RECONCILIATION_REQUIRED";
+      leaseEpoch: number;
+      cursor: number;
+      actor: "OWNER";
+      occurredAt: string;
+    },
+  ): Promise<{ ok: true; cursor: number } | { ok: false; code: string }> {
+    try {
+      const response = await this.client.workflowOperation(input, {
+        operation: "RECORD_OWNER_PROGRESS",
+        objective: input.objective,
+        jobRevision: input.jobRevision,
+        logicalStep: input.logicalStep,
+        effectId: input.effectId,
+        actionPhase: input.actionPhase,
+        leaseEpoch: input.leaseEpoch,
+        cursor: input.cursor,
+        actor: input.actor,
+        occurredAt: input.occurredAt,
+      });
+      if (
+        response.operation !== "RECORD_OWNER_PROGRESS" ||
+        response.cursor <= input.cursor
+      ) {
+        return { ok: false, code: "INVALID_WORKFLOW_OPERATION_RESPONSE" };
+      }
+      return { ok: true, cursor: response.cursor };
+    } catch (error) {
+      return {
+        ok: false,
+        code: error instanceof Error ? error.message : "CONTROL_PLANE_REJECTED",
+      };
+    }
+  }
 }
 
 export class MemoryAutomationSyncCursorStore implements AutomationSyncCursorStore {

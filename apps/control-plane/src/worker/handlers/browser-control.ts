@@ -594,23 +594,67 @@ export async function dispatchAuthenticatedWorkflowOperation(
         })
       : result;
   }
-  const result = await coordinator.claimFreshWorkflowLease({
+  if (envelope.operation === "CLAIM_FRESH_LEASE") {
+    const result = await coordinator.claimFreshWorkflowLease({
+      principalId: envelope.principalId,
+      deviceId: envelope.deviceId,
+      jobId: envelope.jobId,
+      browserSessionId: envelope.browserSessionId,
+      connectionId,
+      afterLeaseEpoch: envelope.afterLeaseEpoch,
+      cursor: envelope.cursor,
+      now,
+      expiresAt: envelope.leaseExpiresAt,
+    });
+    return result.ok
+      ? workflowOperationResponseSchema.parse({
+          ok: true,
+          operation: envelope.operation,
+          cursor: result.eventSequence,
+          leaseEpoch: result.leaseEpoch,
+        })
+      : result;
+  }
+  if (envelope.operation === "TAKEOVER") {
+    const result = await coordinator.takeoverWorkflowControl({
+      principalId: envelope.principalId,
+      deviceId: envelope.deviceId,
+      jobId: envelope.jobId,
+      browserSessionId: envelope.browserSessionId,
+      connectionId,
+      expectedLeaseEpoch: envelope.expectedLeaseEpoch,
+      cursor: envelope.cursor,
+      now,
+    });
+    return result.ok
+      ? workflowOperationResponseSchema.parse({
+          ok: true,
+          operation: envelope.operation,
+          cursor: result.eventSequence,
+          leaseEpoch: result.leaseEpoch,
+        })
+      : result;
+  }
+  const result = await coordinator.recordOwnerProgress({
     principalId: envelope.principalId,
     deviceId: envelope.deviceId,
     jobId: envelope.jobId,
     browserSessionId: envelope.browserSessionId,
-    connectionId,
-    afterLeaseEpoch: envelope.afterLeaseEpoch,
+    objective: envelope.objective,
+    jobRevision: envelope.jobRevision,
+    logicalStep: envelope.logicalStep,
+    effectId: envelope.effectId,
+    actionPhase: envelope.actionPhase,
+    leaseEpoch: envelope.leaseEpoch,
     cursor: envelope.cursor,
-    now,
-    expiresAt: envelope.leaseExpiresAt,
+    actor: envelope.actor,
+    occurredAt: envelope.occurredAt,
   });
   return result.ok
     ? workflowOperationResponseSchema.parse({
         ok: true,
         operation: envelope.operation,
         cursor: result.eventSequence,
-        leaseEpoch: result.leaseEpoch,
       })
     : result;
 }

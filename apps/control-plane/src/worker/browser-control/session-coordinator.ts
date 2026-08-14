@@ -99,6 +99,17 @@ const freshWorkflowLeaseSchema = z.strictObject({
   expiresAt: instantSchema,
 });
 
+const workflowTakeoverSchema = z.strictObject({
+  principalId: principalIdSchema,
+  deviceId: deviceIdSchema,
+  jobId: jobIdSchema,
+  browserSessionId: browserSessionIdSchema,
+  connectionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
+  expectedLeaseEpoch: z.number().int().positive(),
+  cursor: z.number().int().nonnegative(),
+  now: instantSchema,
+});
+
 const workflowCancellationSchema = z.strictObject({
   principalId: principalIdSchema,
   jobId: jobIdSchema,
@@ -918,6 +929,69 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
     return {
       ok: true as const,
       leaseEpoch: reconciled.state.leaseEpoch,
+      eventSequence: sequence,
+    };
+  }
+
+  takeoverWorkflowControl(candidate: unknown) {
+    const parsed = workflowTakeoverSchema.safeParse(candidate);
+    if (!parsed.success)
+      return { ok: false as const, code: "INVALID_TAKEOVER" };
+    const input = parsed.data;
+    const metadata = this.metadata();
+    const row = this.control();
+    if (!metadata || !row)
+      return { ok: false as const, code: "NOT_INITIALIZED" };
+    const state = browserControlStateSchema.parse(JSON.parse(row.state_json));
+    if (
+      metadata.principal_id !== input.principalId ||
+      metadata.browser_session_id !== input.browserSessionId ||
+      state.deviceId !== input.deviceId ||
+      state.jobId !== input.jobId ||
+      row.holder_connection_id !== input.connectionId
+    ) {
+      return { ok: false as const, code: "IDENTITY_MISMATCH" };
+    }
+    if (
+      metadata.event_sequence !== input.cursor ||
+      state.leaseEpoch !== input.expectedLeaseEpoch
+    ) {
+      return { ok: false as const, code: "STALE_WORKFLOW_BINDING" };
+    }
+    if (
+      state.controller !== "AGENT" ||
+      state.connection !== "ONLINE" ||
+      state.automationBlocked ||
+      state.takeover !== "NONE"
+    ) {
+      return { ok: false as const, code: "TAKEOVER_CONFLICT" };
+    }
+    const requested = transitionBrowserControl(state, {
+      type: "ONLINE_TAKEOVER_REQUESTED",
+    });
+    if (!requested.ok) return requested;
+    const quiesced = transitionBrowserControl(requested.state, {
+      type: "TAKEOVER_QUIESCED",
+    });
+    if (!quiesced.ok) return quiesced;
+    const sequence = metadata.event_sequence + 1;
+    this.ctx.storage.sql.exec(
+      "UPDATE control_state SET state_json = ?, holder_connection_id = NULL WHERE singleton = 1",
+      JSON.stringify(quiesced.state),
+    );
+    this.ctx.storage.sql.exec(
+      "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
+      sequence,
+    );
+    this.appendEventAt(
+      sequence,
+      "OWNER_CONTROL_TAKEN",
+      { leaseEpoch: quiesced.state.leaseEpoch },
+      input.now,
+    );
+    return {
+      ok: true as const,
+      leaseEpoch: quiesced.state.leaseEpoch,
       eventSequence: sequence,
     };
   }

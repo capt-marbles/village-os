@@ -2,11 +2,14 @@ import { z } from "zod";
 import {
   browserSessionIdSchema,
   deviceIdSchema,
+  effectIdSchema,
   instantSchema,
   jobIdSchema,
   principalIdSchema,
+  setupLogicalStepSchema,
+  setupObjectiveSchema,
 } from "./ids.js";
-import { setupActionReceiptSchema } from "./actions.js";
+import { actionPhaseSchema, setupActionReceiptSchema } from "./actions.js";
 import { setupCheckpointSchema } from "./jobs.js";
 
 const workflowOperationBinding = {
@@ -36,10 +39,33 @@ const freshLeaseOperationSchema = z.strictObject({
   leaseExpiresAt: instantSchema,
 });
 
+const takeoverOperationSchema = z.strictObject({
+  ...workflowOperationBinding,
+  operation: z.literal("TAKEOVER"),
+  expectedLeaseEpoch: z.number().int().positive(),
+  cursor: z.number().int().nonnegative(),
+});
+
+const ownerProgressOperationSchema = z.strictObject({
+  ...workflowOperationBinding,
+  operation: z.literal("RECORD_OWNER_PROGRESS"),
+  objective: setupObjectiveSchema,
+  jobRevision: z.number().int().positive(),
+  logicalStep: setupLogicalStepSchema,
+  effectId: effectIdSchema,
+  actionPhase: actionPhaseSchema,
+  leaseEpoch: z.number().int().positive(),
+  cursor: z.number().int().nonnegative(),
+  actor: z.literal("OWNER"),
+  occurredAt: instantSchema,
+});
+
 export const unsignedWorkflowOperationRequestSchema = z
   .discriminatedUnion("operation", [
     receiptOperationSchema,
     freshLeaseOperationSchema,
+    takeoverOperationSchema,
+    ownerProgressOperationSchema,
   ])
   .superRefine((request, context) => {
     const lifetime =
@@ -59,6 +85,12 @@ export const workflowOperationRequestSchema = z
       signature: z.string().regex(/^[A-Za-z0-9_-]{8,2048}$/),
     }),
     freshLeaseOperationSchema.extend({
+      signature: z.string().regex(/^[A-Za-z0-9_-]{8,2048}$/),
+    }),
+    takeoverOperationSchema.extend({
+      signature: z.string().regex(/^[A-Za-z0-9_-]{8,2048}$/),
+    }),
+    ownerProgressOperationSchema.extend({
       signature: z.string().regex(/^[A-Za-z0-9_-]{8,2048}$/),
     }),
   ])
@@ -88,6 +120,17 @@ export const workflowOperationResponseSchema = z.discriminatedUnion(
       cursor: z.number().int().nonnegative(),
       leaseEpoch: z.number().int().positive(),
     }),
+    z.strictObject({
+      ok: z.literal(true),
+      operation: z.literal("TAKEOVER"),
+      cursor: z.number().int().nonnegative(),
+      leaseEpoch: z.number().int().positive(),
+    }),
+    z.strictObject({
+      ok: z.literal(true),
+      operation: z.literal("RECORD_OWNER_PROGRESS"),
+      cursor: z.number().int().nonnegative(),
+    }),
   ],
 );
 
@@ -105,15 +148,34 @@ export function canonicalWorkflowOperationRequestBytes(
   candidate: UnsignedWorkflowOperationRequest,
 ): ArrayBuffer {
   const request = unsignedWorkflowOperationRequestSchema.parse(candidate);
-  const operation =
-    request.operation === "RECORD_RECEIPT"
-      ? [request.operation, request.receipt, request.checkpoint]
-      : [
+  const operation = (() => {
+    switch (request.operation) {
+      case "RECORD_RECEIPT":
+        return [request.operation, request.receipt, request.checkpoint];
+      case "CLAIM_FRESH_LEASE":
+        return [
           request.operation,
           request.afterLeaseEpoch,
           request.cursor,
           request.leaseExpiresAt,
         ];
+      case "TAKEOVER":
+        return [request.operation, request.expectedLeaseEpoch, request.cursor];
+      case "RECORD_OWNER_PROGRESS":
+        return [
+          request.operation,
+          request.objective,
+          request.jobRevision,
+          request.logicalStep,
+          request.effectId,
+          request.actionPhase,
+          request.leaseEpoch,
+          request.cursor,
+          request.actor,
+          request.occurredAt,
+        ];
+    }
+  })();
   const binding = [
     request.protocolVersion,
     request.principalId,

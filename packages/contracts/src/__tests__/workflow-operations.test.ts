@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   canonicalWorkflowOperationRequestBytes,
+  unsignedWorkflowOperationRequestSchema,
   workflowOperationRequestSchema,
   workflowOperationResponseSchema,
 } from "../index.js";
@@ -115,6 +116,66 @@ describe("workflow operation contracts", () => {
       operation: "CLAIM_FRESH_LEASE",
       cursor: 8,
       leaseEpoch: 4,
+    });
+  });
+
+  it("binds takeover and owner progress to the current cursor and lease", () => {
+    const takeover = {
+      ...binding,
+      operation: "TAKEOVER" as const,
+      expectedLeaseEpoch: 2,
+      cursor: 7,
+      signature: "signature_value",
+    };
+    const ownerProgress = {
+      ...binding,
+      sequence: 9,
+      operation: "RECORD_OWNER_PROGRESS" as const,
+      objective: {
+        kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1" as const,
+        version: 1 as const,
+      },
+      jobRevision: 2,
+      logicalStep: "SELECT_ROLE" as const,
+      effectId: "efx_01J00000000000000000000001",
+      actionPhase: "RECEIPTED" as const,
+      leaseEpoch: 3,
+      cursor: 8,
+      actor: "OWNER" as const,
+      occurredAt: "2026-08-14T12:00:02.000Z",
+      signature: "signature_value",
+    };
+
+    expect(workflowOperationRequestSchema.parse(takeover)).toEqual(takeover);
+    expect(workflowOperationRequestSchema.parse(ownerProgress)).toEqual(
+      ownerProgress,
+    );
+    const { signature: _signature, ...unsignedOwnerProgress } = ownerProgress;
+    expect(
+      new TextDecoder().decode(
+        canonicalWorkflowOperationRequestBytes(
+          unsignedWorkflowOperationRequestSchema.parse(unsignedOwnerProgress),
+        ),
+      ),
+    ).toContain(ownerProgress.effectId);
+    expect(
+      workflowOperationResponseSchema.parse({
+        ok: true,
+        operation: "TAKEOVER",
+        cursor: 8,
+        leaseEpoch: 3,
+      }),
+    ).toMatchObject({ operation: "TAKEOVER", leaseEpoch: 3 });
+    expect(
+      workflowOperationResponseSchema.parse({
+        ok: true,
+        operation: "RECORD_OWNER_PROGRESS",
+        cursor: 9,
+      }),
+    ).toEqual({
+      ok: true,
+      operation: "RECORD_OWNER_PROGRESS",
+      cursor: 9,
     });
   });
 });

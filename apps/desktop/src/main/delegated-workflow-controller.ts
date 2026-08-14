@@ -284,6 +284,7 @@ export class DelegatedWorkflowController {
       expectedLeaseEpoch,
       timeoutMs,
     );
+    const outcome = await local;
     let coordinatorSynchronized = false;
     try {
       const result = await this.options.coordinator.takeover?.({
@@ -302,7 +303,6 @@ export class DelegatedWorkflowController {
     } catch {
       // Local owner control remains available while coordinator sync is down.
     }
-    const outcome = await local;
     if (!coordinatorSynchronized) {
       this.binding = { ...this.binding, leaseEpoch: expectedLeaseEpoch };
     }
