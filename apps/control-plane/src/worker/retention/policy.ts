@@ -1,5 +1,10 @@
 export type CloudRecordClass =
-  "PROJECTIONS" | "EVENTS" | "CHECKPOINTS" | "RECEIPTS";
+  | "PROJECTIONS"
+  | "EVENTS"
+  | "CHECKPOINTS"
+  | "RECEIPTS"
+  | "WORKFLOW_EFFECTS"
+  | "CANCELLATIONS";
 
 export type RecordRetentionPolicy = {
   scope: "PRINCIPAL";
@@ -29,6 +34,8 @@ export const recordRetentionPolicies: Readonly<
   EVENTS: defaultRecordPolicy,
   CHECKPOINTS: defaultRecordPolicy,
   RECEIPTS: defaultRecordPolicy,
+  WORKFLOW_EFFECTS: defaultRecordPolicy,
+  CANCELLATIONS: defaultRecordPolicy,
 };
 
 export async function executeRetentionBatch(
@@ -52,6 +59,24 @@ export async function executeRetentionBatch(
       AND jobs.updated_at < ?
   )`;
   const statements = [
+    db
+      .prepare(
+        `DELETE FROM workflow_cancellations WHERE rowid IN (
+           SELECT target.rowid FROM workflow_cancellations AS target
+           WHERE target.accepted_at < ? AND ${terminalJobs}
+           ORDER BY target.accepted_at LIMIT ?
+         )`,
+      )
+      .bind(cutoff, cutoff, batchSize),
+    db
+      .prepare(
+        `DELETE FROM workflow_effect_projections WHERE rowid IN (
+           SELECT target.rowid FROM workflow_effect_projections AS target
+           WHERE target.updated_at < ? AND ${terminalJobs}
+           ORDER BY target.updated_at LIMIT ?
+         )`,
+      )
+      .bind(cutoff, cutoff, batchSize),
     db
       .prepare(
         `DELETE FROM action_receipts WHERE rowid IN (

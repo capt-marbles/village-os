@@ -145,6 +145,116 @@ describe("authenticated pairing routes", () => {
     expect(crossOrigin.headers.get("access-control-allow-origin")).toBeNull();
   });
 
+  it("binds workflow cancellation to origin, CSRF, principal, Job revision, and replay identity", async () => {
+    const created = await SELF.fetch(
+      new Request("https://village.test/api/jobs", {
+        method: "POST",
+        headers: ownerHeaders,
+        body: JSON.stringify({
+          objective: { kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1", version: 1 },
+        }),
+      }),
+    );
+    const { jobId } = await created.json<{ jobId: string }>();
+    const deviceId = "dev_01J00000000000000000000050";
+    const browserSessionId = "brs_01J00000000000000000000050";
+    await env.VILLAGE_DB.prepare(
+      `INSERT INTO devices
+       (principal_id, device_id, public_key, credential_status, protocol_version,
+        last_accepted_sequence, created_at)
+       VALUES (?, ?, '{}', 'ACTIVE', 1, 0, ?)`,
+    )
+      .bind(principalId, deviceId, new Date().toISOString())
+      .run();
+    expect(
+      (
+        await SELF.fetch(
+          new Request(
+            `https://village.test/api/jobs/${jobId}/browser-sessions`,
+            {
+              method: "POST",
+              headers: ownerHeaders,
+              body: JSON.stringify({
+                deviceId,
+                browserSessionId,
+                hostId: "hst_01J00000000000000000000050",
+                site: "OWNED_FIXTURE",
+              }),
+            },
+          ),
+        )
+      ).status,
+    ).toBe(201);
+    const cancellation = {
+      jobId,
+      expectedJobRevision: 2,
+      cancellationId: "cnl_01J00000000000000000000050",
+    };
+    const cancelUrl = `https://village.test/api/browser-sessions/${browserSessionId}/cancel`;
+    const requestCancel = (
+      headers: Record<string, string>,
+      body = cancellation,
+    ) =>
+      SELF.fetch(
+        new Request(cancelUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        }),
+      );
+
+    const { origin: _origin, ...missingOrigin } = ownerHeaders;
+    expect((await requestCancel(missingOrigin)).status).toBe(403);
+    expect(
+      (
+        await requestCancel({
+          ...ownerHeaders,
+          cookie: "village_csrf=wrong",
+        })
+      ).status,
+    ).toBe(403);
+    await expect(
+      requestCancel(ownerHeaders, { ...cancellation, expectedJobRevision: 1 }),
+    ).resolves.toMatchObject({ status: 409 });
+    await expect(
+      requestCancel(ownerHeaders, {
+        ...cancellation,
+        jobId: "job_01J00000000000000000000051",
+      }),
+    ).resolves.toMatchObject({ status: 409 });
+    await expect(
+      requestCancel(
+        {
+          ...ownerHeaders,
+          "x-village-development-principal": otherPrincipalId,
+        },
+        cancellation,
+      ),
+    ).resolves.toMatchObject({ status: 409 });
+
+    const accepted = await requestCancel(ownerHeaders);
+    expect(accepted.status).toBe(200);
+    await expect(accepted.json()).resolves.toMatchObject({
+      ok: true,
+      replayed: false,
+      jobRevision: 3,
+    });
+    const replay = await requestCancel(ownerHeaders);
+    await expect(replay.json()).resolves.toMatchObject({
+      ok: true,
+      replayed: true,
+      jobRevision: 3,
+    });
+    const race = await requestCancel(ownerHeaders, {
+      ...cancellation,
+      cancellationId: "cnl_01J00000000000000000000051",
+    });
+    await expect(race.json()).resolves.toMatchObject({
+      ok: false,
+      code: "STALE_JOB_REVISION",
+    });
+  });
+
   it("binds confirmation and revocation to the authenticated owner", async () => {
     const begunResponse = await SELF.fetch(
       new Request("https://village.test/api/pairing/challenges", {

@@ -79,6 +79,33 @@ async function seedPrincipal(principal: string, suffix: string) {
       action,
       now,
     ),
+    env.VILLAGE_DB.prepare(
+      `INSERT INTO workflow_effect_projections
+       (principal_id, browser_session_id, job_id, job_revision, workflow_kind,
+        workflow_version, logical_step, effect_id, canonical_action_id,
+        action_phase, receipt_id, checkpoint_id, updated_at)
+       VALUES (?, ?, ?, 1, 'OWNED_FIXTURE_ACCOUNT_SETUP_V1', 1,
+               'SET_DISPLAY_NAME', ?, ?, 'RECEIPTED', NULL, NULL, ?)`,
+    ).bind(
+      principal,
+      session,
+      job,
+      `efx_01J000000000000000000000${suffix}`,
+      action,
+      now,
+    ),
+    env.VILLAGE_DB.prepare(
+      `INSERT INTO workflow_cancellations
+       (principal_id, browser_session_id, cancellation_id, job_id,
+        expected_job_revision, resulting_job_revision, event_sequence, accepted_at)
+       VALUES (?, ?, ?, ?, 1, 2, 2, ?)`,
+    ).bind(
+      principal,
+      session,
+      `cnl_01J000000000000000000000${suffix}`,
+      job,
+      now,
+    ),
   ]);
 }
 
@@ -105,6 +132,8 @@ describe("principal data lifecycle", () => {
         EVENTS: expect.objectContaining({ scope: "PRINCIPAL" }),
         CHECKPOINTS: expect.objectContaining({ scope: "PRINCIPAL" }),
         RECEIPTS: expect.objectContaining({ scope: "PRINCIPAL" }),
+        WORKFLOW_EFFECTS: expect.objectContaining({ scope: "PRINCIPAL" }),
+        CANCELLATIONS: expect.objectContaining({ scope: "PRINCIPAL" }),
       }),
     );
     for (const policy of Object.values(recordRetentionPolicies)) {
@@ -126,6 +155,13 @@ describe("principal data lifecycle", () => {
         events: [expect.objectContaining({ jobId, sequence: 1 })],
         checkpoints: [expect.objectContaining({ jobId })],
         receipts: [expect.objectContaining({ actionId })],
+        workflowEffects: [
+          expect.objectContaining({
+            jobId,
+            effectId: "efx_01J00000000000000000000020",
+          }),
+        ],
+        cancellations: [expect.objectContaining({ jobId })],
       }),
     );
     const exported = await exportPrincipalRecords(env.VILLAGE_DB, principalId);
@@ -213,17 +249,25 @@ describe("principal data lifecycle", () => {
       env.VILLAGE_DB.prepare(
         "UPDATE action_receipts SET recorded_at = ? WHERE principal_id = ?",
       ).bind("2026-06-01T00:00:00.000Z", principalId),
+      env.VILLAGE_DB.prepare(
+        "UPDATE workflow_effect_projections SET updated_at = ? WHERE principal_id = ?",
+      ).bind("2026-06-01T00:00:00.000Z", principalId),
+      env.VILLAGE_DB.prepare(
+        "UPDATE workflow_cancellations SET accepted_at = ? WHERE principal_id = ?",
+      ).bind("2026-06-01T00:00:00.000Z", principalId),
     ]);
 
     await expect(
       executeRetentionBatch(env.VILLAGE_DB, now, 1),
-    ).resolves.toEqual({ deleted: 4, hasMore: true });
+    ).resolves.toEqual({ deleted: 6, hasMore: true });
     const exported = await exportPrincipalRecords(env.VILLAGE_DB, principalId);
     expect(exported).toMatchObject({
       projections: [],
       events: [],
       checkpoints: [],
       receipts: [],
+      workflowEffects: [],
+      cancellations: [],
     });
     const active = await exportPrincipalRecords(
       env.VILLAGE_DB,

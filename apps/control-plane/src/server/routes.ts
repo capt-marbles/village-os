@@ -5,6 +5,7 @@ import {
   jobIdSchema,
   pairingIdSchema,
   principalIdSchema,
+  setupObjectiveSchema,
 } from "@village/contracts";
 import { z } from "zod";
 import type { Environment } from "../env.js";
@@ -56,6 +57,14 @@ async function boundedJson(request: Request): Promise<unknown> {
   return JSON.parse(text);
 }
 
+async function boundedOptionalJson(request: Request): Promise<unknown | null> {
+  const declared = Number(request.headers.get("content-length") ?? "0");
+  if (declared > 8_192) throw new Error("BODY_TOO_LARGE");
+  const text = await request.text();
+  if (text.length > 8_192) throw new Error("BODY_TOO_LARGE");
+  return text.length === 0 ? null : JSON.parse(text);
+}
+
 export async function routeRequest(
   request: Request,
   environment: Environment,
@@ -90,10 +99,22 @@ export async function routeRequest(
       if (request.method === "POST") {
         const csrf = authorizeBrowserMutation(request, environment);
         if (!csrf.ok) return json(request, environment, csrf, 403);
+        const parsedBody = z
+          .strictObject({ objective: setupObjectiveSchema })
+          .nullable()
+          .safeParse(await boundedOptionalJson(request));
+        if (!parsedBody.success)
+          return json(
+            request,
+            environment,
+            { ok: false, code: "INVALID_OBJECTIVE" },
+            400,
+          );
         const result = await createJob(
           environment.VILLAGE_DB,
           auth.principalId,
           new Date().toISOString(),
+          parsedBody.data?.objective,
         );
         return json(request, environment, result, result.ok ? 201 : 400);
       }
@@ -443,10 +464,77 @@ export async function routeRequest(
       if (request.method === "POST" && operation === "cancel") {
         const csrf = authorizeBrowserMutation(request, environment);
         if (!csrf.ok) return json(request, environment, csrf, 403);
-        const result = await coordinator.cancel(
-          auth.principalId,
-          new Date().toISOString(),
-        );
+        const supplied = await boundedOptionalJson(request);
+        const parsed = z
+          .strictObject({
+            jobId: jobIdSchema,
+            expectedJobRevision: z.number().int().positive(),
+            cancellationId: z.string().regex(/^cnl_[0-9A-HJKMNP-TV-Z]{26}$/),
+          })
+          .nullable()
+          .safeParse(supplied);
+        if (!parsed.success)
+          return json(
+            request,
+            environment,
+            { ok: false, code: "INVALID_CANCEL" },
+            400,
+          );
+        let cancellation = parsed.data;
+        if (cancellation === null) {
+          // Rollback-compatible legacy clients sent an empty body. They retain
+          // the existing principal-bound cancel semantics during rollout.
+          const result = await coordinator.cancel(
+            auth.principalId,
+            new Date().toISOString(),
+          );
+          return json(request, environment, result, result.ok ? 200 : 409);
+        }
+        const workflow = await environment.VILLAGE_DB.prepare(
+          `SELECT jobs.version, jobs.objective_kind AS objectiveKind,
+                  jobs.objective_version AS objectiveVersion
+           FROM browser_sessions JOIN jobs
+             ON jobs.principal_id = browser_sessions.principal_id
+            AND jobs.job_id = browser_sessions.job_id
+           WHERE browser_sessions.principal_id = ?
+             AND browser_sessions.browser_session_id = ?
+             AND jobs.job_id = ?`,
+        )
+          .bind(auth.principalId, sessionId.data, cancellation.jobId)
+          .first<{
+            version: number;
+            objectiveKind: string | null;
+            objectiveVersion: number | null;
+          }>();
+        if (!workflow)
+          return json(
+            request,
+            environment,
+            { ok: false, code: "JOB_IDENTITY_MISMATCH" },
+            409,
+          );
+        if (
+          workflow.objectiveKind !== "OWNED_FIXTURE_ACCOUNT_SETUP_V1" ||
+          workflow.objectiveVersion !== 1
+        )
+          return json(
+            request,
+            environment,
+            { ok: false, code: "WORKFLOW_MISMATCH" },
+            409,
+          );
+        if (workflow.version !== cancellation.expectedJobRevision)
+          return json(
+            request,
+            environment,
+            { ok: false, code: "STALE_JOB_REVISION" },
+            409,
+          );
+        const result = await coordinator.cancel({
+          principalId: auth.principalId,
+          ...cancellation,
+          now: new Date().toISOString(),
+        });
         return json(request, environment, result, result.ok ? 200 : 409);
       }
       if (request.method === "POST" && operation === "project") {
