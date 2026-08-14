@@ -212,8 +212,12 @@ export function DesktopBrowserPane({
               onError={setActionError}
             />
           ) : null}
-          <ModelProviderAccountOnboarding bridge={activeBridge} />
-          <PersonalAgentTaskOnboarding bridge={activeBridge} />
+          {!internalBuild || !activeBridge.getDelegatedWorkflowState ? (
+            <>
+              <ModelProviderAccountOnboarding bridge={activeBridge} />
+              <PersonalAgentTaskOnboarding bridge={activeBridge} />
+            </>
+          ) : null}
         </>
       ) : null}
       {actionError ? (

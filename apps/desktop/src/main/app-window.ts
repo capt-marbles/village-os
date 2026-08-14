@@ -4,6 +4,7 @@ import {
   dialog,
   ipcMain,
   type IpcMainInvokeEvent,
+  type WebContents,
   WebContentsView,
 } from "electron";
 import { LocalActionExecutor } from "../browser/local-action-executor.js";
@@ -77,6 +78,8 @@ export interface VillageAppWindowOptions {
 export interface VillageAppWindow {
   window: BaseWindow;
   browserHost: LocalBrowserHost;
+  trustedRenderer: WebContents;
+  fixtureBrowserHost?: LocalBrowserHost;
   viewport: BrowserViewportCoordinator;
   /** Control-plane revocation seam; it fences all future trusted IPC work. */
   revokeDevice(): void;
@@ -142,20 +145,36 @@ export async function createVillageAppWindow(
   });
   inputShield.setBackgroundColor("#00000000");
   const shieldLoad = inputShield.webContents.loadURL("village://app/shield");
+  const browserHostCreation = LocalBrowserHost.create({
+    principalId: options.principalId,
+    deviceId: options.deviceId,
+    site: options.site,
+    profileRoot: LocalBrowserHost.profileRoot(options.userDataPath),
+    initialUrl: options.initialUrl,
+  });
+  const fixtureHostCreation = options.delegatedWorkflow?.createFixtureHost();
   let browserHost: LocalBrowserHost | undefined;
   let fixtureBrowserHost: LocalBrowserHost | undefined;
   try {
-    browserHost = await LocalBrowserHost.create({
-      principalId: options.principalId,
-      deviceId: options.deviceId,
-      site: options.site,
-      profileRoot: LocalBrowserHost.profileRoot(options.userDataPath),
-      initialUrl: options.initialUrl,
-    });
-    fixtureBrowserHost = await options.delegatedWorkflow?.createFixtureHost();
-    await shieldLoad;
+    const [primaryHost, fixtureHost] = await Promise.all([
+      browserHostCreation,
+      fixtureHostCreation,
+      shieldLoad,
+    ]);
+    browserHost = primaryHost;
+    fixtureBrowserHost = fixtureHost;
   } catch (error) {
-    await Promise.allSettled([shieldLoad]);
+    const [primaryResult, fixtureResult] = await Promise.allSettled([
+      browserHostCreation,
+      fixtureHostCreation,
+      shieldLoad,
+    ]);
+    if (primaryResult.status === "fulfilled") {
+      browserHost = primaryResult.value;
+    }
+    if (fixtureResult.status === "fulfilled") {
+      fixtureBrowserHost = fixtureResult.value;
+    }
     await browserHost?.close();
     await fixtureBrowserHost?.close();
     if (!appView.webContents.isDestroyed()) appView.webContents.close();
@@ -638,7 +657,14 @@ export async function createVillageAppWindow(
     throw error;
   }
   window.show();
-  return { window, browserHost, viewport, revokeDevice };
+  return {
+    window,
+    browserHost,
+    trustedRenderer: appView.webContents,
+    ...(fixtureBrowserHost ? { fixtureBrowserHost } : {}),
+    viewport,
+    revokeDevice,
+  };
 }
 
 export function defaultPreloadPath(appPath: string): string {

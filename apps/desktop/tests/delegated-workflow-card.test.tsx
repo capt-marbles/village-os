@@ -22,7 +22,7 @@ const base: DelegatedWorkflowSnapshot = {
 
 describe("delegated workflow card", () => {
   it("defines truthful controls and input ownership for every interaction state", () => {
-    expect(delegatedWorkflowStates).toHaveLength(12);
+    expect(delegatedWorkflowStates).toHaveLength(13);
     for (const state of delegatedWorkflowStates) {
       const model = deriveDelegatedWorkflowModel({ ...base, state });
       expect(model.label).not.toBe("");

@@ -110,6 +110,9 @@ export interface AuthenticatedWorkflowCoordinator {
 type SetupObservation = ReturnType<typeof setupObservationSchema.parse>;
 
 export interface OwnedFixtureRuntime {
+  captureOwnerState?(
+    binding: WorkflowRuntimeBinding,
+  ): Promise<SetupObservation>;
   observe(binding: WorkflowRuntimeBinding): Promise<SetupObservation>;
   execute(
     input: WorkflowRuntimeBinding & {
@@ -164,6 +167,11 @@ export type WorkflowRuntimeResult =
         | "RECONCILIATION_BUDGET_EXHAUSTED"
         | "TURN_BUDGET_EXHAUSTED"
         | "TIME_BUDGET_EXHAUSTED"
+        | "AUTHENTICATION_REQUIRED"
+        | "PROVIDER_UNAVAILABLE"
+        | "MALFORMED_PROVIDER_OUTPUT"
+        | "NO_SAFE_ACTION"
+        | "SITE_POLICY_DENIED"
         | "NON_CONVERGENT";
       gate?: string;
     };
@@ -178,7 +186,7 @@ const mutationCapability: Record<
   FINALIZE_SETUP: "FINALIZE_SETUP",
 };
 
-function postconditionFor(
+export function postconditionFor(
   observation: SetupObservation,
 ): "SATISFIED" | "NOT_SATISFIED" | "UNKNOWN" {
   const fact = observation.facts.find(
@@ -311,13 +319,7 @@ export class DelegatedWorkflowController {
     const observed = await this.observe(synchronized.snapshot);
     if ("status" in observed) return observed;
     if (postconditionFor(observed.observation) === "SATISFIED") {
-      if (this.binding.logicalStep === "FINALIZE_SETUP") {
-        return { status: "WAITING_FOR_USER", reason: "OUTCOME_UNKNOWN" };
-      }
-      return {
-        status: "OWNER_STATE_ACCEPTED",
-        leaseEpoch: this.binding.leaseEpoch,
-      };
+      return this.verifyAndReceiptSatisfiedStep();
     }
 
     if (this.providerTurns >= this.budgets.maxProviderTurns) {
@@ -329,12 +331,16 @@ export class DelegatedWorkflowController {
     const rawResult = await this.options.provider(context);
     const result = validateSetupModelProviderResult(context, rawResult);
     const current = await this.synchronize();
-    if (
-      generation !== this.generation ||
-      !current.ok ||
-      result.status !== "action" ||
-      !this.matchesCurrentResult(result, current.snapshot)
-    ) {
+    if (generation !== this.generation || !current.ok) {
+      return { status: "WAITING_FOR_USER", reason: "STALE_PROVIDER_RESULT" };
+    }
+    if (result.status === "waiting") {
+      if (result.reason === "HUMAN_GATE_REQUIRED") {
+        return { status: "WAITING_FOR_USER", reason: "HUMAN_GATE_REQUIRED" };
+      }
+      return { status: "WAITING_FOR_USER", reason: result.reason };
+    }
+    if (!this.matchesCurrentResult(result, current.snapshot)) {
       return { status: "WAITING_FOR_USER", reason: "STALE_PROVIDER_RESULT" };
     }
     const currentAvailability = this.availability(current.snapshot);
@@ -366,9 +372,6 @@ export class DelegatedWorkflowController {
     }
     const outstanding = synchronized.snapshot.outstandingAction;
     if (!outstanding) {
-      if (synchronized.snapshot.logicalStep === "FINALIZE_SETUP") {
-        return { status: "WAITING_FOR_USER", reason: "OUTCOME_UNKNOWN" };
-      }
       return this.runOnce();
     }
     if (
@@ -428,9 +431,21 @@ export class DelegatedWorkflowController {
     if (synchronized.snapshot.canceled) {
       return { status: "FENCED", reason: "CANCELED" };
     }
-    const observed = await this.observe(synchronized.snapshot);
-    if ("status" in observed) return observed;
-    if (ownerFieldIsInvalid(observed.observation)) {
+    let ownerObservation: SetupObservation | undefined;
+    if (this.options.fixture.captureOwnerState) {
+      try {
+        ownerObservation = await this.options.fixture.captureOwnerState(
+          this.binding,
+        );
+      } catch {
+        return { status: "WAITING_FOR_USER", reason: "INVALID_OWNER_EDIT" };
+      }
+    }
+    const observation = ownerObservation
+      ? { observation: ownerObservation }
+      : await this.observe(synchronized.snapshot);
+    if ("status" in observation) return observation;
+    if (ownerFieldIsInvalid(observation.observation)) {
       return { status: "WAITING_FOR_USER", reason: "INVALID_OWNER_EDIT" };
     }
     let ownerProgress;
@@ -495,6 +510,43 @@ export class DelegatedWorkflowController {
     return this.executeAccepted(actionId, command);
   }
 
+  private async verifyAndReceiptSatisfiedStep(): Promise<WorkflowRuntimeResult> {
+    const actionId = this.options.createActionId();
+    try {
+      const accepted = await this.options.coordinator.acceptAction({
+        ...this.binding,
+        actionId,
+        command: { capability: "VERIFY_SETUP" },
+      });
+      if (!accepted.ok || accepted.actionId !== actionId) {
+        return { status: "FENCED", reason: "COORDINATOR_UNAVAILABLE" };
+      }
+      this.cursor = accepted.cursor;
+    } catch {
+      return { status: "FENCED", reason: "COORDINATOR_UNAVAILABLE" };
+    }
+    await this.record(actionId, "ACCEPTED", "UNOBSERVED", "READ_ONLY");
+    await this.record(actionId, "DISPATCHED", "UNOBSERVED", "READ_ONLY");
+    const observed = await this.observe(this.binding);
+    if ("status" in observed) return observed;
+    const postcondition = postconditionFor(observed.observation);
+    if (postcondition !== "SATISFIED") {
+      await this.record(
+        actionId,
+        "RECONCILIATION_REQUIRED",
+        postcondition,
+        "READ_ONLY",
+      );
+      return {
+        status: "WAITING_FOR_USER",
+        reason:
+          postcondition === "UNKNOWN" ? "OUTCOME_UNKNOWN" : "NON_CONVERGENT",
+      };
+    }
+    await this.record(actionId, "EFFECT_OBSERVED", "SATISFIED", "READ_ONLY");
+    return this.receipt(actionId, observed.observation, "READ_ONLY");
+  }
+
   private async executeAccepted(
     actionId: string,
     command: OwnedFixtureSetupCommand,
@@ -550,6 +602,7 @@ export class DelegatedWorkflowController {
   private async receipt(
     actionId: string,
     observation: SetupObservation,
+    mutationClass?: WorkflowActionJournalEntry["mutationClass"],
   ): Promise<WorkflowRuntimeResult> {
     const now = new Date(this.now()).toISOString();
     const receiptId = this.options.createReceiptId();
@@ -613,7 +666,7 @@ export class DelegatedWorkflowController {
       await this.record(actionId, "RECONCILIATION_REQUIRED", "SATISFIED");
       return { status: "FENCED", reason: "COORDINATOR_UNAVAILABLE" };
     }
-    await this.record(actionId, "RECEIPTED", "SATISFIED");
+    await this.record(actionId, "RECEIPTED", "SATISFIED", mutationClass);
     return { status: "RECEIPTED", actionId, effectId: this.binding.effectId };
   }
 
@@ -762,6 +815,7 @@ export class DelegatedWorkflowController {
     actionId: string,
     phase: WorkflowActionJournalEntry["phase"],
     postcondition: WorkflowActionJournalEntry["postcondition"],
+    mutationClass?: WorkflowActionJournalEntry["mutationClass"],
   ): Promise<void> {
     await this.options.journal.record({
       actionId,
@@ -772,9 +826,10 @@ export class DelegatedWorkflowController {
       leaseEpoch: this.binding.leaseEpoch,
       phase,
       mutationClass:
-        this.binding.logicalStep === "FINALIZE_SETUP"
+        mutationClass ??
+        (this.binding.logicalStep === "FINALIZE_SETUP"
           ? "NON_IDEMPOTENT"
-          : "IDEMPOTENT",
+          : "IDEMPOTENT"),
       postcondition,
       recordedAt: new Date(this.now()).toISOString(),
     });

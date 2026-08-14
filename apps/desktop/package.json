@@ -3,11 +3,14 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "dist/main/runtime.js",
+  "main": "dist/main/production-entry.js",
   "scripts": {
     "build": "tsc -p tsconfig.json && vite build --config vite.renderer.config.ts && node ../../scripts/copy-desktop-assets.mjs",
-    "package:mac:e2e": "pnpm build && electron-builder --dir --config electron-builder.e2e.yml --mac && node ../../scripts/verify-packaged-mac.mjs",
+    "package:mac:e2e": "pnpm --dir ../.. exec tsc -b --force packages/contracts packages/ui packages/test-auth-site apps/desktop && pnpm build && electron-builder --dir --config electron-builder.e2e.yml --mac && node ../../scripts/verify-packaged-mac.mjs",
     "verify:provider-boundary": "node ../../scripts/verify-provider-boundary.mjs",
+    "verify:delegated-workflow": "node ../../scripts/verify-delegated-workflow.mjs",
+    "verify:delegated-workflow:recovery": "node ../../scripts/verify-delegated-workflow.mjs --recovery",
+    "verify:delegated-workflow:abrupt-recovery": "node ../../scripts/verify-delegated-workflow.mjs --abrupt-recovery",
     "package:mac:release": "pnpm --dir ../.. audit:provenance && pnpm --dir ../.. audit:licenses && pnpm --dir ../.. audit:assets && pnpm --dir ../.. audit:boundaries && pnpm --dir ../.. audit:secret-sinks && pnpm --dir ../.. audit:telemetry-egress && node ../../scripts/validate-release-config.mjs --release && VILLAGE_BUILD_CHANNEL=release pnpm build && electron-builder --config electron-builder.yml --mac && node ../../scripts/verify-packaged-mac.mjs --release",
     "start": "electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit"

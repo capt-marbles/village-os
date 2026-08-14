@@ -27,7 +27,9 @@ export class FixtureCdpAdapter {
     if (!this.transport.isAttached()) await this.transport.attach("1.3");
   }
 
-  async performSetupAction(command: OwnedFixtureSetupCommand): Promise<void> {
+  async performSetupAction(
+    command: OwnedFixtureSetupCommand,
+  ): Promise<"SATISFIED" | "NOT_SATISFIED" | "UNKNOWN"> {
     const semantic = ownedFixtureSetupCommandSchema.parse(command);
     if (
       semantic.capability === "OBSERVE_SETUP" ||
@@ -36,11 +38,17 @@ export class FixtureCdpAdapter {
       throw new Error("CDP_MUTATION_CAPABILITY_REQUIRED");
     }
     await this.ensureAttached();
-    await this.transport.sendCommand("Runtime.evaluate", {
+    const response = (await this.transport.sendCommand("Runtime.evaluate", {
       expression: `globalThis.__villageOwnedFixture.perform(${JSON.stringify(semantic.capability)})`,
       awaitPromise: true,
       returnByValue: true,
-    });
+    })) as { result?: { value?: unknown } };
+    const value = response.result?.value;
+    if (typeof value !== "object" || value === null) return "UNKNOWN";
+    const postcondition = Reflect.get(value, "postcondition");
+    return postcondition === "SATISFIED" || postcondition === "NOT_SATISFIED"
+      ? postcondition
+      : "UNKNOWN";
   }
 
   async observeSetup(): Promise<
@@ -49,6 +57,18 @@ export class FixtureCdpAdapter {
     await this.ensureAttached();
     const response = (await this.transport.sendCommand("Runtime.evaluate", {
       expression: "globalThis.__villageOwnedFixture.observe()",
+      awaitPromise: true,
+      returnByValue: true,
+    })) as { result?: { value?: unknown } };
+    return setupObservationSchema.parse(response.result?.value);
+  }
+
+  async captureOwnerState(): Promise<
+    ReturnType<typeof setupObservationSchema.parse>
+  > {
+    await this.ensureAttached();
+    const response = (await this.transport.sendCommand("Runtime.evaluate", {
+      expression: "globalThis.__villageOwnedFixture.captureOwnerState()",
       awaitPromise: true,
       returnByValue: true,
     })) as { result?: { value?: unknown } };

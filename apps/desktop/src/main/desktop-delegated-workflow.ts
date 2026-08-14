@@ -1,8 +1,5 @@
 import type { DelegatedWorkflowSnapshot } from "@village/ui";
-import type {
-  DelegatedWorkflowController,
-  WorkflowRuntimeResult,
-} from "./delegated-workflow-controller.js";
+import type { WorkflowRuntimeResult } from "./delegated-workflow-controller.js";
 import type { InternalDelegatedWorkflowOperations } from "./app-window.js";
 import type { LocalBrowserHost } from "../browser/local-browser-host.js";
 
@@ -16,10 +13,19 @@ export class DesktopDelegatedWorkflow implements InternalDelegatedWorkflowOperat
     (snapshot: DelegatedWorkflowSnapshot) => void
   >();
   private current: DelegatedWorkflowSnapshot;
+  private runGeneration = 0;
+  private running: Promise<void> | undefined;
 
   constructor(
     initialSnapshot: DelegatedWorkflowSnapshot,
-    private readonly controller: DelegatedWorkflowController,
+    private readonly controller: {
+      runOnce(): Promise<WorkflowRuntimeResult>;
+      takeover(timeoutMs: number): Promise<WorkflowRuntimeResult>;
+      handBack(): Promise<WorkflowRuntimeResult>;
+      reconcile(): Promise<WorkflowRuntimeResult>;
+      cancelFutureAutomation(): void;
+      takeoverOffline(): void;
+    },
     private readonly dependencies: {
       createFixtureHost(): Promise<LocalBrowserHost>;
       readCanonicalSnapshot(
@@ -50,18 +56,34 @@ export class DesktopDelegatedWorkflow implements InternalDelegatedWorkflowOperat
     if (!this.dependencies.providerConnected()) {
       return this.publish({ ...this.current, state: "DISCONNECTED" });
     }
-    return this.after(await this.controller.runOnce());
+    if (this.running) return this.current;
+    this.publish({
+      ...this.current,
+      state: "STARTING",
+      controller: "AGENT",
+      connection: "ONLINE",
+      inputOwner: "NONE",
+    });
+    this.startPump();
+    return this.current;
   }
 
   async takeOver(): Promise<DelegatedWorkflowSnapshot> {
+    this.runGeneration += 1;
     return this.after(await this.controller.takeover(5_000));
   }
 
   async handBack(): Promise<DelegatedWorkflowSnapshot> {
-    return this.after(await this.controller.handBack());
+    const snapshot = await this.after(await this.controller.handBack());
+    if (snapshot.state === "WORKING") {
+      await this.running;
+      this.startPump();
+    }
+    return snapshot;
   }
 
   async cancel(): Promise<DelegatedWorkflowSnapshot> {
+    this.runGeneration += 1;
     this.controller.cancelFutureAutomation();
     return this.publish(
       await this.dependencies.readCanonicalSnapshot({
@@ -72,10 +94,13 @@ export class DesktopDelegatedWorkflow implements InternalDelegatedWorkflowOperat
   }
 
   async retry(): Promise<DelegatedWorkflowSnapshot> {
-    return this.after(await this.controller.reconcile());
+    const snapshot = await this.after(await this.controller.reconcile());
+    if (snapshot.state === "WORKING") return this.start();
+    return snapshot;
   }
 
   fence(_reason: "TASK_SWITCH" | "APP_CLOSE"): void {
+    this.runGeneration += 1;
     this.controller.takeoverOffline();
     void this.dependencies
       .readCanonicalSnapshot({
@@ -90,6 +115,47 @@ export class DesktopDelegatedWorkflow implements InternalDelegatedWorkflowOperat
     result: WorkflowRuntimeResult,
   ): Promise<DelegatedWorkflowSnapshot> {
     return this.publish(await this.dependencies.readCanonicalSnapshot(result));
+  }
+
+  private async pump(generation: number): Promise<void> {
+    try {
+      for (
+        let step = 0;
+        step < 4 && generation === this.runGeneration;
+        step += 1
+      ) {
+        const logicalStep = this.current.logicalStep;
+        const result = await this.controller.runOnce();
+        if (generation !== this.runGeneration) return;
+        const snapshot = await this.after(result);
+        if (
+          result.status !== "RECEIPTED" ||
+          snapshot.state !== "WORKING" ||
+          snapshot.logicalStep === logicalStep
+        ) {
+          return;
+        }
+      }
+    } catch {
+      if (generation === this.runGeneration) {
+        this.publish({
+          ...this.current,
+          state: "FAILED",
+          controller: "NONE",
+          inputOwner: "NONE",
+        });
+      }
+    }
+  }
+
+  private startPump(): void {
+    if (this.running) return;
+    const generation = ++this.runGeneration;
+    const running = this.pump(generation);
+    this.running = running;
+    void running.finally(() => {
+      if (this.running === running) this.running = undefined;
+    });
   }
 
   private publish(

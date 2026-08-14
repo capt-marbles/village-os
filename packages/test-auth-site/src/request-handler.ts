@@ -1,9 +1,14 @@
-import { OWNED_FIXTURE_ORIGIN } from "@village/contracts";
-import { renderOwnedFixtureAccount } from "./account.js";
+import {
+  effectIdSchema,
+  OWNED_FIXTURE_ORIGIN,
+  setupLogicalStepSchema,
+} from "@village/contracts";
+import { contentSecurityPolicy, renderOwnedFixtureAccount } from "./account.js";
 import {
   FixtureServiceError,
   type FixtureActionRequest,
   type FixtureCallBinding,
+  type FixtureStepBinding,
   type LocalOwnedFixtureService,
 } from "./local-service.js";
 
@@ -98,9 +103,13 @@ export function createOwnedFixtureRequestHandler(
         (url.pathname === "/" || url.pathname === "/setup")
       ) {
         const effectId = url.searchParams.get("effectId");
+        const logicalStep = url.searchParams.get("logicalStep");
         if (
           !effectId ||
-          [...url.searchParams.keys()].some((key) => key !== "effectId")
+          !logicalStep ||
+          [...url.searchParams.keys()].some(
+            (key) => key !== "effectId" && key !== "logicalStep",
+          )
         ) {
           return json({ code: "INVALID_FIXTURE_REQUEST" }, 400);
         }
@@ -112,10 +121,39 @@ export function createOwnedFixtureRequestHandler(
             headers: {
               "content-type": "text/html; charset=utf-8",
               "cache-control": "no-store",
-              "content-security-policy":
-                "default-src 'none'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'",
+              "content-security-policy": contentSecurityPolicy,
             },
           },
+        );
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/owner-state") {
+        const body = await strictJson(request);
+        if (
+          !exactKeys(body, [
+            "logicalStep",
+            "effectId",
+            "displayName",
+            "role",
+            "preferredFocus",
+          ]) ||
+          typeof body.displayName !== "string" ||
+          typeof body.role !== "string" ||
+          typeof body.preferredFocus !== "string"
+        ) {
+          return json({ code: "INVALID_FIXTURE_REQUEST" }, 400);
+        }
+        const stepBinding: FixtureStepBinding = {
+          ...binding,
+          logicalStep: setupLogicalStepSchema.parse(body.logicalStep),
+          effectId: effectIdSchema.parse(body.effectId),
+        };
+        return json(
+          await service.applyOwnerState(stepBinding, {
+            displayName: body.displayName,
+            role: body.role,
+            preferredFocus: body.preferredFocus,
+          }),
         );
       }
 

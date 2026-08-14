@@ -1,6 +1,7 @@
 import {
   browserSessionIdSchema,
   effectIdSchema,
+  humanGateReasonSchema,
   isSetupCommandAllowedForStep,
   jobIdSchema,
   ownedFixtureSetupCommandSchema,
@@ -9,6 +10,8 @@ import {
   setupObservationSchema,
   type OwnedFixtureSetupCommand,
 } from "@village/contracts";
+import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import type { SanitizedProfileSnapshot } from "./account.js";
 import {
   desiredProfileSpec,
@@ -80,7 +83,8 @@ export type FixtureServiceErrorCode =
   | "PROFILE_ALREADY_FINALIZED"
   | "ATTEMPT_BUDGET_EXHAUSTED"
   | "RESPONSE_LOST_AFTER_EFFECT"
-  | "AMBIGUOUS_EFFECT_REQUIRES_OWNER";
+  | "AMBIGUOUS_EFFECT_REQUIRES_OWNER"
+  | "FIXTURE_STATE_CORRUPT";
 
 export class FixtureServiceError extends Error {
   readonly code: FixtureServiceErrorCode;
@@ -97,6 +101,12 @@ interface LocalProfile {
   role?: (typeof desiredProfileSpec.roleOptions)[number];
   preferredFocus?: (typeof desiredProfileSpec.focusOptions)[number];
   finalized: boolean;
+}
+
+export interface OwnerFixtureValues {
+  readonly displayName: string;
+  readonly role: string;
+  readonly preferredFocus: string;
 }
 
 interface EffectRecord {
@@ -119,6 +129,10 @@ export interface LocalOwnedFixtureServiceOptions {
   readonly diagnostic?: (code: FixtureServiceErrorCode) => void;
 }
 
+export interface PersistentOwnedFixtureServiceOptions extends LocalOwnedFixtureServiceOptions {
+  readonly stateFilePath: string;
+}
+
 export interface FixtureEffectGrant {
   readonly effectId: string;
   readonly logicalStep: SetupLogicalStep | "RESET";
@@ -128,6 +142,43 @@ export interface FixtureResetResult {
   readonly status: "RESET";
   readonly effectId: string;
   readonly attemptCount: number;
+}
+
+interface PersistedEffectRecord extends EffectRecord {
+  readonly effectId: string;
+}
+
+interface PersistedFixtureState {
+  readonly schemaVersion: 1;
+  readonly binding: FixtureCallBinding;
+  readonly profile: LocalProfile;
+  readonly effects: readonly PersistedEffectRecord[];
+}
+
+function isObject(candidate: unknown): candidate is Record<string, unknown> {
+  return (
+    typeof candidate === "object" &&
+    candidate !== null &&
+    !Array.isArray(candidate)
+  );
+}
+
+function hasOnlyKeys(
+  candidate: Record<string, unknown>,
+  allowed: readonly string[],
+): boolean {
+  return Object.keys(candidate).every((key) => allowed.includes(key));
+}
+
+function isExactStringArray(
+  candidate: unknown,
+  expected: readonly string[],
+): boolean {
+  return (
+    Array.isArray(candidate) &&
+    candidate.length === expected.length &&
+    candidate.every((value, index) => value === expected[index])
+  );
 }
 
 function sameBinding(
@@ -151,6 +202,21 @@ export class LocalOwnedFixtureService {
   private readonly createFinalizationId: () => string;
   private readonly diagnostic:
     ((code: FixtureServiceErrorCode) => void) | undefined;
+  private stateFilePath: string | undefined;
+  private persistenceTail = Promise.resolve();
+
+  static async open(
+    binding: FixtureCallBinding,
+    options: PersistentOwnedFixtureServiceOptions,
+  ): Promise<LocalOwnedFixtureService> {
+    const service = new LocalOwnedFixtureService(binding, options);
+    if (!options.stateFilePath || !options.stateFilePath.startsWith("/")) {
+      throw new FixtureServiceError("INVALID_FIXTURE_BINDING");
+    }
+    service.stateFilePath = options.stateFilePath;
+    await service.restore();
+    return service;
+  }
 
   constructor(
     binding: FixtureCallBinding,
@@ -255,6 +321,7 @@ export class LocalOwnedFixtureService {
     }
     if (record.result && record.result.status !== "RESET") {
       this.recordReplay(record);
+      await this.persist();
       return record.result;
     }
     this.beginAttempt(record);
@@ -262,6 +329,7 @@ export class LocalOwnedFixtureService {
     const mode = options.mode ?? "NORMAL";
     if (mode === "AMBIGUOUS_EFFECT") {
       record.ambiguous = true;
+      await this.persist();
       this.emitDiagnostic("AMBIGUOUS_EFFECT_REQUIRES_OWNER");
       throw new FixtureServiceError("AMBIGUOUS_EFFECT_REQUIRES_OWNER");
     }
@@ -275,6 +343,7 @@ export class LocalOwnedFixtureService {
         attemptCount: record.attempts,
       } as const;
       record.result = result;
+      await this.persist();
       return result;
     }
     if (this.profile.finalized) {
@@ -283,6 +352,7 @@ export class LocalOwnedFixtureService {
 
     const result = this.applyAction(binding, record.attempts);
     record.result = result;
+    await this.persist();
     if (mode === "RESPONSE_LOSS") {
       this.emitDiagnostic("RESPONSE_LOST_AFTER_EFFECT");
       throw new FixtureServiceError("RESPONSE_LOST_AFTER_EFFECT");
@@ -302,16 +372,20 @@ export class LocalOwnedFixtureService {
     record.capability = "RESET";
     if (record.result?.status === "RESET") {
       this.recordReplay(record);
+      await this.persist();
       return record.result;
     }
     this.beginAttempt(record);
     this.profile = { finalized: false };
+    this.effects.clear();
+    this.effects.set(binding.effectId, record);
     const result = {
       status: "RESET",
       effectId: binding.effectId,
       attemptCount: record.attempts,
     } as const;
     record.result = result;
+    await this.persist();
     return result;
   }
 
@@ -336,7 +410,34 @@ export class LocalOwnedFixtureService {
     return {
       variant: this.variant,
       profile: this.profileSnapshot(candidate),
+      localValues: { ...this.profile },
     } as const;
+  }
+
+  async applyOwnerState(
+    candidate: FixtureStepBinding,
+    values: OwnerFixtureValues,
+  ) {
+    const binding = this.requireStepBinding(candidate);
+    this.requireEffectRecord(binding);
+    const displayName = values.displayName.trim();
+    if (
+      displayName.length === 0 ||
+      displayName.length > 80 ||
+      !desiredProfileSpec.roleOptions.includes(values.role as never) ||
+      !desiredProfileSpec.focusOptions.includes(values.preferredFocus as never)
+    ) {
+      throw new FixtureServiceError("INVALID_SETUP_ACTION");
+    }
+    this.profile = {
+      ...this.profile,
+      displayName,
+      role: values.role as (typeof desiredProfileSpec.roleOptions)[number],
+      preferredFocus:
+        values.preferredFocus as (typeof desiredProfileSpec.focusOptions)[number],
+    };
+    await this.persist();
+    return this.observe(binding);
   }
 
   assertBoundSession(candidate: FixtureCallBinding): void {
@@ -441,6 +542,352 @@ export class LocalOwnedFixtureService {
     };
     this.effects.set(binding.effectId, created);
     return created;
+  }
+
+  private async restore(): Promise<void> {
+    if (!this.stateFilePath) return;
+    let raw: string;
+    try {
+      raw = await readFile(this.stateFilePath, "utf8");
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
+        return;
+      }
+      throw new FixtureServiceError("FIXTURE_STATE_CORRUPT");
+    }
+    if (raw.length > 131_072) {
+      throw new FixtureServiceError("FIXTURE_STATE_CORRUPT");
+    }
+    let candidate: unknown;
+    try {
+      candidate = JSON.parse(raw) as unknown;
+    } catch {
+      throw new FixtureServiceError("FIXTURE_STATE_CORRUPT");
+    }
+    const state = this.parsePersistedState(candidate);
+    this.profile = state.profile;
+    this.effects.clear();
+    for (const { effectId, ...record } of state.effects) {
+      this.effects.set(effectId, record);
+    }
+  }
+
+  private parsePersistedState(candidate: unknown): PersistedFixtureState {
+    if (
+      !isObject(candidate) ||
+      !hasOnlyKeys(candidate, [
+        "schemaVersion",
+        "binding",
+        "profile",
+        "effects",
+      ]) ||
+      candidate.schemaVersion !== 1 ||
+      !isObject(candidate.binding) ||
+      !isObject(candidate.profile) ||
+      !Array.isArray(candidate.effects) ||
+      candidate.effects.length > this.effectGrants.size
+    ) {
+      throw new FixtureServiceError("FIXTURE_STATE_CORRUPT");
+    }
+    const binding = candidate.binding as unknown as FixtureCallBinding;
+    try {
+      this.requireBinding(binding);
+    } catch {
+      throw new FixtureServiceError("FIXTURE_STATE_CORRUPT");
+    }
+    const profile = this.parsePersistedProfile(candidate.profile);
+    const seen = new Set<string>();
+    const effects = candidate.effects.map((effect) => {
+      const parsed = this.parsePersistedEffect(effect);
+      if (seen.has(parsed.effectId)) {
+        throw new FixtureServiceError("FIXTURE_STATE_CORRUPT");
+      }
+      seen.add(parsed.effectId);
+      return parsed;
+    });
+    if (
+      effects.some((effect) => effect.result?.status === "FINALIZED") !==
+      profile.finalized
+    ) {
+      throw new FixtureServiceError("FIXTURE_STATE_CORRUPT");
+    }
+    return { schemaVersion: 1, binding, profile, effects };
+  }
+
+  private parsePersistedProfile(
+    candidate: Record<string, unknown>,
+  ): LocalProfile {
+    if (
+      !hasOnlyKeys(candidate, [
+        "displayName",
+        "role",
+        "preferredFocus",
+        "finalized",
+      ]) ||
+      typeof candidate.finalized !== "boolean" ||
+      (candidate.displayName !== undefined &&
+        (typeof candidate.displayName !== "string" ||
+          candidate.displayName.trim().length === 0 ||
+          candidate.displayName.length > 80)) ||
+      (candidate.role !== undefined &&
+        !desiredProfileSpec.roleOptions.includes(candidate.role as never)) ||
+      (candidate.preferredFocus !== undefined &&
+        !desiredProfileSpec.focusOptions.includes(
+          candidate.preferredFocus as never,
+        ))
+    ) {
+      throw new FixtureServiceError("FIXTURE_STATE_CORRUPT");
+    }
+    const profile: LocalProfile = {
+      finalized: candidate.finalized,
+      ...(candidate.displayName === undefined
+        ? {}
+        : { displayName: candidate.displayName as string }),
+      ...(candidate.role === undefined
+        ? {}
+        : {
+            role: candidate.role as (typeof desiredProfileSpec.roleOptions)[number],
+          }),
+      ...(candidate.preferredFocus === undefined
+        ? {}
+        : {
+            preferredFocus:
+              candidate.preferredFocus as (typeof desiredProfileSpec.focusOptions)[number],
+          }),
+    };
+    if (
+      profile.finalized &&
+      (profile.displayName !== desiredProfileSpec.displayName ||
+        profile.role !== desiredProfileSpec.role ||
+        profile.preferredFocus !== desiredProfileSpec.preferredFocus)
+    ) {
+      throw new FixtureServiceError("FIXTURE_STATE_CORRUPT");
+    }
+    return profile;
+  }
+
+  private parsePersistedEffect(candidate: unknown): PersistedEffectRecord {
+    if (
+      !isObject(candidate) ||
+      !hasOnlyKeys(candidate, [
+        "effectId",
+        "principalId",
+        "jobId",
+        "browserSessionId",
+        "grantedStep",
+        "logicalStep",
+        "capability",
+        "attempts",
+        "ambiguous",
+        "result",
+      ]) ||
+      !effectIdSchema.safeParse(candidate.effectId).success ||
+      !Number.isInteger(candidate.attempts) ||
+      (candidate.attempts as number) < 0 ||
+      (candidate.attempts as number) > this.maxAttemptsPerEffect ||
+      typeof candidate.ambiguous !== "boolean"
+    ) {
+      throw new FixtureServiceError("FIXTURE_STATE_CORRUPT");
+    }
+    const effectId = candidate.effectId as string;
+    const grantedStep = this.effectGrants.get(effectId);
+    if (
+      !grantedStep ||
+      candidate.grantedStep !== grantedStep ||
+      candidate.principalId !== this.expectedBinding.principalId ||
+      candidate.jobId !== this.expectedBinding.jobId ||
+      candidate.browserSessionId !== this.expectedBinding.browserSessionId
+    ) {
+      throw new FixtureServiceError("FIXTURE_STATE_CORRUPT");
+    }
+    const logicalStep =
+      candidate.logicalStep === undefined
+        ? undefined
+        : setupLogicalStepSchema.safeParse(candidate.logicalStep).data;
+    if (
+      (candidate.logicalStep !== undefined && !logicalStep) ||
+      (logicalStep !== undefined && logicalStep !== grantedStep)
+    ) {
+      throw new FixtureServiceError("FIXTURE_STATE_CORRUPT");
+    }
+    let capability: EffectRecord["capability"];
+    if (candidate.capability === "RESET") {
+      capability = "RESET";
+    } else if (candidate.capability !== undefined) {
+      const parsed = ownedFixtureSetupCommandSchema.safeParse({
+        capability: candidate.capability,
+      });
+      if (!parsed.success) {
+        throw new FixtureServiceError("FIXTURE_STATE_CORRUPT");
+      }
+      capability = parsed.data.capability;
+    }
+    if (
+      (capability === "RESET" && grantedStep !== "RESET") ||
+      (capability !== undefined &&
+        capability !== "RESET" &&
+        (logicalStep === undefined ||
+          mutationCapabilityForStep[logicalStep] !== capability))
+    ) {
+      throw new FixtureServiceError("FIXTURE_STATE_CORRUPT");
+    }
+    const record: PersistedEffectRecord = {
+      effectId,
+      principalId: this.expectedBinding.principalId,
+      jobId: this.expectedBinding.jobId,
+      browserSessionId: this.expectedBinding.browserSessionId,
+      grantedStep,
+      attempts: candidate.attempts as number,
+      ambiguous: candidate.ambiguous,
+      ...(logicalStep === undefined ? {} : { logicalStep }),
+      ...(capability === undefined ? {} : { capability }),
+    };
+    if (candidate.result !== undefined) {
+      record.result = this.parsePersistedResult(candidate.result, record);
+    }
+    return record;
+  }
+
+  private parsePersistedResult(
+    candidate: unknown,
+    record: PersistedEffectRecord,
+  ): FixtureOperationResult | FixtureResetResult {
+    if (!isObject(candidate) || candidate.effectId !== record.effectId) {
+      throw new FixtureServiceError("FIXTURE_STATE_CORRUPT");
+    }
+    if (
+      !Number.isInteger(candidate.attemptCount) ||
+      (candidate.attemptCount as number) < 1 ||
+      (candidate.attemptCount as number) > record.attempts
+    ) {
+      throw new FixtureServiceError("FIXTURE_STATE_CORRUPT");
+    }
+    if (
+      candidate.status === "RESET" &&
+      record.grantedStep === "RESET" &&
+      hasOnlyKeys(candidate, ["status", "effectId", "attemptCount"])
+    ) {
+      return {
+        status: "RESET",
+        effectId: record.effectId,
+        attemptCount: candidate.attemptCount as number,
+      };
+    }
+    if (
+      candidate.status === "APPLIED" &&
+      record.logicalStep !== undefined &&
+      record.logicalStep !== "FINALIZE_SETUP" &&
+      candidate.logicalStep === record.logicalStep &&
+      candidate.postcondition === "SATISFIED" &&
+      isExactStringArray(candidate.predicateIds, [
+        setupPredicateIds[record.logicalStep],
+      ]) &&
+      hasOnlyKeys(candidate, [
+        "status",
+        "logicalStep",
+        "effectId",
+        "postcondition",
+        "predicateIds",
+        "attemptCount",
+      ])
+    ) {
+      return {
+        status: "APPLIED",
+        logicalStep: record.logicalStep,
+        effectId: record.effectId,
+        postcondition: "SATISFIED",
+        predicateIds: [setupPredicateIds[record.logicalStep]],
+        attemptCount: candidate.attemptCount as number,
+      };
+    }
+    if (
+      candidate.status === "FINALIZED" &&
+      record.logicalStep === "FINALIZE_SETUP" &&
+      candidate.logicalStep === "FINALIZE_SETUP" &&
+      candidate.postcondition === "SATISFIED" &&
+      isExactStringArray(candidate.predicateIds, [
+        setupPredicateIds.FINALIZE_SETUP,
+      ]) &&
+      typeof candidate.finalizationId === "string" &&
+      /^local-finalization-[A-Za-z0-9-]{1,64}$/.test(
+        candidate.finalizationId,
+      ) &&
+      hasOnlyKeys(candidate, [
+        "status",
+        "logicalStep",
+        "effectId",
+        "finalizationId",
+        "postcondition",
+        "predicateIds",
+        "attemptCount",
+      ])
+    ) {
+      return {
+        status: "FINALIZED",
+        logicalStep: "FINALIZE_SETUP",
+        effectId: record.effectId,
+        finalizationId: candidate.finalizationId,
+        postcondition: "SATISFIED",
+        predicateIds: [setupPredicateIds.FINALIZE_SETUP],
+        attemptCount: candidate.attemptCount as number,
+      };
+    }
+    const reason = humanGateReasonSchema.safeParse(candidate.reason);
+    if (
+      candidate.status === "WAITING_FOR_USER" &&
+      record.logicalStep !== undefined &&
+      candidate.logicalStep === record.logicalStep &&
+      reason.success &&
+      hasOnlyKeys(candidate, [
+        "status",
+        "logicalStep",
+        "effectId",
+        "reason",
+        "attemptCount",
+      ])
+    ) {
+      return {
+        status: "WAITING_FOR_USER",
+        logicalStep: record.logicalStep,
+        effectId: record.effectId,
+        reason: reason.data,
+        attemptCount: candidate.attemptCount as number,
+      };
+    }
+    throw new FixtureServiceError("FIXTURE_STATE_CORRUPT");
+  }
+
+  private async persist(): Promise<void> {
+    if (!this.stateFilePath) return;
+    const path = this.stateFilePath;
+    const serialized = JSON.stringify({
+      schemaVersion: 1,
+      binding: this.expectedBinding,
+      profile: this.profile,
+      effects: [...this.effects].map(([effectId, record]) => ({
+        effectId,
+        ...record,
+      })),
+    } satisfies PersistedFixtureState);
+    const operation = this.persistenceTail.then(async () => {
+      const directory = dirname(path);
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      await chmod(directory, 0o700);
+      const temporary = `${path}.tmp-${crypto.randomUUID()}`;
+      await writeFile(temporary, serialized, { encoding: "utf8", mode: 0o600 });
+      await chmod(temporary, 0o600);
+      await rename(temporary, path);
+    });
+    this.persistenceTail = operation.catch(() => undefined);
+    try {
+      await operation;
+    } catch {
+      throw new FixtureServiceError("FIXTURE_STATE_CORRUPT");
+    }
   }
 
   private beginAttempt(record: EffectRecord): void {

@@ -1,5 +1,21 @@
 extends: ./electron-builder.yml
 publish: null
+extraMetadata:
+  main: dist/main/internal-proof-entry.js
+files:
+  - dist/**
+  - package.json
+extraResources:
+  - from: ../../packages/test-auth-site/dist
+    to: internal-proof/node_modules/@village/test-auth-site/dist
+  - from: ../../packages/test-auth-site/package.json
+    to: internal-proof/node_modules/@village/test-auth-site/package.json
+  - from: ../../packages/contracts/dist
+    to: internal-proof/node_modules/@village/contracts/dist
+  - from: ../../packages/contracts/package.json
+    to: internal-proof/node_modules/@village/contracts/package.json
+  - from: ../../packages/contracts/node_modules/zod
+    to: internal-proof/node_modules/zod
 mac:
   target: dir
   identity: "-"

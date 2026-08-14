@@ -25,6 +25,9 @@
     "audit:secret-sinks": "node scripts/audit-secret-sinks.mjs",
     "audit:telemetry-egress": "node scripts/audit-telemetry-egress.mjs",
     "audit:release-config": "node scripts/validate-release-config.mjs",
+    "verify:delegated-workflow": "node scripts/verify-delegated-workflow.mjs",
+    "verify:delegated-workflow:recovery": "node scripts/verify-delegated-workflow.mjs --recovery",
+    "verify:delegated-workflow:abrupt-recovery": "node scripts/verify-delegated-workflow.mjs --abrupt-recovery",
     "release:validate": "node scripts/validate-release-config.mjs --release",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:workers && pnpm audit:provenance && pnpm audit:licenses && pnpm audit:assets && pnpm audit:boundaries && pnpm audit:secret-sinks && pnpm audit:telemetry-egress && pnpm audit:release-config && pnpm build"
   },

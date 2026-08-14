@@ -42,12 +42,20 @@ describe("desktop delegated workflow", () => {
       },
     );
     await expect(workflow.start()).resolves.toMatchObject({
-      lastDurableUpdateAt: "2026-08-13T12:01:00.000Z",
+      state: "STARTING",
     });
+    await vi.waitFor(() =>
+      expect(workflow.snapshot()).toMatchObject({
+        lastDurableUpdateAt: "2026-08-13T12:01:00.000Z",
+      }),
+    );
     await expect(workflow.start()).resolves.toMatchObject({
+      state: "STARTING",
+    });
+    await vi.waitFor(() => expect(controller.runOnce).toHaveBeenCalledTimes(2));
+    expect(workflow.snapshot()).toMatchObject({
       lastDurableUpdateAt: "2026-08-13T12:01:00.000Z",
     });
-    expect(controller.runOnce).toHaveBeenCalledTimes(2);
   });
 
   it("fences without a provider turn when ChatGPT is disconnected", async () => {

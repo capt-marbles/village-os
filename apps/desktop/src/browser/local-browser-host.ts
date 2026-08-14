@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { session, WebContentsView } from "electron";
+import { session, type Session, WebContentsView } from "electron";
 import {
   eraseProfileHoldingLock,
   ensureProtectedProfile,
@@ -20,6 +20,7 @@ import {
 export interface LocalBrowserHostOptions extends ProfileScope {
   profileRoot: string;
   initialUrl: string;
+  prepareSession?: (browserSession: Session) => Promise<() => Promise<void>>;
 }
 
 export class LocalBrowserHost {
@@ -30,6 +31,7 @@ export class LocalBrowserHost {
     private readonly profileLock: ProfileLock,
     private readonly profilePath: string,
     private readonly browserSession: ReturnType<typeof session.fromPath>,
+    private readonly closePreparedSession?: () => Promise<void>,
   ) {
     this.view = view;
   }
@@ -41,11 +43,13 @@ export class LocalBrowserHost {
     if (!decision.allow) throw new Error(decision.code);
     const profile = await ensureProtectedProfile(options.profileRoot, options);
     const profileLock = await ProfileLock.acquire(profile.path);
+    let closePreparedSession: (() => Promise<void>) | undefined;
     try {
       const browserSession = session.fromPath(profile.path, {
         cache: true,
       });
       configureBrowserSession(browserSession);
+      closePreparedSession = await options.prepareSession?.(browserSession);
       const view = new WebContentsView({
         webPreferences: {
           ...browserWebPreferences,
@@ -59,9 +63,11 @@ export class LocalBrowserHost {
         profileLock,
         profile.path,
         browserSession,
+        closePreparedSession,
       );
     } catch (error) {
       // The view may exist even when later session setup fails.
+      await closePreparedSession?.();
       await profileLock.release();
       throw error;
     }
@@ -69,6 +75,7 @@ export class LocalBrowserHost {
 
   async close(): Promise<void> {
     if (!this.view.webContents.isDestroyed()) this.view.webContents.close();
+    await this.closePreparedSession?.();
     await this.profileLock.release();
   }
 

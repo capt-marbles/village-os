@@ -1,3 +1,6 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   OWNED_FIXTURE_ORIGIN,
@@ -214,6 +217,61 @@ describe("owned fixture setup service", () => {
     }
   });
 
+  it("reopens the local profile and effect ledger without repeating finalization", async () => {
+    const root = await mkdtemp(join(tmpdir(), "village-fixture-state-"));
+    const stateFilePath = join(root, "fixture-state.json");
+    const options = {
+      effectGrants,
+      stateFilePath,
+      createFinalizationId: () => "local-finalization-persisted",
+    };
+    const firstService = await LocalOwnedFixtureService.open(binding, options);
+    await completeFields(firstService);
+    const request = operation(
+      "FINALIZE_SETUP",
+      effects.finalize,
+      "FINALIZE_SETUP",
+    );
+    const first = await firstService.execute(request);
+
+    const reopened = await LocalOwnedFixtureService.open(binding, options);
+    await expect(reopened.verify(request)).resolves.toMatchObject({
+      facts: expect.arrayContaining([
+        { id: "FINALIZATION_STATE", value: "FINALIZED" },
+      ]),
+    });
+    await expect(reopened.execute(request)).resolves.toEqual(first);
+    await expect(
+      reopened.attempts({ ...binding, effectId: effects.finalize }),
+    ).resolves.toMatchObject({ count: 2 });
+
+    await reopened.reset({ ...binding, effectId: effects.reset });
+    const resetReopened = await LocalOwnedFixtureService.open(binding, options);
+    await expect(
+      resetReopened.verify({
+        ...binding,
+        logicalStep: "SET_DISPLAY_NAME",
+        effectId: effects.display,
+      }),
+    ).resolves.toMatchObject({
+      facts: expect.arrayContaining([
+        { id: "DISPLAY_NAME_MATCH", value: "MISSING" },
+      ]),
+    });
+    await expect(
+      resetReopened.execute(
+        operation("SET_DISPLAY_NAME", effects.display, "REPLACE_DISPLAY_NAME"),
+      ),
+    ).resolves.toMatchObject({ status: "APPLIED", attemptCount: 1 });
+
+    await expect(
+      LocalOwnedFixtureService.open(
+        { ...binding, jobId: "job_01J00000000000000000000001" },
+        options,
+      ),
+    ).rejects.toMatchObject({ code: "FIXTURE_STATE_CORRUPT" });
+  });
+
   it("fails closed for conflicting replay and every forged identity", async () => {
     const service = createService();
     await service.execute(
@@ -351,7 +409,9 @@ describe("owned fixture request handler", () => {
     });
     const handler = createOwnedFixtureRequestHandler({ service, binding });
     const page = await handler(
-      new Request(`${OWNED_FIXTURE_ORIGIN}/setup?effectId=${effects.read}`),
+      new Request(
+        `${OWNED_FIXTURE_ORIGIN}/setup?logicalStep=SET_DISPLAY_NAME&effectId=${effects.read}`,
+      ),
     );
     expect(page.status).toBe(200);
     expect(await page.text()).toContain('data-layout="SPLIT"');
@@ -454,7 +514,9 @@ describe("owned fixture request handler", () => {
     });
     const handler = createOwnedFixtureRequestHandler({ service, binding });
     const response = await handler(
-      new Request(`${OWNED_FIXTURE_ORIGIN}/setup?effectId=${effects.read}`),
+      new Request(
+        `${OWNED_FIXTURE_ORIGIN}/setup?logicalStep=SET_DISPLAY_NAME&effectId=${effects.read}`,
+      ),
     );
     const html = await response.text();
     expect(html).toContain("&lt;script&gt;");

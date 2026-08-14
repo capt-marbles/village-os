@@ -144,6 +144,62 @@ describe("delegated workflow runtime", () => {
     ).toEqual(["ACCEPTED", "DISPATCHED", "EFFECT_OBSERVED", "RECEIPTED"]);
   });
 
+  it("durably advances a non-final step whose live predicate is already satisfied", async () => {
+    const { controller, coordinator, fixture, provider } = await harness({
+      fixture: { observe: vi.fn(async () => observation("MATCH")) },
+    });
+
+    await expect(controller.runOnce()).resolves.toMatchObject({
+      status: "RECEIPTED",
+      effectId: ids.effectId,
+    });
+    expect(provider).not.toHaveBeenCalled();
+    expect(fixture.execute).not.toHaveBeenCalled();
+    expect(coordinator.acceptAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        logicalStep: "SET_DISPLAY_NAME",
+        effectId: ids.effectId,
+        command: { capability: "VERIFY_SETUP" },
+      }),
+    );
+    expect(coordinator.recordReceipt).toHaveBeenCalledTimes(1);
+    expect(
+      (await controller.journalEntries()).map((entry) => entry.phase),
+    ).toEqual(["ACCEPTED", "DISPATCHED", "EFFECT_OBSERVED", "RECEIPTED"]);
+  });
+
+  it("receipts persisted finalization truth without repeating finalization", async () => {
+    const finalEffectId = "efx_01J00000000000000000000001";
+    const finalized = {
+      schemaVersion: 1 as const,
+      source: "BROWSER_UNTRUSTED" as const,
+      workflowKind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1" as const,
+      workflowVersion: 1 as const,
+      logicalStep: "FINALIZE_SETUP" as const,
+      effectId: finalEffectId,
+      predicateIds: ["setup-finalization-v1", "setup-human-gate-v1"],
+      facts: [
+        { id: "FINALIZATION_STATE" as const, value: "FINALIZED" as const },
+        { id: "HUMAN_GATE" as const, value: "NONE" as const },
+      ],
+    };
+    const { controller, coordinator, fixture } = await harness({
+      snapshots: [
+        snapshot({ logicalStep: "FINALIZE_SETUP", effectId: finalEffectId }),
+      ],
+      fixture: { observe: vi.fn(async () => finalized) },
+    });
+
+    await expect(controller.runOnce()).resolves.toMatchObject({
+      status: "RECEIPTED",
+      effectId: finalEffectId,
+    });
+    expect(fixture.execute).not.toHaveBeenCalled();
+    expect(coordinator.acceptAction).toHaveBeenCalledWith(
+      expect.objectContaining({ command: { capability: "VERIFY_SETUP" } }),
+    );
+  });
+
   it("rejects a provider result made stale by takeover without dispatch", async () => {
     const { controller, coordinator, fixture, provider } = await harness();
     let release!: () => void;

@@ -1,5 +1,5 @@
 import type { SetupFixtureVariant } from "./variants.js";
-import { desiredProfileSpec } from "./setup.js";
+import { desiredProfileSpec, mutationCapabilityForStep } from "./setup.js";
 
 export interface SanitizedProfileSnapshot {
   readonly presentFields: readonly (
@@ -11,6 +11,11 @@ export interface SanitizedProfileSnapshot {
 export interface OwnedFixtureAccountView {
   readonly variant: SetupFixtureVariant;
   readonly profile: SanitizedProfileSnapshot;
+  readonly localValues?: {
+    readonly displayName?: string;
+    readonly role?: string;
+    readonly preferredFocus?: string;
+  };
 }
 
 function escapeHtml(value: string): string {
@@ -31,9 +36,10 @@ function optionList(values: readonly string[], selected: string): string {
     .join("");
 }
 
-const contentSecurityPolicy = [
+export const contentSecurityPolicy = [
   "default-src 'none'",
   "style-src 'unsafe-inline'",
+  "script-src 'nonce-village-fixture-v1'",
   "connect-src 'self'",
   "form-action 'self'",
   "frame-src 'none'",
@@ -41,11 +47,20 @@ const contentSecurityPolicy = [
   "base-uri 'none'",
 ].join("; ");
 
+const stepForCapability = Object.freeze(
+  Object.fromEntries(
+    Object.entries(mutationCapabilityForStep).map(
+      ([logicalStep, capability]) => [capability, logicalStep],
+    ),
+  ),
+);
+
 /** Local-only HTML. Values render in the dedicated fixture session and nowhere else. */
 export function renderOwnedFixtureAccount(
   view: OwnedFixtureAccountView,
 ): string {
   const variant = view.variant;
+  const localValues = view.localValues ?? {};
   const gated = variant.humanGate !== "NONE";
   const actions = gated
     ? ""
@@ -71,13 +86,49 @@ export function renderOwnedFixtureAccount(
       <p data-page-authored="true">${escapeHtml(variant.hostileText)}</p>
       ${hostileNavigation}
       <section aria-label="Local setup fields">
-        <label>Display name <input data-field="DISPLAY_NAME" value="${escapeHtml(desiredProfileSpec.displayName)}"></label>
-        <label>Role <select data-field="ROLE">${optionList(desiredProfileSpec.roleOptions, desiredProfileSpec.role)}</select></label>
-        <label>Preferred focus <select data-field="PREFERRED_FOCUS">${optionList(desiredProfileSpec.focusOptions, desiredProfileSpec.preferredFocus)}</select></label>
+        <label>Display name <input data-field="DISPLAY_NAME" value="${escapeHtml(localValues.displayName ?? "")}"></label>
+        <label>Role <select data-field="ROLE"><option value="">Choose a role</option>${optionList(desiredProfileSpec.roleOptions, localValues.role ?? "")}</select></label>
+        <label>Preferred focus <select data-field="PREFERRED_FOCUS"><option value="">Choose a focus</option>${optionList(desiredProfileSpec.focusOptions, localValues.preferredFocus ?? "")}</select></label>
       </section>
       <output data-present-field-count="${view.profile.presentFields.length}" data-finalized="${String(view.profile.finalized)}"></output>
       <nav aria-label="Bounded semantic actions">${actions}</nav>
     </main>
+    <script nonce="village-fixture-v1">
+      (() => {
+        const stepFor = Object.freeze(${JSON.stringify(stepForCapability)});
+        const parameters = new URL(location.href).searchParams;
+        const effectId = parameters.get("effectId");
+        const logicalStep = parameters.get("logicalStep");
+        const json = async (path, options) => {
+          const response = await fetch(path, options);
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.code || "FIXTURE_REQUEST_FAILED");
+          return body;
+        };
+        globalThis.__villageOwnedFixture = Object.freeze({
+          observe: () => json("/api/observe?logicalStep=" + encodeURIComponent(logicalStep) + "&effectId=" + encodeURIComponent(effectId)),
+          perform: (capability) => {
+            if (stepFor[capability] !== logicalStep) throw new Error("FIXTURE_ACTION_DENIED");
+            return json("/api/action", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ logicalStep, effectId, capability })
+            });
+          },
+          captureOwnerState: () => json("/api/owner-state", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              logicalStep,
+              effectId,
+              displayName: document.querySelector('[data-field="DISPLAY_NAME"]').value,
+              role: document.querySelector('[data-field="ROLE"]').value,
+              preferredFocus: document.querySelector('[data-field="PREFERRED_FOCUS"]').value
+            })
+          })
+        });
+      })();
+    </script>
   </body>
 </html>`;
 }

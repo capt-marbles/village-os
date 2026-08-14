@@ -4,8 +4,8 @@ export interface FixtureProtocol {
   handle(
     scheme: string,
     handler: (request: Request) => Promise<Response>,
-  ): Promise<void>;
-  unhandle(scheme: string): Promise<void>;
+  ): void | Promise<void>;
+  unhandle(scheme: string): void | Promise<void>;
 }
 
 function denied(): Response {

@@ -1,5 +1,6 @@
 export const delegatedWorkflowStates = [
   "DISCONNECTED",
+  "READY",
   "STARTING",
   "WORKING",
   "TAKEOVER_PENDING",
@@ -63,6 +64,15 @@ const stateCopy: Record<DelegatedWorkflowState, StateCopy> = {
     primaryAction: null,
     secondaryActions: [],
     actionsDisabled: true,
+  },
+  READY: {
+    label: "Ready for delegated setup",
+    explanation:
+      "ChatGPT is connected. Start when you are ready to watch Village complete the local demo profile.",
+    tone: "NEUTRAL",
+    primaryAction: "START",
+    secondaryActions: [],
+    actionsDisabled: false,
   },
   STARTING: {
     label: "Starting demo setup…",

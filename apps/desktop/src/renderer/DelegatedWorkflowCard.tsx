@@ -22,7 +22,7 @@ export interface DelegatedWorkflowBridge {
 
 const initialSnapshot: DelegatedWorkflowSnapshot = {
   workflowKind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
-  state: "DISCONNECTED",
+  state: "READY",
   logicalStep: null,
   controller: "NONE",
   connection: "ABSENT",
