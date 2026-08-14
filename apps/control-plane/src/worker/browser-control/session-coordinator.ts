@@ -81,6 +81,22 @@ const renewSchema = leaseOperationSchema.extend({ expiresAt: instantSchema });
 const workflowReceiptSchema = z.strictObject({
   receipt: setupActionReceiptSchema,
   checkpoint: setupCheckpointSchema,
+  connectionId: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{1,128}$/)
+    .optional(),
+});
+
+const freshWorkflowLeaseSchema = z.strictObject({
+  principalId: principalIdSchema,
+  deviceId: deviceIdSchema,
+  jobId: jobIdSchema,
+  browserSessionId: browserSessionIdSchema,
+  connectionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/),
+  afterLeaseEpoch: z.number().int().positive(),
+  cursor: z.number().int().nonnegative(),
+  now: instantSchema,
+  expiresAt: instantSchema,
 });
 
 const workflowCancellationSchema = z.strictObject({
@@ -695,6 +711,12 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
       return { ok: false as const, code: "IDENTITY_MISMATCH" };
     }
     if (
+      parsed.data.connectionId !== undefined &&
+      controlRow.holder_connection_id !== parsed.data.connectionId
+    ) {
+      return { ok: false as const, code: "STALE_CONNECTOR" };
+    }
+    if (
       checkpoint.principalId !== receipt.principalId ||
       checkpoint.deviceId !== receipt.deviceId ||
       checkpoint.jobId !== receipt.jobId ||
@@ -754,6 +776,27 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
           }
         : { ok: false as const, code: "CONFLICTING_RECEIPT" };
     }
+    const stepOrder = setupLogicalStepSchema.options;
+    const stepIndex = stepOrder.indexOf(receipt.logicalStep);
+    const shouldAdvance =
+      checkpoint.currentStep === receipt.logicalStep &&
+      receipt.logicalStep !== "FINALIZE_SETUP";
+    const derivedEffectId = `efx_${checkpoint.checkpointId.slice(4)}`;
+    const nextEffectId =
+      derivedEffectId === receipt.effectId
+        ? `${derivedEffectId.slice(0, -1)}${derivedEffectId.endsWith("0") ? "1" : "0"}`
+        : derivedEffectId;
+    const canonicalCheckpoint = shouldAdvance
+      ? setupCheckpointSchema.parse({
+          ...checkpoint,
+          currentStep: stepOrder[stepIndex + 1],
+          currentEffectId: nextEffectId,
+          actionPhase: "ACCEPTED",
+        })
+      : checkpoint;
+    if (this.checkpointEffectConflicts(canonicalCheckpoint)) {
+      return { ok: false as const, code: "LOGICAL_EFFECT_CONFLICT" };
+    }
 
     this.ctx.storage.sql.exec(
       `INSERT INTO workflow_receipts
@@ -783,27 +826,100 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
       }),
       receipt.actionId,
     );
-    this.bindCheckpointEffect(checkpoint);
+    this.bindCheckpointEffect(canonicalCheckpoint);
     this.ctx.storage.sql.exec(
       `INSERT INTO workflow_checkpoint
        (singleton, checkpoint_json, event_sequence) VALUES (1, ?, ?)
        ON CONFLICT(singleton) DO UPDATE SET
          checkpoint_json = excluded.checkpoint_json,
          event_sequence = excluded.event_sequence`,
-      JSON.stringify(checkpoint),
-      checkpoint.eventSequence,
+      JSON.stringify(canonicalCheckpoint),
+      canonicalCheckpoint.eventSequence,
     );
     this.ctx.storage.sql.exec(
       "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
-      checkpoint.eventSequence,
+      canonicalCheckpoint.eventSequence,
     );
     this.appendEventAt(
-      checkpoint.eventSequence,
+      canonicalCheckpoint.eventSequence,
       "WORKFLOW_CHECKPOINT_RECEIPTED",
-      { receipt, checkpoint },
+      { receipt, checkpoint: canonicalCheckpoint },
       receipt.recordedAt,
     );
-    return { ok: true as const, eventSequence: checkpoint.eventSequence };
+    return {
+      ok: true as const,
+      eventSequence: canonicalCheckpoint.eventSequence,
+    };
+  }
+
+  async claimFreshWorkflowLease(candidate: unknown) {
+    const parsed = freshWorkflowLeaseSchema.safeParse(candidate);
+    if (!parsed.success)
+      return { ok: false as const, code: "INVALID_LEASE_CLAIM" };
+    const input = parsed.data;
+    const metadata = this.metadata();
+    const row = this.control();
+    if (!metadata || !row)
+      return { ok: false as const, code: "NOT_INITIALIZED" };
+    const state = browserControlStateSchema.parse(JSON.parse(row.state_json));
+    if (
+      metadata.principal_id !== input.principalId ||
+      metadata.browser_session_id !== input.browserSessionId ||
+      state.deviceId !== input.deviceId ||
+      state.jobId !== input.jobId
+    ) {
+      return { ok: false as const, code: "IDENTITY_MISMATCH" };
+    }
+    if (
+      metadata.event_sequence !== input.cursor ||
+      state.leaseEpoch !== input.afterLeaseEpoch
+    ) {
+      return { ok: false as const, code: "STALE_WORKFLOW_BINDING" };
+    }
+    if (
+      state.connection !== "ONLINE" ||
+      state.controller !== "USER" ||
+      state.takeover !== "NONE" ||
+      !state.automationBlocked ||
+      row.holder_connection_id !== null ||
+      Date.parse(input.expiresAt) <= Date.parse(input.now) ||
+      Date.parse(input.expiresAt) - Date.parse(input.now) > 60_000
+    ) {
+      return { ok: false as const, code: "LEASE_CONFLICT" };
+    }
+    const returning = transitionBrowserControl(state, {
+      type: "RETURN_CONTROL_REQUESTED",
+    });
+    if (!returning.ok) return returning;
+    const reconciled = transitionBrowserControl(returning.state, {
+      type: "AGENT_RECONCILED",
+      leaseExpiresAt: input.expiresAt,
+    });
+    if (!reconciled.ok) return reconciled;
+    const sequence = metadata.event_sequence + 1;
+    this.ctx.storage.sql.exec(
+      "UPDATE control_state SET state_json = ?, holder_connection_id = ? WHERE singleton = 1",
+      JSON.stringify(reconciled.state),
+      input.connectionId,
+    );
+    this.ctx.storage.sql.exec(
+      "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
+      sequence,
+    );
+    this.appendEventAt(
+      sequence,
+      "AGENT_LEASE_RECLAIMED",
+      { leaseEpoch: reconciled.state.leaseEpoch },
+      input.now,
+    );
+    if (Date.parse(input.expiresAt) > Date.now()) {
+      await this.ctx.storage.setAlarm(Date.parse(input.expiresAt));
+    }
+    return {
+      ok: true as const,
+      leaseEpoch: reconciled.state.leaseEpoch,
+      eventSequence: sequence,
+    };
   }
 
   recordOwnerProgress(candidate: unknown) {
@@ -1615,6 +1731,28 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
         checkpoint.createdAt,
       );
     }
+  }
+
+  private checkpointEffectConflicts(
+    checkpoint: z.infer<typeof setupCheckpointSchema>,
+  ): boolean {
+    const existingStep = this.ctx.storage.sql
+      .exec<WorkflowEffectRow>(
+        "SELECT * FROM workflow_effects WHERE logical_step = ?",
+        checkpoint.currentStep,
+      )
+      .toArray()[0];
+    const existingEffect = this.ctx.storage.sql
+      .exec<WorkflowEffectRow>(
+        "SELECT * FROM workflow_effects WHERE effect_id = ?",
+        checkpoint.currentEffectId,
+      )
+      .toArray()[0];
+    return Boolean(
+      (existingStep && existingStep.effect_id !== checkpoint.currentEffectId) ||
+      (existingEffect &&
+        existingEffect.logical_step !== checkpoint.currentStep),
+    );
   }
 
   private metadata(): MetadataRow | undefined {

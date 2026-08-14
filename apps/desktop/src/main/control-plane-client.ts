@@ -9,6 +9,7 @@ import type {
 import {
   actionIdSchema,
   automationSyncResponseSchema,
+  workflowOperationResponseSchema,
 } from "@village/contracts";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
@@ -16,6 +17,7 @@ import {
   signAutomationSyncRequest,
   signCommandEnvelope,
   signResultEnvelope,
+  signWorkflowOperationRequest,
 } from "./device-identity.js";
 
 export interface ProtocolSequenceStore {
@@ -42,7 +44,7 @@ export class ControlPlaneWorkflowCoordinator {
   constructor(
     private readonly client: Pick<
       ControlPlaneClient,
-      "synchronizeAutomation" | "workflowCommand"
+      "synchronizeAutomation" | "workflowCommand" | "workflowOperation"
     >,
     private readonly cursors: AutomationSyncCursorStore,
   ) {}
@@ -131,6 +133,68 @@ export class ControlPlaneWorkflowCoordinator {
         ok: true,
         actionId: actionId.data,
         cursor: result.eventSequence!,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        code: error instanceof Error ? error.message : "CONTROL_PLANE_REJECTED",
+      };
+    }
+  }
+
+  async recordReceipt(input: {
+    receipt: Record<string, unknown>;
+    checkpoint: Record<string, unknown>;
+  }): Promise<{ ok: true; cursor: number } | { ok: false; code: string }> {
+    try {
+      const response = await this.client.workflowOperation(
+        {
+          principalId: String(input.receipt.principalId),
+          deviceId: String(input.receipt.deviceId),
+          jobId: String(input.receipt.jobId),
+          browserSessionId: String(input.receipt.browserSessionId),
+        },
+        { operation: "RECORD_RECEIPT", ...input },
+      );
+      if (response.operation !== "RECORD_RECEIPT") {
+        return { ok: false, code: "INVALID_WORKFLOW_OPERATION_RESPONSE" };
+      }
+      return { ok: true, cursor: response.cursor };
+    } catch (error) {
+      return {
+        ok: false,
+        code: error instanceof Error ? error.message : "CONTROL_PLANE_REJECTED",
+      };
+    }
+  }
+
+  async claimFreshLease(
+    input: CommandIdentity & {
+      afterLeaseEpoch: number;
+      cursor: number;
+    },
+  ): Promise<
+    | { ok: true; leaseEpoch: number; cursor: number }
+    | { ok: false; code: string }
+  > {
+    try {
+      const response = await this.client.workflowOperation(input, {
+        operation: "CLAIM_FRESH_LEASE",
+        afterLeaseEpoch: input.afterLeaseEpoch,
+        cursor: input.cursor,
+        leaseExpiresAt: new Date(Date.now() + 30_000).toISOString(),
+      });
+      if (
+        response.operation !== "CLAIM_FRESH_LEASE" ||
+        response.leaseEpoch <= input.afterLeaseEpoch ||
+        response.cursor <= input.cursor
+      ) {
+        return { ok: false, code: "INVALID_WORKFLOW_OPERATION_RESPONSE" };
+      }
+      return {
+        ok: true,
+        leaseEpoch: response.leaseEpoch,
+        cursor: response.cursor,
       };
     } catch (error) {
       return {
@@ -393,6 +457,53 @@ export class ControlPlaneClient {
       throw new Error("STALE_AUTOMATION_SYNC_RESPONSE");
     }
     await cursors.save(identity.browserSessionId, parsed.data.cursor);
+    return parsed.data;
+  }
+
+  async workflowOperation(
+    identity: CommandIdentity,
+    operation: Record<string, unknown>,
+  ) {
+    const issuedAt = new Date();
+    const sequence = await this.sequences.reserveNext(
+      identity.deviceId,
+      identity.browserSessionId,
+    );
+    const envelope = await signWorkflowOperationRequest(
+      {
+        protocolVersion: 1,
+        ...identity,
+        connectionId: this.connectionId,
+        sequence,
+        issuedAt: issuedAt.toISOString(),
+        expiresAt: new Date(issuedAt.getTime() + 30_000).toISOString(),
+        ...operation,
+      },
+      this.privateKey,
+    );
+    const response = await this.request(
+      new URL(
+        `/api/browser-sessions/${identity.browserSessionId}/workflow-operations`,
+        this.baseUrl,
+      ),
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-village-connection-id": this.connectionId,
+        },
+        body: JSON.stringify(envelope),
+      },
+    );
+    const candidate: unknown = await response.json();
+    const parsed = workflowOperationResponseSchema.safeParse(candidate);
+    if (!response.ok || !parsed.success) {
+      const code =
+        candidate && typeof candidate === "object" && "code" in candidate
+          ? String(candidate.code)
+          : "INVALID_WORKFLOW_OPERATION_RESPONSE";
+      throw new Error(code);
+    }
     return parsed.data;
   }
 

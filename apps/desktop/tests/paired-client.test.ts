@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import {
   automationSyncRequestSchema,
   signedCommandEnvelopeSchema,
+  workflowOperationRequestSchema,
 } from "@village/contracts";
 import {
   ControlPlaneClient,
@@ -184,6 +185,21 @@ describe("paired desktop connector", () => {
           { ok: false, code: "LOGICAL_EFFECT_CONFLICT" },
           { status: 409 },
         ),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          ok: true,
+          operation: "RECORD_RECEIPT",
+          cursor: 6,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          ok: true,
+          operation: "CLAIM_FRESH_LEASE",
+          cursor: 8,
+          leaseEpoch: 3,
+        }),
       );
     const client = new ControlPlaneClient(
       "https://village.test",
@@ -247,6 +263,72 @@ describe("paired desktop connector", () => {
         command: { capability: "REPLACE_DISPLAY_NAME" },
       }),
     ).resolves.toEqual({ ok: false, code: "LOGICAL_EFFECT_CONFLICT" });
+
+    await expect(
+      coordinator.recordReceipt({
+        receipt: {
+          receiptId: "rcp_01J00000000000000000000000",
+          ...identity,
+          actionId: "act_01J00000000000000000000000",
+          stepId: "bsp_01J00000000000000000000000",
+          objective: {
+            kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+            version: 1,
+          },
+          jobRevision: 2,
+          logicalStep: "SET_DISPLAY_NAME",
+          effectId: "efx_01J00000000000000000000000",
+          leaseEpoch: 2,
+          outcome: "POSTCONDITION_SATISFIED",
+          predicateIds: ["setup-display-name-matches-v1"],
+          recordedAt: "2026-08-14T12:00:01.000Z",
+        },
+        checkpoint: {
+          checkpointId: "chk_01J00000000000000000000000",
+          ...identity,
+          jobRevision: 2,
+          eventSequence: 6,
+          state: "RUNNING_AGENT",
+          objective: {
+            kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+            version: 1,
+          },
+          site: "OWNED_FIXTURE",
+          currentStep: "SET_DISPLAY_NAME",
+          currentEffectId: "efx_01J00000000000000000000000",
+          completedEffects: [
+            {
+              logicalStep: "SET_DISPLAY_NAME",
+              effectId: "efx_01J00000000000000000000000",
+            },
+          ],
+          outstandingAction: null,
+          lastPredicateVersion: "setup-display-name-matches-v1",
+          actionPhase: "RECEIPTED",
+          reconciliation: "NONE",
+          createdAt: "2026-08-14T12:00:01.000Z",
+        },
+      }),
+    ).resolves.toEqual({ ok: true, cursor: 6 });
+    await expect(
+      coordinator.claimFreshLease({
+        ...identity,
+        afterLeaseEpoch: 2,
+        cursor: 7,
+      }),
+    ).resolves.toEqual({ ok: true, leaseEpoch: 3, cursor: 8 });
+
+    const operations = request.mock.calls
+      .slice(3)
+      .map((call) =>
+        workflowOperationRequestSchema.parse(
+          JSON.parse((call[1] as RequestInit).body as string),
+        ),
+      );
+    expect(operations.map((operation) => operation.operation)).toEqual([
+      "RECORD_RECEIPT",
+      "CLAIM_FRESH_LEASE",
+    ]);
   });
 
   it("authenticates automation sync and resumes from a durable cursor", async () => {

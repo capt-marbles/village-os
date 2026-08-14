@@ -5,7 +5,9 @@ import {
   automationSyncRequestSchema,
   canonicalAutomationSyncRequestBytes,
   canonicalCommandEnvelopeBytes,
+  canonicalWorkflowOperationRequestBytes,
   signedCommandEnvelopeSchema,
+  workflowOperationRequestSchema,
   type BrowserControlState,
   type UnsignedCommandEnvelope,
 } from "@village/contracts";
@@ -736,6 +738,397 @@ describe("authenticated pairing routes", () => {
       leaseEpoch: 5,
       automationBlocked: true,
       canceled: true,
+    });
+  });
+
+  it("records a device-signed receipt and advances the durable logical step", async () => {
+    const deviceId = "dev_01J00000000000000000000009" as const;
+    const jobId = "job_01J00000000000000000000009" as const;
+    const browserSessionId = "brs_01J00000000000000000000009" as const;
+    const actionId = "act_01J00000000000000000000009" as const;
+    const effectId = "efx_01J00000000000000000000009" as const;
+    const checkpointId = "chk_01J00000000000000000000009" as const;
+    const nowDate = new Date();
+    const now = nowDate.toISOString();
+    const keys = await crypto.subtle.generateKey("Ed25519", true, [
+      "sign",
+      "verify",
+    ]);
+    const publicKey = await crypto.subtle.exportKey("jwk", keys.publicKey);
+    await env.VILLAGE_DB.batch([
+      env.VILLAGE_DB.prepare(
+        "INSERT OR IGNORE INTO principals (principal_id, created_at) VALUES (?, ?)",
+      ).bind(principalId, now),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO devices
+         (principal_id, device_id, public_key, credential_status, protocol_version,
+          last_accepted_sequence, created_at) VALUES (?, ?, ?, 'ACTIVE', 1, 0, ?)`,
+      ).bind(principalId, deviceId, JSON.stringify(publicKey), now),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO jobs
+         (principal_id, job_id, state, version, last_event_sequence, created_at,
+          updated_at, objective_kind, objective_version)
+         VALUES (?, ?, 'RUNNING_AGENT', 2, 2, ?, ?,
+                 'OWNED_FIXTURE_ACCOUNT_SETUP_V1', 1)`,
+      ).bind(principalId, jobId, now, now),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO browser_sessions
+         (principal_id, browser_session_id, job_id, device_id, host_id, site,
+          controller, connection_state, lease_epoch, last_accepted_sequence,
+          automation_blocked, takeover_state, profile_state, updated_at)
+         VALUES (?, ?, ?, ?, 'hst_01J00000000000000000000009', 'OWNED_FIXTURE',
+                 'NONE', 'ONLINE', 0, 0, 1, 'NONE', 'PRESENT', ?)`,
+      ).bind(principalId, browserSessionId, jobId, deviceId, now),
+    ]);
+    const coordinator =
+      env.BROWSER_SESSION_COORDINATOR.getByName(browserSessionId);
+    await coordinator.initialize({
+      principalId,
+      browserSessionId,
+      site: "OWNED_FIXTURE",
+      initializedAt: now,
+      control: {
+        principalId,
+        deviceId,
+        jobId,
+        browserSessionId,
+        controller: "NONE",
+        connection: "ONLINE",
+        leaseEpoch: 0,
+        leaseExpiresAt: null,
+        lastAcceptedSequence: 0,
+        automationBlocked: true,
+        takeover: "NONE",
+        profile: "PRESENT",
+      },
+    });
+    await coordinator.initializeWorkflow({
+      principalId,
+      deviceId,
+      jobId,
+      browserSessionId,
+      objective: {
+        kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+        version: 1,
+      },
+      jobRevision: 2,
+      logicalStep: "SET_DISPLAY_NAME",
+      effectId,
+      initializedAt: now,
+    });
+    await coordinator.claimAgentLease({
+      principalId,
+      deviceId,
+      connectionId: "connector-receipt",
+      now,
+      expiresAt: new Date(nowDate.getTime() + 30_000).toISOString(),
+    });
+    await coordinator.acceptAuthenticatedCommand({
+      connectionId: "connector-receipt",
+      now,
+      envelope: {
+        protocolVersion: 1,
+        principalId,
+        deviceId,
+        jobId,
+        browserSessionId,
+        actionId,
+        leaseEpoch: 1,
+        workflowKind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+        workflowVersion: 1,
+        jobRevision: 2,
+        logicalStep: "SET_DISPLAY_NAME",
+        effectId,
+        sequence: 1,
+        issuedAt: now,
+        expiresAt: new Date(nowDate.getTime() + 30_000).toISOString(),
+        command: { capability: "REPLACE_DISPLAY_NAME" },
+        signature: "signature",
+      },
+    });
+    const unsigned = {
+      protocolVersion: 1 as const,
+      principalId,
+      deviceId,
+      jobId,
+      browserSessionId,
+      connectionId: "connector-receipt",
+      sequence: 1,
+      issuedAt: now,
+      expiresAt: new Date(nowDate.getTime() + 30_000).toISOString(),
+      operation: "RECORD_RECEIPT" as const,
+      receipt: {
+        receiptId: "rcp_01J00000000000000000000009",
+        principalId,
+        deviceId,
+        jobId,
+        browserSessionId,
+        actionId,
+        stepId: "bsp_01J00000000000000000000009",
+        objective: {
+          kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1" as const,
+          version: 1 as const,
+        },
+        jobRevision: 2,
+        logicalStep: "SET_DISPLAY_NAME" as const,
+        effectId,
+        leaseEpoch: 1,
+        outcome: "POSTCONDITION_SATISFIED" as const,
+        predicateIds: ["setup-display-name-matches-v1"],
+        recordedAt: now,
+      },
+      checkpoint: {
+        checkpointId,
+        principalId,
+        deviceId,
+        jobId,
+        browserSessionId,
+        jobRevision: 2,
+        eventSequence: 5,
+        state: "RUNNING_AGENT" as const,
+        objective: {
+          kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1" as const,
+          version: 1 as const,
+        },
+        site: "OWNED_FIXTURE" as const,
+        currentStep: "SET_DISPLAY_NAME" as const,
+        currentEffectId: effectId,
+        completedEffects: [
+          { logicalStep: "SET_DISPLAY_NAME" as const, effectId },
+        ],
+        outstandingAction: null,
+        lastPredicateVersion: "setup-display-name-matches-v1",
+        actionPhase: "RECEIPTED" as const,
+        reconciliation: "NONE" as const,
+        createdAt: now,
+      },
+    };
+    const signature = await crypto.subtle.sign(
+      "Ed25519",
+      keys.privateKey,
+      canonicalWorkflowOperationRequestBytes(unsigned),
+    );
+    const envelope = workflowOperationRequestSchema.parse({
+      ...unsigned,
+      signature: Buffer.from(signature).toString("base64url"),
+    });
+    if (envelope.operation !== "RECORD_RECEIPT") {
+      throw new Error("RECEIPT_OPERATION_REQUIRED");
+    }
+    const response = await SELF.fetch(
+      new Request(
+        `https://village.test/api/browser-sessions/${browserSessionId}/workflow-operations`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-village-connection-id": "connector-receipt",
+          },
+          body: JSON.stringify(envelope),
+        },
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      operation: "RECORD_RECEIPT",
+      cursor: 5,
+    });
+    await expect(
+      coordinator.workflowSnapshot(principalId),
+    ).resolves.toMatchObject({
+      checkpoint: {
+        currentStep: "SELECT_ROLE",
+        currentEffectId: `efx_${checkpointId.slice(4, -1)}0`,
+        actionPhase: "ACCEPTED",
+      },
+    });
+    const replay = await SELF.fetch(
+      new Request(
+        `https://village.test/api/browser-sessions/${browserSessionId}/workflow-operations`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-village-connection-id": "connector-receipt",
+          },
+          body: JSON.stringify(envelope),
+        },
+      ),
+    );
+    await expect(replay.json()).resolves.toEqual({
+      ok: false,
+      code: "REPLAYED_SEQUENCE",
+    });
+    const tampered = await SELF.fetch(
+      new Request(
+        `https://village.test/api/browser-sessions/${browserSessionId}/workflow-operations`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-village-connection-id": "connector-receipt",
+          },
+          body: JSON.stringify({
+            ...envelope,
+            checkpoint: {
+              ...envelope.checkpoint,
+              lastPredicateVersion: "setup-role-v1",
+            },
+          }),
+        },
+      ),
+    );
+    await expect(tampered.json()).resolves.toEqual({
+      ok: false,
+      code: "INVALID_SIGNATURE",
+    });
+  });
+
+  it("claims one fresh fenced lease from signed owner hand-back state", async () => {
+    const deviceId = "dev_01J00000000000000000000010" as const;
+    const jobId = "job_01J00000000000000000000010" as const;
+    const browserSessionId = "brs_01J00000000000000000000010" as const;
+    const nowDate = new Date();
+    const now = nowDate.toISOString();
+    const keys = await crypto.subtle.generateKey("Ed25519", true, [
+      "sign",
+      "verify",
+    ]);
+    const publicKey = await crypto.subtle.exportKey("jwk", keys.publicKey);
+    await env.VILLAGE_DB.batch([
+      env.VILLAGE_DB.prepare(
+        "INSERT OR IGNORE INTO principals (principal_id, created_at) VALUES (?, ?)",
+      ).bind(principalId, now),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO devices
+         (principal_id, device_id, public_key, credential_status, protocol_version,
+          last_accepted_sequence, created_at) VALUES (?, ?, ?, 'ACTIVE', 1, 0, ?)`,
+      ).bind(principalId, deviceId, JSON.stringify(publicKey), now),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO jobs
+         (principal_id, job_id, state, version, last_event_sequence, created_at, updated_at)
+         VALUES (?, ?, 'RUNNING_USER', 2, 2, ?, ?)`,
+      ).bind(principalId, jobId, now, now),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO browser_sessions
+         (principal_id, browser_session_id, job_id, device_id, host_id, site,
+          controller, connection_state, lease_epoch, last_accepted_sequence,
+          automation_blocked, takeover_state, profile_state, updated_at)
+         VALUES (?, ?, ?, ?, 'hst_01J00000000000000000000010', 'OWNED_FIXTURE',
+                 'USER', 'ONLINE', 2, 0, 1, 'NONE', 'PRESENT', ?)`,
+      ).bind(principalId, browserSessionId, jobId, deviceId, now),
+    ]);
+    const coordinator =
+      env.BROWSER_SESSION_COORDINATOR.getByName(browserSessionId);
+    await coordinator.initialize({
+      principalId,
+      browserSessionId,
+      site: "OWNED_FIXTURE",
+      initializedAt: now,
+      control: {
+        principalId,
+        deviceId,
+        jobId,
+        browserSessionId,
+        controller: "USER",
+        connection: "ONLINE",
+        leaseEpoch: 2,
+        leaseExpiresAt: null,
+        lastAcceptedSequence: 0,
+        automationBlocked: true,
+        takeover: "NONE",
+        profile: "PRESENT",
+      },
+    });
+    const unsigned = {
+      protocolVersion: 1 as const,
+      principalId,
+      deviceId,
+      jobId,
+      browserSessionId,
+      connectionId: "connector-hand-back",
+      sequence: 1,
+      issuedAt: now,
+      expiresAt: new Date(nowDate.getTime() + 30_000).toISOString(),
+      operation: "CLAIM_FRESH_LEASE" as const,
+      afterLeaseEpoch: 2,
+      cursor: 1,
+      leaseExpiresAt: new Date(nowDate.getTime() + 30_000).toISOString(),
+    };
+    const signature = await crypto.subtle.sign(
+      "Ed25519",
+      keys.privateKey,
+      canonicalWorkflowOperationRequestBytes(unsigned),
+    );
+    const envelope = workflowOperationRequestSchema.parse({
+      ...unsigned,
+      signature: Buffer.from(signature).toString("base64url"),
+    });
+    const requestLease = () =>
+      SELF.fetch(
+        new Request(
+          `https://village.test/api/browser-sessions/${browserSessionId}/workflow-operations`,
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-village-connection-id": "connector-hand-back",
+            },
+            body: JSON.stringify(envelope),
+          },
+        ),
+      );
+
+    const response = await requestLease();
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      operation: "CLAIM_FRESH_LEASE",
+      cursor: 2,
+      leaseEpoch: 3,
+    });
+    await expect(coordinator.snapshot(principalId)).resolves.toMatchObject({
+      eventSequence: 2,
+      control: {
+        controller: "AGENT",
+        leaseEpoch: 3,
+        automationBlocked: false,
+        takeover: "NONE",
+      },
+    });
+    const replay = await requestLease();
+    expect(replay.status).toBe(409);
+    await expect(replay.json()).resolves.toEqual({
+      ok: false,
+      code: "REPLAYED_SEQUENCE",
+    });
+    const staleUnsigned = { ...unsigned, sequence: 2 };
+    const staleSignature = await crypto.subtle.sign(
+      "Ed25519",
+      keys.privateKey,
+      canonicalWorkflowOperationRequestBytes(staleUnsigned),
+    );
+    const stale = await SELF.fetch(
+      new Request(
+        `https://village.test/api/browser-sessions/${browserSessionId}/workflow-operations`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-village-connection-id": "connector-hand-back",
+          },
+          body: JSON.stringify({
+            ...staleUnsigned,
+            signature: Buffer.from(staleSignature).toString("base64url"),
+          }),
+        },
+      ),
+    );
+    await expect(stale.json()).resolves.toEqual({
+      ok: false,
+      code: "STALE_WORKFLOW_BINDING",
     });
   });
 });

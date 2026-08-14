@@ -26,3 +26,4 @@ export * from "./model-provider.js";
 export * from "./redaction.js";
 export * from "./secrets.js";
 export * from "./signatures.js";
+export * from "./workflow-operations.js";

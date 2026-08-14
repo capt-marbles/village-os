@@ -3,8 +3,10 @@ import {
   canonicalAutomationSyncRequestBytes,
   canonicalCommandEnvelopeBytes,
   canonicalResultEnvelopeBytes,
+  canonicalWorkflowOperationRequestBytes,
   signedCommandEnvelopeSchema,
   signedResultEnvelopeSchema,
+  workflowOperationRequestSchema,
 } from "@village/contracts";
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -94,6 +96,32 @@ export async function verifyAutomationSyncRequest(
       key,
       decodeBase64Url(signature),
       canonicalAutomationSyncRequestBytes(unsigned),
+    );
+  } catch {
+    return false;
+  }
+}
+
+export async function verifyWorkflowOperationRequest(
+  candidate: unknown,
+  publicJwk: JsonWebKey,
+): Promise<boolean> {
+  const parsed = workflowOperationRequestSchema.safeParse(candidate);
+  if (!parsed.success) return false;
+  try {
+    const key = await crypto.subtle.importKey(
+      "jwk",
+      publicJwk,
+      "Ed25519",
+      false,
+      ["verify"],
+    );
+    const { signature, ...unsigned } = parsed.data;
+    return crypto.subtle.verify(
+      "Ed25519",
+      key,
+      decodeBase64Url(signature),
+      canonicalWorkflowOperationRequestBytes(unsigned),
     );
   } catch {
     return false;

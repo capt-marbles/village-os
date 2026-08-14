@@ -10,6 +10,8 @@ import {
   principalIdSchema,
   signedCommandEnvelopeSchema,
   signedResultEnvelopeSchema,
+  workflowOperationRequestSchema,
+  workflowOperationResponseSchema,
   type SignedCommandEnvelope,
   type SignedResultEnvelope,
 } from "@village/contracts";
@@ -19,6 +21,7 @@ import {
   verifyAutomationSyncRequest,
   verifyCommandEnvelope,
   verifyResultEnvelope,
+  verifyWorkflowOperationRequest,
 } from "../browser-control/device-credentials.js";
 import { consumeAuthenticatedQuota } from "../limits/quotas.js";
 
@@ -498,4 +501,116 @@ export async function dispatchAuthenticatedAutomationSync(
     canceled: snapshot.canceled,
     workflow,
   });
+}
+
+export async function dispatchAuthenticatedWorkflowOperation(
+  environment: Environment,
+  candidate: unknown,
+  connectionId: string,
+  now: string,
+  expectedSessionId?: string,
+) {
+  const parsed = workflowOperationRequestSchema.safeParse(candidate);
+  if (!parsed.success) return { ok: false as const, code: "INVALID_ENVELOPE" };
+  const envelope = parsed.data;
+  if (envelope.connectionId !== connectionId) {
+    return { ok: false as const, code: "CONNECTION_ID_MISMATCH" };
+  }
+  if (
+    expectedSessionId !== undefined &&
+    envelope.browserSessionId !== expectedSessionId
+  ) {
+    return { ok: false as const, code: "SESSION_ROUTE_MISMATCH" };
+  }
+  if (
+    Date.parse(envelope.issuedAt) > Date.parse(now) ||
+    Date.parse(envelope.expiresAt) <= Date.parse(now)
+  ) {
+    return { ok: false as const, code: "ENVELOPE_EXPIRED_OR_NOT_YET_VALID" };
+  }
+  const device = await environment.VILLAGE_DB.prepare(
+    `SELECT public_key, credential_status, protocol_version FROM devices
+     WHERE principal_id = ? AND device_id = ?`,
+  )
+    .bind(envelope.principalId, envelope.deviceId)
+    .first<DeviceRow>();
+  if (!device || device.credential_status !== "ACTIVE") {
+    return { ok: false as const, code: "DEVICE_REVOKED_OR_UNKNOWN" };
+  }
+  if (device.protocol_version !== envelope.protocolVersion) {
+    return { ok: false as const, code: "PROTOCOL_DOWNGRADE_REJECTED" };
+  }
+  let publicKey: JsonWebKey;
+  try {
+    publicKey = JSON.parse(device.public_key) as JsonWebKey;
+  } catch {
+    return { ok: false as const, code: "INVALID_DEVICE_CREDENTIAL" };
+  }
+  if (!(await verifyWorkflowOperationRequest(envelope, publicKey))) {
+    return { ok: false as const, code: "INVALID_SIGNATURE" };
+  }
+  const session = await environment.VILLAGE_DB.prepare(
+    `SELECT 1 AS owned FROM browser_sessions
+     WHERE principal_id = ? AND device_id = ? AND job_id = ? AND browser_session_id = ?`,
+  )
+    .bind(
+      envelope.principalId,
+      envelope.deviceId,
+      envelope.jobId,
+      envelope.browserSessionId,
+    )
+    .first<{ owned: number }>();
+  if (!session) return { ok: false as const, code: "SESSION_NOT_OWNED" };
+  const accepted = await environment.VILLAGE_DB.prepare(
+    `UPDATE devices SET last_workflow_operation_sequence = ?
+     WHERE principal_id = ? AND device_id = ? AND credential_status = 'ACTIVE'
+       AND protocol_version = ? AND last_workflow_operation_sequence < ?`,
+  )
+    .bind(
+      envelope.sequence,
+      envelope.principalId,
+      envelope.deviceId,
+      envelope.protocolVersion,
+      envelope.sequence,
+    )
+    .run();
+  if (accepted.meta.changes !== 1) {
+    return { ok: false as const, code: "REPLAYED_SEQUENCE" };
+  }
+  const coordinator = environment.BROWSER_SESSION_COORDINATOR.getByName(
+    envelope.browserSessionId,
+  );
+  if (envelope.operation === "RECORD_RECEIPT") {
+    const result = await coordinator.recordWorkflowReceipt({
+      receipt: envelope.receipt,
+      checkpoint: envelope.checkpoint,
+      connectionId,
+    });
+    return result.ok
+      ? workflowOperationResponseSchema.parse({
+          ok: true,
+          operation: envelope.operation,
+          cursor: result.eventSequence,
+        })
+      : result;
+  }
+  const result = await coordinator.claimFreshWorkflowLease({
+    principalId: envelope.principalId,
+    deviceId: envelope.deviceId,
+    jobId: envelope.jobId,
+    browserSessionId: envelope.browserSessionId,
+    connectionId,
+    afterLeaseEpoch: envelope.afterLeaseEpoch,
+    cursor: envelope.cursor,
+    now,
+    expiresAt: envelope.leaseExpiresAt,
+  });
+  return result.ok
+    ? workflowOperationResponseSchema.parse({
+        ok: true,
+        operation: envelope.operation,
+        cursor: result.eventSequence,
+        leaseEpoch: result.leaseEpoch,
+      })
+    : result;
 }
