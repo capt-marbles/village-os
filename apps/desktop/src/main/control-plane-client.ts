@@ -6,7 +6,10 @@ import type {
   SignedResultEnvelope,
   UnsignedResultEnvelope,
 } from "@village/contracts";
-import { automationSyncResponseSchema } from "@village/contracts";
+import {
+  actionIdSchema,
+  automationSyncResponseSchema,
+} from "@village/contracts";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
@@ -32,6 +35,109 @@ export class ControlPlaneAutomationFence {
 
   synchronize(identity: AutomationSyncIdentity) {
     return this.client.synchronizeAutomation(identity, this.cursors);
+  }
+}
+
+export class ControlPlaneWorkflowCoordinator {
+  constructor(
+    private readonly client: Pick<
+      ControlPlaneClient,
+      "synchronizeAutomation" | "workflowCommand"
+    >,
+    private readonly cursors: AutomationSyncCursorStore,
+  ) {}
+
+  async synchronize(input: CommandIdentity & { cursor: number }) {
+    const state = await this.client.synchronizeAutomation(
+      {
+        principalId: input.principalId,
+        deviceId: input.deviceId,
+        browserSessionId: input.browserSessionId,
+      },
+      this.cursors,
+    );
+    if (
+      state.jobId !== input.jobId ||
+      state.workflow === null ||
+      state.connection === "ABSENT" ||
+      state.cursor < input.cursor
+    ) {
+      throw new Error("WORKFLOW_BINDING_UNAVAILABLE");
+    }
+    return {
+      authenticated: true as const,
+      principalId: input.principalId,
+      deviceId: input.deviceId,
+      jobId: state.jobId,
+      browserSessionId: input.browserSessionId,
+      ...state.workflow,
+      cursor: state.cursor,
+      connection: state.connection,
+      controller: state.controller,
+      leaseEpoch: state.leaseEpoch,
+      automationBlocked: state.automationBlocked,
+      canceled: state.canceled,
+    };
+  }
+
+  async acceptAction(
+    input: CommandIdentity & {
+      jobRevision: number;
+      logicalStep: WorkflowCommandBinding["logicalStep"];
+      effectId: string;
+      objective: {
+        kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1";
+        version: 1;
+      };
+      leaseEpoch: number;
+      actionId: string;
+      command: OwnedFixtureSetupCommand;
+    },
+  ): Promise<
+    { ok: true; actionId: string; cursor: number } | { ok: false; code: string }
+  > {
+    try {
+      const result = await this.client.workflowCommand(
+        {
+          principalId: input.principalId,
+          deviceId: input.deviceId,
+          jobId: input.jobId,
+          browserSessionId: input.browserSessionId,
+        },
+        {
+          workflowKind: input.objective.kind,
+          workflowVersion: input.objective.version,
+          jobRevision: input.jobRevision,
+          logicalStep: input.logicalStep,
+          effectId: input.effectId,
+        },
+        input.actionId,
+        input.leaseEpoch,
+        input.command,
+      );
+      if (
+        !Number.isInteger(result.eventSequence) ||
+        (result.eventSequence ?? -1) < 0
+      ) {
+        return { ok: false, code: "INVALID_COMMAND_RESPONSE" };
+      }
+      const actionId = actionIdSchema.safeParse(
+        result.canonicalActionId ?? input.actionId,
+      );
+      if (!actionId.success) {
+        return { ok: false, code: "INVALID_COMMAND_RESPONSE" };
+      }
+      return {
+        ok: true,
+        actionId: actionId.data,
+        cursor: result.eventSequence!,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        code: error instanceof Error ? error.message : "CONTROL_PLANE_REJECTED",
+      };
+    }
   }
 }
 
@@ -342,6 +448,7 @@ export class ControlPlaneClient {
       code?: string;
       leaseEpoch?: number;
       eventSequence?: number;
+      canonicalActionId?: string;
     };
     if (!response.ok || !result.ok) {
       throw new Error(result.code ?? "CONTROL_PLANE_REJECTED");

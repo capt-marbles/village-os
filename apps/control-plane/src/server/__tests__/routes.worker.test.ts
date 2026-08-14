@@ -67,6 +67,12 @@ describe("authenticated pairing routes", () => {
       new Request("https://village.test/api/jobs", {
         method: "POST",
         headers: ownerHeaders,
+        body: JSON.stringify({
+          objective: {
+            kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+            version: 1,
+          },
+        }),
       }),
     );
     const { jobId } = await created.json<{ jobId: string }>();
@@ -110,7 +116,22 @@ describe("authenticated pairing routes", () => {
       await env.BROWSER_SESSION_COORDINATOR.getByName(
         browserSessionId,
       ).snapshot(principalId),
-    ).toMatchObject({ ok: true, eventSequence: 1 });
+    ).toMatchObject({ ok: true, eventSequence: 2 });
+    await expect(
+      env.BROWSER_SESSION_COORDINATOR.getByName(
+        browserSessionId,
+      ).workflowSnapshot(principalId),
+    ).resolves.toMatchObject({
+      ok: true,
+      jobRevision: 2,
+      effects: [
+        expect.objectContaining({
+          logicalStep: "SET_DISPLAY_NAME",
+          effectId: `efx_${browserSessionId.slice(4)}`,
+          phase: "ACCEPTED",
+        }),
+      ],
+    });
   });
 
   it("rejects CSRF and exact-origin violations", async () => {
@@ -610,6 +631,20 @@ describe("authenticated pairing routes", () => {
         profile: "PRESENT",
       },
     });
+    await coordinator.initializeWorkflow({
+      principalId,
+      deviceId,
+      jobId,
+      browserSessionId,
+      objective: {
+        kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+        version: 1,
+      },
+      jobRevision: 2,
+      logicalStep: "SET_DISPLAY_NAME",
+      effectId: `efx_${browserSessionId.slice(4)}`,
+      initializedAt: now,
+    });
     await coordinator.cancel(principalId, now);
 
     const unsigned = {
@@ -651,13 +686,25 @@ describe("authenticated pairing routes", () => {
     expect(response.status, await response.clone().text()).toBe(200);
     await expect(response.json()).resolves.toEqual({
       ok: true,
-      cursor: 2,
+      cursor: 3,
       jobId,
       controller: "NONE",
       connection: "ONLINE",
       leaseEpoch: 5,
       automationBlocked: true,
       canceled: true,
+      workflow: {
+        objective: {
+          kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+          version: 1,
+        },
+        jobRevision: 2,
+        logicalStep: "SET_DISPLAY_NAME",
+        effectId: `efx_${browserSessionId.slice(4)}`,
+        completedEffects: [],
+        actionPhase: "ACCEPTED",
+        outstandingAction: null,
+      },
     });
     const replay = await synchronize();
     expect(replay.status).toBe(409);
@@ -672,7 +719,7 @@ describe("authenticated pairing routes", () => {
       code: "INVALID_SIGNATURE",
     });
 
-    const restartedUnsigned = { ...unsigned, sequence: 6, cursor: 2 };
+    const restartedUnsigned = { ...unsigned, sequence: 6, cursor: 3 };
     const restartedSignature = await crypto.subtle.sign(
       "Ed25519",
       keys.privateKey,
@@ -685,7 +732,7 @@ describe("authenticated pairing routes", () => {
     expect(restarted.status).toBe(200);
     await expect(restarted.json()).resolves.toMatchObject({
       ok: true,
-      cursor: 2,
+      cursor: 3,
       leaseEpoch: 5,
       automationBlocked: true,
       canceled: true,

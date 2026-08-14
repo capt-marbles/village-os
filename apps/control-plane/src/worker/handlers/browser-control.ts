@@ -1,4 +1,5 @@
 import {
+  automationSyncResponseSchema,
   automationSyncRequestSchema,
   browserControlStateSchema,
   browserSessionIdSchema,
@@ -46,18 +47,30 @@ export async function createOwnedBrowserSession(
     return { ok: false as const, code: "INVALID_SESSION_REQUEST" };
   const input = parsed.data;
   const eligible = await environment.VILLAGE_DB.prepare(
-    `SELECT j.state AS job_state, d.credential_status AS device_status
+    `SELECT j.state AS job_state, d.credential_status AS device_status,
+            j.objective_kind, j.objective_version
      FROM jobs j JOIN devices d ON d.principal_id = j.principal_id
      WHERE j.principal_id = ? AND j.job_id = ? AND d.device_id = ?`,
   )
     .bind(input.principalId, input.jobId, input.deviceId)
-    .first<{ job_state: string; device_status: string }>();
+    .first<{
+      job_state: string;
+      device_status: string;
+      objective_kind: string | null;
+      objective_version: number | null;
+    }>();
   if (
     !eligible ||
     eligible.job_state !== "QUEUED" ||
     eligible.device_status !== "ACTIVE"
   ) {
     return { ok: false as const, code: "JOB_OR_DEVICE_NOT_ELIGIBLE" };
+  }
+  if (
+    eligible.objective_kind === "OWNED_FIXTURE_ACCOUNT_SETUP_V1" &&
+    input.site !== "OWNED_FIXTURE"
+  ) {
+    return { ok: false as const, code: "DESTINATION_SITE_MISMATCH" };
   }
   const control = browserControlStateSchema.parse({
     principalId: input.principalId,
@@ -109,18 +122,35 @@ export async function createOwnedBrowserSession(
   } catch {
     return { ok: false as const, code: "SESSION_CONFLICT" };
   }
-  const initialized = await environment.BROWSER_SESSION_COORDINATOR.getByName(
+  const coordinator = environment.BROWSER_SESSION_COORDINATOR.getByName(
     input.browserSessionId,
-  ).initialize({
+  );
+  const initialized = await coordinator.initialize({
     principalId: input.principalId,
     browserSessionId: input.browserSessionId,
     site: input.site,
     initializedAt: input.now,
     control,
   });
-  return initialized.ok
-    ? { ok: true as const, browserSessionId: input.browserSessionId }
-    : { ok: false as const, code: initialized.code };
+  if (!initialized.ok) return { ok: false as const, code: initialized.code };
+  if (
+    eligible.objective_kind === "OWNED_FIXTURE_ACCOUNT_SETUP_V1" &&
+    eligible.objective_version === 1
+  ) {
+    const workflow = await coordinator.initializeWorkflow({
+      principalId: input.principalId,
+      deviceId: input.deviceId,
+      jobId: input.jobId,
+      browserSessionId: input.browserSessionId,
+      objective: { kind: eligible.objective_kind, version: 1 },
+      jobRevision: 2,
+      logicalStep: "SET_DISPLAY_NAME",
+      effectId: `efx_${input.browserSessionId.slice(4)}`,
+      initializedAt: input.now,
+    });
+    if (!workflow.ok) return workflow;
+  }
+  return { ok: true as const, browserSessionId: input.browserSessionId };
 }
 
 async function authenticatedDevice(
@@ -422,7 +452,42 @@ export async function dispatchAuthenticatedAutomationSync(
   ) {
     return { ok: false as const, code: "SESSION_NOT_OWNED" };
   }
-  return {
+  const workflowSnapshot =
+    await environment.BROWSER_SESSION_COORDINATOR.getByName(
+      envelope.browserSessionId,
+    ).workflowSnapshot(envelope.principalId);
+  if (!workflowSnapshot.ok) return workflowSnapshot;
+  const checkpoint = workflowSnapshot.checkpoint;
+  const currentEffect = checkpoint
+    ? workflowSnapshot.effects.find(
+        (effect) => effect.effectId === checkpoint.currentEffectId,
+      )
+    : workflowSnapshot.effects[0];
+  const workflow =
+    workflowSnapshot.jobRevision === null || currentEffect === undefined
+      ? null
+      : {
+          objective: {
+            kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1" as const,
+            version: 1 as const,
+          },
+          jobRevision: workflowSnapshot.jobRevision,
+          logicalStep: currentEffect.logicalStep,
+          effectId: currentEffect.effectId,
+          completedEffects: checkpoint?.completedEffects ?? [],
+          actionPhase: currentEffect.phase,
+          outstandingAction:
+            currentEffect.canonicalActionId === null ||
+            currentEffect.phase === "RECEIPTED"
+              ? null
+              : {
+                  actionId: currentEffect.canonicalActionId,
+                  logicalStep: currentEffect.logicalStep,
+                  effectId: currentEffect.effectId,
+                  leaseEpoch: snapshot.control.leaseEpoch,
+                },
+        };
+  return automationSyncResponseSchema.parse({
     ok: true as const,
     cursor: snapshot.eventSequence,
     jobId: snapshot.control.jobId,
@@ -431,5 +496,6 @@ export async function dispatchAuthenticatedAutomationSync(
     leaseEpoch: snapshot.control.leaseEpoch,
     automationBlocked: snapshot.control.automationBlocked,
     canceled: snapshot.canceled,
-  };
+    workflow,
+  });
 }

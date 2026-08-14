@@ -6,7 +6,10 @@ import { automationSyncRequestSchema } from "@village/contracts";
 import { generateDeviceSigningKey } from "../src/main/device-identity.js";
 import { exportPublicDeviceJwk } from "../src/main/device-identity.js";
 import { deviceIdForPublicKey } from "../src/main/pairing-bootstrap.js";
-import { createRuntimeControlPlaneAutomationFence } from "../src/main/runtime-control-plane.js";
+import {
+  createRuntimeControlPlaneAutomationFence,
+  createRuntimeControlPlaneComposition,
+} from "../src/main/runtime-control-plane.js";
 
 describe("packaged runtime control-plane composition", () => {
   const temporaryDirectories: string[] = [];
@@ -41,6 +44,7 @@ describe("packaged runtime control-plane composition", () => {
           leaseEpoch: 2,
           automationBlocked: false,
           canceled: false,
+          workflow: null,
         }),
       )
       .mockResolvedValueOnce(
@@ -53,6 +57,7 @@ describe("packaged runtime control-plane composition", () => {
           leaseEpoch: 3,
           automationBlocked: true,
           canceled: true,
+          workflow: null,
         }),
       );
     const deviceIdentitySource = {
@@ -141,5 +146,33 @@ describe("packaged runtime control-plane composition", () => {
         connectionId: "desktop-mismatch",
       }),
     ).rejects.toThrow("PAIRED_DEVICE_KEY_MISMATCH");
+  });
+
+  it("exposes the production workflow coordinator beside the shared automation fence", async () => {
+    const userDataPath = await mkdtemp(join(tmpdir(), "village-runtime-cp-"));
+    temporaryDirectories.push(userDataPath);
+    const keys = await generateDeviceSigningKey();
+    const publicJwk = await exportPublicDeviceJwk(keys.publicKey);
+    const composition = await createRuntimeControlPlaneComposition({
+      controlPlaneUrl: new URL("https://village.test"),
+      userDataPath,
+      identity: {
+        principalId: "prn_01J00000000000000000000000",
+        deviceId: await deviceIdForPublicKey(publicJwk),
+        browserSessionId: "brs_01J00000000000000000000000",
+      },
+      deviceIdentitySource: {
+        load: async () => ({
+          privateKey: keys.privateKey,
+          publicKey: keys.publicKey,
+          publicJwk,
+          protectionBackend: "keychain",
+        }),
+      },
+      request: vi.fn<typeof fetch>(),
+    });
+
+    expect(composition.automationFence).toBeDefined();
+    expect(composition.workflowCoordinator).toBeDefined();
   });
 });

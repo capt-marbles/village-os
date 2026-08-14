@@ -8,6 +8,7 @@ import {
 } from "@village/contracts";
 import {
   ControlPlaneClient,
+  ControlPlaneWorkflowCoordinator,
   FileAutomationSyncCursorStore,
   MemoryAutomationSyncCursorStore,
 } from "../src/main/control-plane-client.js";
@@ -139,6 +140,115 @@ describe("paired desktop connector", () => {
     ).toEqual([workflow.effectId, workflow.effectId]);
   });
 
+  it("maps durable workflow state and preserves a rejected action code", async () => {
+    const keys = await generateDeviceSigningKey();
+    let sequence = 0;
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({
+          ok: true,
+          cursor: 4,
+          jobId: "job_01J00000000000000000000000",
+          controller: "AGENT",
+          connection: "ONLINE",
+          leaseEpoch: 2,
+          automationBlocked: false,
+          canceled: false,
+          workflow: {
+            objective: {
+              kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+              version: 1,
+            },
+            jobRevision: 2,
+            logicalStep: "SET_DISPLAY_NAME",
+            effectId: "efx_01J00000000000000000000000",
+            completedEffects: [],
+            actionPhase: "ACCEPTED",
+            outstandingAction: null,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            ok: true,
+            eventSequence: 5,
+            canonicalActionId: "act_01J00000000000000000000000",
+          },
+          { status: 202 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          { ok: false, code: "LOGICAL_EFFECT_CONFLICT" },
+          { status: 409 },
+        ),
+      );
+    const client = new ControlPlaneClient(
+      "https://village.test",
+      "connector-desktop",
+      keys.privateKey,
+      { reserveNext: async () => ++sequence },
+      request,
+    );
+    const coordinator = new ControlPlaneWorkflowCoordinator(
+      client,
+      new MemoryAutomationSyncCursorStore(),
+    );
+    const identity = {
+      principalId: "prn_01J00000000000000000000000",
+      deviceId: "dev_01J00000000000000000000000",
+      jobId: "job_01J00000000000000000000000",
+      browserSessionId: "brs_01J00000000000000000000000",
+    };
+
+    await expect(
+      coordinator.synchronize({ ...identity, cursor: 0 }),
+    ).resolves.toMatchObject({
+      ...identity,
+      authenticated: true,
+      cursor: 4,
+      logicalStep: "SET_DISPLAY_NAME",
+      effectId: "efx_01J00000000000000000000000",
+      leaseEpoch: 2,
+    });
+    await expect(
+      coordinator.acceptAction({
+        ...identity,
+        objective: {
+          kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+          version: 1,
+        },
+        jobRevision: 2,
+        logicalStep: "SET_DISPLAY_NAME",
+        effectId: "efx_01J00000000000000000000000",
+        leaseEpoch: 2,
+        actionId: "act_01J00000000000000000000001",
+        command: { capability: "REPLACE_DISPLAY_NAME" },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      actionId: "act_01J00000000000000000000000",
+      cursor: 5,
+    });
+    await expect(
+      coordinator.acceptAction({
+        ...identity,
+        objective: {
+          kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+          version: 1,
+        },
+        jobRevision: 2,
+        logicalStep: "SET_DISPLAY_NAME",
+        effectId: "efx_01J00000000000000000000009",
+        leaseEpoch: 2,
+        actionId: "act_01J00000000000000000000009",
+        command: { capability: "REPLACE_DISPLAY_NAME" },
+      }),
+    ).resolves.toEqual({ ok: false, code: "LOGICAL_EFFECT_CONFLICT" });
+  });
+
   it("authenticates automation sync and resumes from a durable cursor", async () => {
     const keys = await generateDeviceSigningKey();
     let sequence = 0;
@@ -153,6 +263,7 @@ describe("paired desktop connector", () => {
         leaseEpoch: 5,
         automationBlocked: true,
         canceled: true,
+        workflow: null,
       }),
     );
     const client = new ControlPlaneClient(
@@ -219,6 +330,7 @@ describe("paired desktop connector", () => {
           leaseEpoch: 5,
           automationBlocked: true,
           canceled: true,
+          workflow: null,
         }),
       );
     const client = new ControlPlaneClient(

@@ -4,6 +4,7 @@ import { deviceIdForPublicKey } from "./pairing-bootstrap.js";
 import {
   ControlPlaneAutomationFence,
   ControlPlaneClient,
+  ControlPlaneWorkflowCoordinator,
   FileAutomationSyncCursorStore,
   FileProtocolSequenceStore,
 } from "./control-plane-client.js";
@@ -25,6 +26,15 @@ export interface RuntimeControlPlaneOptions {
 export async function createRuntimeControlPlaneAutomationFence(
   options: RuntimeControlPlaneOptions,
 ): Promise<ControlPlaneAutomationFence> {
+  return (await createRuntimeControlPlaneComposition(options)).automationFence;
+}
+
+export async function createRuntimeControlPlaneComposition(
+  options: RuntimeControlPlaneOptions,
+): Promise<{
+  automationFence: ControlPlaneAutomationFence;
+  workflowCoordinator: ControlPlaneWorkflowCoordinator;
+}> {
   const deviceIdentity = await options.deviceIdentitySource.load();
   const derivedDeviceId = await deviceIdForPublicKey(deviceIdentity.publicJwk);
   if (derivedDeviceId !== options.identity.deviceId) {
@@ -39,10 +49,11 @@ export async function createRuntimeControlPlaneAutomationFence(
     new FileProtocolSequenceStore(join(stateDirectory, "sequences.json")),
     options.request,
   );
-  return new ControlPlaneAutomationFence(
-    client,
-    new FileAutomationSyncCursorStore(
-      join(stateDirectory, "automation-sync-cursors.json"),
-    ),
+  const cursors = new FileAutomationSyncCursorStore(
+    join(stateDirectory, "automation-sync-cursors.json"),
   );
+  return {
+    automationFence: new ControlPlaneAutomationFence(client, cursors),
+    workflowCoordinator: new ControlPlaneWorkflowCoordinator(client, cursors),
+  };
 }

@@ -2,11 +2,19 @@ import { z } from "zod";
 import {
   browserSessionIdSchema,
   deviceIdSchema,
+  effectIdSchema,
   instantSchema,
   jobIdSchema,
   principalIdSchema,
+  setupLogicalStepSchema,
+  setupObjectiveSchema,
 } from "./ids.js";
 import { connectionStateSchema, controllerSchema } from "./browser.js";
+import { actionPhaseSchema } from "./actions.js";
+import {
+  completedSetupEffectSchema,
+  outstandingSetupActionSchema,
+} from "./jobs.js";
 
 const unsignedAutomationSyncRequestSchema = z
   .strictObject({
@@ -46,6 +54,17 @@ export const automationSyncResponseSchema = z.strictObject({
   leaseEpoch: z.number().int().nonnegative(),
   automationBlocked: z.boolean(),
   canceled: z.boolean(),
+  workflow: z
+    .strictObject({
+      objective: setupObjectiveSchema,
+      jobRevision: z.number().int().positive(),
+      logicalStep: setupLogicalStepSchema,
+      effectId: effectIdSchema,
+      completedEffects: z.array(completedSetupEffectSchema).max(4),
+      actionPhase: actionPhaseSchema,
+      outstandingAction: outstandingSetupActionSchema.nullable(),
+    })
+    .nullable(),
 });
 
 export type UnsignedAutomationSyncRequest = z.infer<

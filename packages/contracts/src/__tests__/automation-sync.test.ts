@@ -51,6 +51,18 @@ describe("automation synchronization contracts", () => {
         leaseEpoch: 5,
         automationBlocked: true,
         canceled: true,
+        workflow: {
+          objective: {
+            kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+            version: 1,
+          },
+          jobRevision: 2,
+          logicalStep: "SET_DISPLAY_NAME",
+          effectId: "efx_01J00000000000000000000000",
+          completedEffects: [],
+          actionPhase: "ACCEPTED",
+          outstandingAction: null,
+        },
       }),
     ).toEqual({
       ok: true,
@@ -61,6 +73,18 @@ describe("automation synchronization contracts", () => {
       leaseEpoch: 5,
       automationBlocked: true,
       canceled: true,
+      workflow: {
+        objective: {
+          kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+          version: 1,
+        },
+        jobRevision: 2,
+        logicalStep: "SET_DISPLAY_NAME",
+        effectId: "efx_01J00000000000000000000000",
+        completedEffects: [],
+        actionPhase: "ACCEPTED",
+        outstandingAction: null,
+      },
     });
     expect(
       automationSyncResponseSchema.safeParse({
@@ -72,6 +96,7 @@ describe("automation synchronization contracts", () => {
         leaseEpoch: 5,
         automationBlocked: true,
         canceled: true,
+        workflow: null,
         pageTitle: "private",
       }).success,
     ).toBe(false);

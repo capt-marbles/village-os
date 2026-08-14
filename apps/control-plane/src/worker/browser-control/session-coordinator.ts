@@ -107,6 +107,18 @@ const ownerProgressSchema = z.strictObject({
   occurredAt: instantSchema,
 });
 
+const initializeWorkflowSchema = z.strictObject({
+  principalId: principalIdSchema,
+  deviceId: deviceIdSchema,
+  jobId: jobIdSchema,
+  browserSessionId: browserSessionIdSchema,
+  objective: setupObjectiveSchema,
+  jobRevision: z.number().int().positive(),
+  logicalStep: setupLogicalStepSchema,
+  effectId: effectIdSchema,
+  initializedAt: instantSchema,
+});
+
 type MetadataRow = {
   principal_id: string;
   browser_session_id: string;
@@ -293,6 +305,88 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
       input.initializedAt,
     );
     return { ok: true };
+  }
+
+  initializeWorkflow(candidate: unknown) {
+    const parsed = initializeWorkflowSchema.safeParse(candidate);
+    if (!parsed.success)
+      return { ok: false as const, code: "INVALID_WORKFLOW_INITIALIZATION" };
+    const input = parsed.data;
+    const metadata = this.metadata();
+    const controlRow = this.control();
+    if (!metadata || !controlRow)
+      return { ok: false as const, code: "NOT_INITIALIZED" };
+    const control = browserControlStateSchema.parse(
+      JSON.parse(controlRow.state_json),
+    );
+    if (
+      metadata.site !== "OWNED_FIXTURE" ||
+      metadata.principal_id !== input.principalId ||
+      metadata.browser_session_id !== input.browserSessionId ||
+      control.deviceId !== input.deviceId ||
+      control.jobId !== input.jobId
+    ) {
+      return { ok: false as const, code: "IDENTITY_MISMATCH" };
+    }
+    const existing = this.ctx.storage.sql
+      .exec<WorkflowEffectRow>(
+        "SELECT * FROM workflow_effects WHERE logical_step = ? OR effect_id = ?",
+        input.logicalStep,
+        input.effectId,
+      )
+      .toArray()[0];
+    if (existing) {
+      return existing.logical_step === input.logicalStep &&
+        existing.effect_id === input.effectId &&
+        existing.job_revision === input.jobRevision &&
+        metadata.workflow_job_revision === input.jobRevision
+        ? {
+            ok: true as const,
+            eventSequence: metadata.event_sequence,
+            replayed: true as const,
+          }
+        : { ok: false as const, code: "LOGICAL_EFFECT_CONFLICT" };
+    }
+    if (
+      metadata.workflow_job_revision !== null &&
+      metadata.workflow_job_revision !== input.jobRevision
+    ) {
+      return { ok: false as const, code: "STALE_JOB_REVISION" };
+    }
+    this.ctx.storage.sql.exec(
+      `INSERT INTO workflow_effects
+       (logical_step, effect_id, job_revision, capability, canonical_action_id,
+        phase, receipt_id, checkpoint_id, updated_at)
+       VALUES (?, ?, ?, NULL, NULL, 'ACCEPTED', NULL, NULL, ?)`,
+      input.logicalStep,
+      input.effectId,
+      input.jobRevision,
+      input.initializedAt,
+    );
+    const sequence = metadata.event_sequence + 1;
+    this.ctx.storage.sql.exec(
+      "UPDATE session_metadata SET workflow_job_revision = ?, event_sequence = ? WHERE singleton = 1",
+      input.jobRevision,
+      sequence,
+    );
+    this.appendEventAt(
+      sequence,
+      "WORKFLOW_INITIALIZED",
+      {
+        jobId: input.jobId,
+        objective: input.objective,
+        jobRevision: input.jobRevision,
+        logicalStep: input.logicalStep,
+        effectId: input.effectId,
+        actionPhase: "ACCEPTED",
+      },
+      input.initializedAt,
+    );
+    return {
+      ok: true as const,
+      eventSequence: sequence,
+      replayed: false as const,
+    };
   }
 
   override async fetch(request: Request): Promise<Response> {
