@@ -441,26 +441,18 @@ describe("model provider boundary", () => {
     await expect(
       requestOwnedFixtureAction(
         new DeterministicProviderDouble([
-          {
-            capability: "FIXTURE_INPUT",
-            field: "IDENTIFIER",
-            value: "fixture-user",
-          },
+          { capability: "REPLACE_DISPLAY_NAME" },
         ]),
         context,
       ),
     ).resolves.toEqual({
       status: "action",
-      command: {
-        capability: "FIXTURE_INPUT",
-        field: "IDENTIFIER",
-        value: "fixture-user",
-      },
+      command: { capability: "REPLACE_DISPLAY_NAME" },
     });
     await expect(
       requestOwnedFixtureAction(
         new DeterministicProviderDouble([
-          { capability: "FIXTURE_INPUT", field: "IDENTIFIER", value: "x" },
+          { capability: "REPLACE_DISPLAY_NAME" },
         ]),
         createSanitizedModelContext({
           jobState: "RUNNING_AGENT",

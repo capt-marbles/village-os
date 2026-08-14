@@ -4,12 +4,16 @@ import {
   browserStepIdSchema,
   browserSessionIdSchema,
   deviceIdSchema,
+  effectIdSchema,
   instantSchema,
   jobIdSchema,
   principalIdSchema,
   receiptIdSchema,
+  setupLogicalStepSchema,
+  setupObjectiveSchema,
 } from "./ids.js";
 import { predicateIdSchema } from "./redaction.js";
+import { isSetupCommandAllowedForStep } from "./commands.js";
 
 export const actionPhaseSchema = z.enum([
   "ACCEPTED",
@@ -19,11 +23,17 @@ export const actionPhaseSchema = z.enum([
   "RECONCILIATION_REQUIRED",
 ]);
 
-export const browserActionSchema = z.strictObject({
+export const mutationClassSchema = z.enum([
+  "READ_ONLY",
+  "IDEMPOTENT",
+  "NON_IDEMPOTENT",
+]);
+
+export const authenticationBrowserActionSchema = z.strictObject({
   actionId: actionIdSchema,
   browserSessionId: browserSessionIdSchema,
   phase: actionPhaseSchema,
-  mutationClass: z.enum(["READ_ONLY", "IDEMPOTENT", "NON_IDEMPOTENT"]),
+  mutationClass: mutationClassSchema,
   acceptedAt: instantSchema,
   updatedAt: instantSchema,
   postcondition: z.enum([
@@ -34,7 +44,33 @@ export const browserActionSchema = z.strictObject({
   ]),
 });
 
-export const browserStepSchema = z.strictObject({
+export const setupBrowserActionSchema = z.strictObject({
+  actionId: actionIdSchema,
+  browserSessionId: browserSessionIdSchema,
+  jobId: jobIdSchema,
+  jobRevision: z.number().int().positive(),
+  objective: setupObjectiveSchema,
+  logicalStep: setupLogicalStepSchema,
+  effectId: effectIdSchema,
+  leaseEpoch: z.number().int().positive(),
+  phase: actionPhaseSchema,
+  mutationClass: mutationClassSchema,
+  acceptedAt: instantSchema,
+  updatedAt: instantSchema,
+  postcondition: z.enum([
+    "UNOBSERVED",
+    "SATISFIED",
+    "NOT_SATISFIED",
+    "UNKNOWN",
+  ]),
+});
+
+export const browserActionSchema = z.union([
+  authenticationBrowserActionSchema,
+  setupBrowserActionSchema,
+]);
+
+export const authenticationBrowserStepSchema = z.strictObject({
   stepId: browserStepIdSchema,
   principalId: principalIdSchema,
   deviceId: deviceIdSchema,
@@ -45,7 +81,6 @@ export const browserStepSchema = z.strictObject({
     "SESSION_OPEN",
     "NAVIGATE",
     "OBSERVE",
-    "FIXTURE_INPUT",
     "REQUEST_SECRET_FILL",
     "REQUEST_HUMAN_GATE",
     "CHECKPOINT",
@@ -55,7 +90,47 @@ export const browserStepSchema = z.strictObject({
   createdAt: instantSchema,
 });
 
-export const actionReceiptSchema = z.strictObject({
+export const setupBrowserStepSchema = z
+  .strictObject({
+    stepId: browserStepIdSchema,
+    principalId: principalIdSchema,
+    deviceId: deviceIdSchema,
+    jobId: jobIdSchema,
+    browserSessionId: browserSessionIdSchema,
+    objective: setupObjectiveSchema,
+    site: z.literal("OWNED_FIXTURE"),
+    logicalStep: setupLogicalStepSchema,
+    effectId: effectIdSchema,
+    ordinal: z.number().int().positive().max(4),
+    capability: z.enum([
+      "REPLACE_DISPLAY_NAME",
+      "SELECT_ROLE",
+      "REPLACE_PREFERRED_FOCUS",
+      "FINALIZE_SETUP",
+    ]),
+    state: z.enum(["PENDING", "ACTIVE", "COMPLETED", "WAITING", "FAILED"]),
+    createdAt: instantSchema,
+  })
+  .superRefine((step, context) => {
+    if (
+      !isSetupCommandAllowedForStep(step.logicalStep, {
+        capability: step.capability,
+      })
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["capability"],
+        message: "Step capability must match its logical step",
+      });
+    }
+  });
+
+export const browserStepSchema = z.union([
+  authenticationBrowserStepSchema,
+  setupBrowserStepSchema,
+]);
+
+export const authenticationActionReceiptSchema = z.strictObject({
   receiptId: receiptIdSchema,
   principalId: principalIdSchema,
   deviceId: deviceIdSchema,
@@ -71,6 +146,33 @@ export const actionReceiptSchema = z.strictObject({
   predicateIds: z.array(predicateIdSchema).max(16),
   recordedAt: instantSchema,
 });
+
+export const setupActionReceiptSchema = z.strictObject({
+  receiptId: receiptIdSchema,
+  principalId: principalIdSchema,
+  deviceId: deviceIdSchema,
+  jobId: jobIdSchema,
+  browserSessionId: browserSessionIdSchema,
+  actionId: actionIdSchema,
+  stepId: browserStepIdSchema,
+  objective: setupObjectiveSchema,
+  jobRevision: z.number().int().positive(),
+  logicalStep: setupLogicalStepSchema,
+  effectId: effectIdSchema,
+  leaseEpoch: z.number().int().positive(),
+  outcome: z.enum([
+    "POSTCONDITION_SATISFIED",
+    "POSTCONDITION_NOT_SATISFIED",
+    "OUTCOME_UNKNOWN",
+  ]),
+  predicateIds: z.array(predicateIdSchema).max(16),
+  recordedAt: instantSchema,
+});
+
+export const actionReceiptSchema = z.union([
+  authenticationActionReceiptSchema,
+  setupActionReceiptSchema,
+]);
 
 export type ActionPhase = z.infer<typeof actionPhaseSchema>;
 export type ActionEvidence =

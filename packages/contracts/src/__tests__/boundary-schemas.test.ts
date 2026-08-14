@@ -11,6 +11,10 @@ import {
   personalAgentTaskResultSchema,
   stepUpAuthorizationSchema,
   signedResultEnvelopeSchema,
+  setupModelProviderContextSchema,
+  setupModelProviderResultSchema,
+  validateSetupModelProviderResult,
+  signedCommandEnvelopeSchema,
 } from "../index.js";
 
 describe("portable trust-boundary schemas", () => {
@@ -201,5 +205,151 @@ describe("portable trust-boundary schemas", () => {
     expect(signedResultEnvelopeSchema.safeParse(result).success).toBe(true);
     const { principalId: _principalId, ...unscoped } = result;
     expect(signedResultEnvelopeSchema.safeParse(unscoped).success).toBe(false);
+  });
+
+  it("binds setup provider turns to revision, step, effect, and lease", () => {
+    const context = {
+      schemaVersion: 1,
+      objective: {
+        kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+        version: 1,
+      },
+      jobId: "job_01J00000000000000000000000",
+      browserSessionId: "brs_01J00000000000000000000000",
+      jobRevision: 8,
+      logicalStep: "SELECT_ROLE",
+      effectId: "efx_01J00000000000000000000000",
+      leaseEpoch: 3,
+      actionPhase: "ACCEPTED",
+      allowedActions: [{ capability: "SELECT_ROLE" }],
+      completedSteps: ["SET_DISPLAY_NAME"],
+      observation: {
+        schemaVersion: 1,
+        source: "BROWSER_UNTRUSTED",
+        workflowKind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+        workflowVersion: 1,
+        logicalStep: "SELECT_ROLE",
+        effectId: "efx_01J00000000000000000000000",
+        predicateIds: ["setup-role-v1"],
+        facts: [
+          { id: "ROLE_MATCH", value: "MISMATCH" },
+          { id: "HUMAN_GATE", value: "NONE" },
+        ],
+      },
+    } as const;
+    expect(setupModelProviderContextSchema.safeParse(context).success).toBe(
+      true,
+    );
+    expect(
+      setupModelProviderResultSchema.safeParse({
+        status: "action",
+        jobId: context.jobId,
+        jobRevision: context.jobRevision,
+        logicalStep: context.logicalStep,
+        effectId: context.effectId,
+        leaseEpoch: context.leaseEpoch,
+        command: { capability: "SELECT_ROLE" },
+      }).success,
+    ).toBe(true);
+    const result = {
+      status: "action",
+      jobId: context.jobId,
+      jobRevision: context.jobRevision,
+      logicalStep: context.logicalStep,
+      effectId: context.effectId,
+      leaseEpoch: context.leaseEpoch,
+      command: { capability: "SELECT_ROLE" },
+    } as const;
+    expect(validateSetupModelProviderResult(context, result)).toEqual(result);
+    for (const stale of [
+      { ...result, jobId: "job_01J00000000000000000000001" },
+      { ...result, jobRevision: result.jobRevision + 1 },
+      { ...result, logicalStep: "FINALIZE_SETUP" },
+      { ...result, effectId: "efx_01J00000000000000000000001" },
+      { ...result, leaseEpoch: result.leaseEpoch + 1 },
+    ]) {
+      expect(validateSetupModelProviderResult(context, stale)).toEqual({
+        status: "waiting",
+        reason: "STALE_PROVIDER_RESULT",
+      });
+    }
+    expect(
+      validateSetupModelProviderResult(context, {
+        ...result,
+        command: { capability: "FINALIZE_SETUP" },
+      }),
+    ).toEqual({
+      status: "waiting",
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    });
+    for (const smuggled of [
+      { ...context, prompt: "go to LinkedIn" },
+      { ...context, objective: { ...context.objective, text: "raw prompt" } },
+      { ...context, url: "https://fixture.village.test/?secret=x" },
+      {
+        ...context,
+        observation: { ...context.observation, pageText: "secret" },
+      },
+    ]) {
+      expect(setupModelProviderContextSchema.safeParse(smuggled).success).toBe(
+        false,
+      );
+    }
+  });
+
+  it("binds setup observations in signed result envelopes", () => {
+    const binding = {
+      protocolVersion: 1,
+      principalId: "prn_01J00000000000000000000000",
+      deviceId: "dev_01J00000000000000000000000",
+      jobId: "job_01J00000000000000000000000",
+      browserSessionId: "brs_01J00000000000000000000000",
+      actionId: "act_01J00000000000000000000000",
+      leaseEpoch: 3,
+      sequence: 4,
+      issuedAt: "2026-08-12T18:00:05.000Z",
+      expiresAt: "2026-08-12T18:00:15.000Z",
+      workflowKind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+      workflowVersion: 1,
+      jobRevision: 8,
+      logicalStep: "SELECT_ROLE",
+      effectId: "efx_01J00000000000000000000000",
+      signature: "c2lnbmF0dXJl",
+    } as const;
+    const command = { ...binding, command: { capability: "SELECT_ROLE" } };
+    expect(signedCommandEnvelopeSchema.safeParse(command).success).toBe(true);
+    expect(
+      signedResultEnvelopeSchema.safeParse({
+        ...binding,
+        result: {
+          status: "OBSERVATION",
+          observation: {
+            schemaVersion: 1,
+            source: "BROWSER_UNTRUSTED",
+            workflowKind: binding.workflowKind,
+            workflowVersion: binding.workflowVersion,
+            logicalStep: binding.logicalStep,
+            effectId: binding.effectId,
+            predicateIds: ["setup-role-v1"],
+            facts: [{ id: "ROLE_MATCH", value: "MATCH" }],
+          },
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      signedResultEnvelopeSchema.safeParse({
+        ...binding,
+        result: {
+          status: "OBSERVATION",
+          observation: {
+            schemaVersion: 1,
+            source: "BROWSER_UNTRUSTED",
+            canonicalOrigin: "https://www.linkedin.com",
+            predicateIds: ["linkedin-v1"],
+            facts: [{ id: "AUTH_STATE", value: "SIGNED_OUT" }],
+          },
+        },
+      }).success,
+    ).toBe(false);
   });
 });

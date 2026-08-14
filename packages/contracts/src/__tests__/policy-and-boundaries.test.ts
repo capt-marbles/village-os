@@ -8,6 +8,9 @@ import {
   operationAuthorizationSchema,
   siteCommandPolicySchema,
   stepUpAuthorizationSchema,
+  setupActionReceiptSchema,
+  setupCheckpointSchema,
+  setupObjectiveSchema,
 } from "../index.js";
 
 const binding = {
@@ -92,6 +95,81 @@ describe("policy and boundary contracts", () => {
         operation: "FORGET_SITE_SESSION",
         site: "LINKEDIN",
       }).success,
+    ).toBe(false);
+  });
+
+  it("keeps the setup objective, checkpoint, and receipt strict and versioned", () => {
+    expect(
+      setupObjectiveSchema.parse({
+        kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+        version: 1,
+      }),
+    ).toEqual({ kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1", version: 1 });
+    expect(
+      setupObjectiveSchema.safeParse({
+        kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+        version: 2,
+      }).success,
+    ).toBe(false);
+
+    const checkpoint = {
+      checkpointId: "chk_01J00000000000000000000000",
+      ...binding,
+      jobRevision: 7,
+      eventSequence: 9,
+      state: "RUNNING_AGENT",
+      objective: { kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1", version: 1 },
+      site: "OWNED_FIXTURE",
+      currentStep: "SELECT_ROLE",
+      currentEffectId: "efx_01J00000000000000000000000",
+      completedEffects: [
+        {
+          logicalStep: "SET_DISPLAY_NAME",
+          effectId: "efx_01J00000000000000000000001",
+        },
+      ],
+      outstandingAction: null,
+      lastPredicateVersion: "setup-role-v1",
+      actionPhase: "ACCEPTED",
+      reconciliation: "NONE",
+      createdAt: "2026-08-12T18:00:00.000Z",
+    } as const;
+    expect(setupCheckpointSchema.safeParse(checkpoint).success).toBe(true);
+    expect(
+      setupCheckpointSchema.safeParse({ ...checkpoint, site: "LINKEDIN" })
+        .success,
+    ).toBe(false);
+    expect(
+      setupCheckpointSchema.safeParse({
+        ...checkpoint,
+        completedEffects: [
+          ...checkpoint.completedEffects,
+          {
+            logicalStep: "SET_DISPLAY_NAME",
+            effectId: "efx_01J00000000000000000000002",
+          },
+        ],
+      }).success,
+    ).toBe(false);
+
+    const receipt = {
+      receiptId: "rcp_01J00000000000000000000000",
+      ...binding,
+      actionId: "act_01J00000000000000000000000",
+      stepId: "bsp_01J00000000000000000000000",
+      objective: checkpoint.objective,
+      jobRevision: checkpoint.jobRevision,
+      logicalStep: checkpoint.currentStep,
+      effectId: checkpoint.currentEffectId,
+      leaseEpoch: 4,
+      outcome: "POSTCONDITION_SATISFIED",
+      predicateIds: ["setup-role-v1"],
+      recordedAt: "2026-08-12T18:00:01.000Z",
+    } as const;
+    expect(setupActionReceiptSchema.safeParse(receipt).success).toBe(true);
+    expect(
+      setupActionReceiptSchema.safeParse({ ...receipt, value: "secret" })
+        .success,
     ).toBe(false);
   });
 });

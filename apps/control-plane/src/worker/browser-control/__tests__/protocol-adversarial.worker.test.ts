@@ -67,6 +67,40 @@ async function signedCommand(
   });
 }
 
+async function signedSetupCommand(
+  command: Extract<BrowserCommand, { capability: "REPLACE_DISPLAY_NAME" }>,
+  sequence = 1,
+  browserSessionId: string = browserSessionA,
+) {
+  const unsigned = {
+    protocolVersion: 1 as const,
+    principalId,
+    deviceId,
+    jobId,
+    browserSessionId,
+    actionId: "act_01J00000000000000000000000" as const,
+    leaseEpoch: 1,
+    sequence,
+    issuedAt: now,
+    expiresAt: "2026-08-12T18:00:30.000Z",
+    workflowKind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1" as const,
+    workflowVersion: 1 as const,
+    jobRevision: 1,
+    logicalStep: "SET_DISPLAY_NAME" as const,
+    effectId: "efx_01J00000000000000000000000" as const,
+    command,
+  };
+  const signature = await crypto.subtle.sign(
+    "Ed25519",
+    keys.privateKey,
+    canonicalCommandEnvelopeBytes(unsigned),
+  );
+  return signedCommandEnvelopeSchema.parse({
+    ...unsigned,
+    signature: Buffer.from(signature).toString("base64url"),
+  });
+}
+
 async function signedResult(
   actionId: string,
   sequence: number,
@@ -280,12 +314,8 @@ describe("authenticated protocol", () => {
   it("keeps LinkedIn human-only inside the authoritative coordinator", async () => {
     await seedProjectionRows("LINKEDIN", browserSessionB);
     await initializedCoordinator("LINKEDIN", browserSessionB);
-    const input = await signedCommand(
-      {
-        capability: "FIXTURE_INPUT",
-        field: "IDENTIFIER",
-        value: "should-not-run",
-      },
+    const input = await signedSetupCommand(
+      { capability: "REPLACE_DISPLAY_NAME" },
       1,
       browserSessionB,
     );

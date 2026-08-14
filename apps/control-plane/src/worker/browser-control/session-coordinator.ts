@@ -391,7 +391,7 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
     if (usage >= 120) return { ok: false, code: "COMMAND_QUOTA_EXCEEDED" };
 
     const mutationClass = mutationClassFor(input.envelope);
-    const action: BrowserAction = {
+    const baseAction = {
       actionId: input.envelope.actionId,
       browserSessionId: input.envelope.browserSessionId,
       phase: "ACCEPTED",
@@ -399,7 +399,22 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
       acceptedAt: input.now,
       updatedAt: input.now,
       postcondition: "UNOBSERVED",
-    };
+    } as const;
+    const action: BrowserAction =
+      "workflowKind" in input.envelope
+        ? {
+            ...baseAction,
+            jobId: input.envelope.jobId,
+            jobRevision: input.envelope.jobRevision,
+            objective: {
+              kind: input.envelope.workflowKind,
+              version: input.envelope.workflowVersion,
+            },
+            logicalStep: input.envelope.logicalStep,
+            effectId: input.envelope.effectId,
+            leaseEpoch: input.envelope.leaseEpoch,
+          }
+        : baseAction;
     const sequence = metadata.event_sequence + 1;
     try {
       this.ctx.storage.sql.exec(
@@ -483,6 +498,9 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
       .toArray()[0];
     if (!actionRow) return { ok: false as const, code: "ACTION_NOT_FOUND" };
     const action = JSON.parse(actionRow.action_json) as BrowserAction;
+    if (!resultMatchesActionBinding(action, input.envelope)) {
+      return { ok: false as const, code: "ACTION_BINDING_MISMATCH" };
+    }
     const updated = updateActionFromResult(action, input.envelope, input.now);
     const eventSequence = metadata.event_sequence + 1;
     this.ctx.storage.sql.exec(
@@ -944,12 +962,17 @@ function mutationClassFor(
   switch (envelope.command.capability) {
     case "OBSERVE":
     case "VERIFY_AUTHENTICATION":
+    case "OBSERVE_SETUP":
+    case "VERIFY_SETUP":
       return "READ_ONLY";
     case "SESSION_OPEN":
     case "NAVIGATE":
     case "CHECKPOINT":
+    case "REPLACE_DISPLAY_NAME":
+    case "SELECT_ROLE":
+    case "REPLACE_PREFERRED_FOCUS":
       return "IDEMPOTENT";
-    case "FIXTURE_INPUT":
+    case "FINALIZE_SETUP":
     case "REQUEST_SECRET_FILL":
     case "REQUEST_HUMAN_GATE":
       return "NON_IDEMPOTENT";
@@ -972,7 +995,9 @@ function updateActionFromResult(
         updatedAt: now,
         postcondition:
           envelope.result.status === "VERIFICATION" &&
-          envelope.result.verification === "authenticated"
+          ("verification" in envelope.result
+            ? envelope.result.verification === "authenticated"
+            : envelope.result.complete)
             ? "SATISFIED"
             : "UNKNOWN",
       };
@@ -992,4 +1017,23 @@ function updateActionFromResult(
         postcondition: "UNKNOWN",
       };
   }
+}
+
+function resultMatchesActionBinding(
+  action: BrowserAction,
+  envelope: SignedResultEnvelope,
+): boolean {
+  if ("objective" in action) {
+    return (
+      "workflowKind" in envelope &&
+      envelope.workflowKind === action.objective.kind &&
+      envelope.workflowVersion === action.objective.version &&
+      envelope.jobId === action.jobId &&
+      envelope.jobRevision === action.jobRevision &&
+      envelope.logicalStep === action.logicalStep &&
+      envelope.effectId === action.effectId &&
+      envelope.leaseEpoch === action.leaseEpoch
+    );
+  }
+  return !("workflowKind" in envelope);
 }

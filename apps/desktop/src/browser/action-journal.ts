@@ -3,8 +3,8 @@ import { dirname } from "node:path";
 import {
   actionIdSchema,
   actionPhaseSchema,
-  browserActionSchema,
   instantSchema,
+  mutationClassSchema,
   type BrowserAction,
 } from "@village/contracts";
 
@@ -26,8 +26,7 @@ function validateEntry(candidate: unknown): ActionJournalEntry {
     !Number.isInteger(entry.leaseEpoch) ||
     (entry.leaseEpoch ?? 0) < 1 ||
     !actionPhaseSchema.safeParse(entry.phase).success ||
-    !browserActionSchema.shape.mutationClass.safeParse(entry.mutationClass)
-      .success ||
+    !mutationClassSchema.safeParse(entry.mutationClass).success ||
     !instantSchema.safeParse(entry.recordedAt).success ||
     Object.keys(entry).some(
       (key) =>

@@ -22,5 +22,21 @@ export const pairingIdSchema = villageId("par");
 export const checkpointIdSchema = villageId("chk");
 export const browserStepIdSchema = villageId("bsp");
 export const receiptIdSchema = villageId("rcp");
+export const effectIdSchema = villageId("efx");
+
+export const setupWorkflowKindSchema = z.literal(
+  "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+);
+export const setupWorkflowVersionSchema = z.literal(1);
+export const setupObjectiveSchema = z.strictObject({
+  kind: setupWorkflowKindSchema,
+  version: setupWorkflowVersionSchema,
+});
+export const setupLogicalStepSchema = z.enum([
+  "SET_DISPLAY_NAME",
+  "SELECT_ROLE",
+  "SET_PREFERRED_FOCUS",
+  "FINALIZE_SETUP",
+]);
 
 export const instantSchema = z.iso.datetime({ offset: true });
