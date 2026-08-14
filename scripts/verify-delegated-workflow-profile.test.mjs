@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   assertPackagedDelegatedWorkflowAbruptRecovery,
   assertPackagedDelegatedWorkflowOwnerRecovery,
+  assertPackagedDelegatedWorkflowObserverRecovery,
   assertPackagedDelegatedWorkflowRecovery,
   packagedDelegatedWorkflowArguments,
   packagedDelegatedWorkflowRecoveryArguments,
@@ -202,5 +203,62 @@ test("owner hand-back recovery requires attribution and a fresh lease", () => {
         "DETERMINISTIC",
       ),
     /OWNER_CHECKPOINT_MISSING/,
+  );
+});
+
+test("observer cancellation reconnects monotonically and survives restart", () => {
+  assert.doesNotThrow(() =>
+    assertPackagedDelegatedWorkflowObserverRecovery(
+      {
+        status: "OBSERVER_CANCELED",
+        provider: "DETERMINISTIC",
+        terminal: { state: "CANCELLED" },
+        finalizationEffects: 0,
+      },
+      { status: "CANCEL_SENT", cursor: 3 },
+      {
+        status: "RECONNECTED",
+        previousCursor: 3,
+        cursor: 4,
+        terminalEvidence: "CANCELLED",
+        automationFenced: true,
+      },
+      {
+        status: "CANCELED_RESTART",
+        provider: "DETERMINISTIC",
+        terminal: { state: "CANCELLED" },
+        finalizationEffects: 0,
+        resumedFrom: "observer-cancel-restart",
+      },
+      "DETERMINISTIC",
+    ),
+  );
+  assert.throws(
+    () =>
+      assertPackagedDelegatedWorkflowObserverRecovery(
+        {
+          status: "OBSERVER_CANCELED",
+          provider: "DETERMINISTIC",
+          terminal: { state: "CANCELLED" },
+          finalizationEffects: 0,
+        },
+        { status: "CANCEL_SENT", cursor: 3 },
+        {
+          status: "RECONNECTED",
+          previousCursor: 3,
+          cursor: 3,
+          terminalEvidence: "CANCELLED",
+          automationFenced: true,
+        },
+        {
+          status: "CANCELED_RESTART",
+          provider: "DETERMINISTIC",
+          terminal: { state: "CANCELLED" },
+          finalizationEffects: 0,
+          resumedFrom: "observer-cancel-restart",
+        },
+        "DETERMINISTIC",
+      ),
+    /OBSERVER_RECONNECT_MISSING/,
   );
 });

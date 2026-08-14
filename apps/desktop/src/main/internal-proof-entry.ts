@@ -1,5 +1,6 @@
 import { app, shell, type WebContents } from "electron";
-import { writeFile } from "node:fs/promises";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import {
   createInternalDelegatedProof,
@@ -14,6 +15,78 @@ function argument(name: string): string | undefined {
   return index === -1 ? undefined : process.argv[index + 1];
 }
 
+function requiredAbsoluteArgument(name: string): string {
+  const value = argument(name);
+  if (!value || !isAbsolute(value)) {
+    throw new Error("PACKAGED_DELEGATED_WORKFLOW_OBSERVER_PATH_UNSAFE");
+  }
+  return value;
+}
+
+async function writePrivateJson(path: string, value: unknown): Promise<void> {
+  const temporary = `${path}.${crypto.randomUUID()}.tmp`;
+  await writeFile(temporary, JSON.stringify(value), {
+    mode: 0o600,
+    flag: "wx",
+  });
+  await rename(temporary, path);
+}
+
+async function waitForObserverIntent(
+  intentPath: string,
+  keyPath: string,
+  expectedCursor: number,
+  timeoutMs = 20_000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const candidate = JSON.parse(await readFile(intentPath, "utf8"));
+      if (
+        !candidate ||
+        typeof candidate !== "object" ||
+        Object.keys(candidate).sort().join(",") !==
+          "cursor,jobRevision,nonce,signature,type" ||
+        candidate.type !== "CANCEL_AUTOMATION" ||
+        candidate.cursor !== expectedCursor ||
+        candidate.jobRevision !== 1 ||
+        typeof candidate.nonce !== "string" ||
+        candidate.nonce.length !== 32 ||
+        typeof candidate.signature !== "string" ||
+        !/^[0-9a-f]{64}$/.test(candidate.signature)
+      ) {
+        throw new Error("PACKAGED_DELEGATED_WORKFLOW_OBSERVER_INTENT_INVALID");
+      }
+      const payload = JSON.stringify({
+        type: candidate.type,
+        cursor: candidate.cursor,
+        jobRevision: candidate.jobRevision,
+        nonce: candidate.nonce,
+      });
+      const expected = createHmac("sha256", await readFile(keyPath))
+        .update(payload)
+        .digest();
+      const received = Buffer.from(candidate.signature, "hex");
+      if (
+        received.length !== expected.length ||
+        !timingSafeEqual(received, expected)
+      ) {
+        throw new Error("PACKAGED_DELEGATED_WORKFLOW_OBSERVER_INTENT_INVALID");
+      }
+      return;
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === "PACKAGED_DELEGATED_WORKFLOW_OBSERVER_INTENT_INVALID"
+      ) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+  throw new Error("PACKAGED_DELEGATED_WORKFLOW_OBSERVER_INTENT_TIMEOUT");
+}
+
 async function waitForTerminal(
   workflow: Awaited<
     ReturnType<typeof createInternalDelegatedProof>
@@ -21,7 +94,17 @@ async function waitForTerminal(
   timeoutMs = 120_000,
 ) {
   const current = workflow.snapshot();
-  if (current.state === "RECEIPTED_SUCCESS") return current;
+  if (
+    [
+      "RECEIPTED_SUCCESS",
+      "HUMAN_GATE",
+      "FAILED",
+      "CANCELLED",
+      "OFFLINE",
+    ].includes(current.state)
+  ) {
+    return current;
+  }
   return new Promise<typeof current>((resolve, reject) => {
     const timeout = setTimeout(() => {
       unsubscribe();
@@ -132,8 +215,12 @@ async function run(): Promise<void> {
     ...(interruption === "crash-after-effect-before-observation"
       ? { abruptlyExitAfterFinalEffect: () => app.exit(86) }
       : {}),
-    ...(ownerCheckpoint === "owner-handback-restart"
-      ? { delayProviderAfterFirstStepMs: 3_000 }
+    ...(ownerCheckpoint === "owner-handback-restart" ||
+    ownerCheckpoint === "observer-cancel-restart"
+      ? {
+          delayProviderAfterFirstStepMs:
+            ownerCheckpoint === "observer-cancel-restart" ? 30_000 : 3_000,
+        }
       : {}),
   }).catch(async (error: unknown) => {
     await modelProviders.modelProviderAccount.close();
@@ -157,6 +244,82 @@ async function run(): Promise<void> {
       `document.querySelector('[aria-labelledby="delegated-workflow-title"] h3')?.textContent`,
       true,
     );
+    if (ownerCheckpoint === "observer-cancel-restart") {
+      const projectionPath = requiredAbsoluteArgument(
+        "--village-proof-observer-projection",
+      );
+      const intentPath = requiredAbsoluteArgument(
+        "--village-proof-observer-intent",
+      );
+      const keyPath = requiredAbsoluteArgument("--village-proof-observer-key");
+      if (
+        !(await clickVisibleButton(
+          application.trustedRenderer,
+          "Start demo setup",
+        ))
+      ) {
+        throw new Error("PACKAGED_DELEGATED_WORKFLOW_START_CONTROL_MISSING");
+      }
+      const working = await waitForWorkflowSnapshot(
+        proof.delegatedWorkflow,
+        (snapshot) =>
+          snapshot.state === "WORKING" &&
+          snapshot.logicalStep === "SELECT_ROLE",
+        "PACKAGED_DELEGATED_WORKFLOW_OBSERVER_START_TIMEOUT",
+      );
+      const before = await proof.evidence();
+      await writePrivateJson(projectionPath, {
+        cursor: before.cursor,
+        projectionLag: 0,
+        jobRevision: 1,
+        jobState: "RUNNING_AGENT",
+        workflowKind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+        workflowVersion: 1,
+        logicalStep: working.logicalStep,
+        actionPhase: working.actionPhase,
+        lastEffectActor: working.lastEffectActor,
+        controller: working.controller,
+        connection: working.connection,
+        automationFenced: false,
+        humanGate: null,
+        terminalEvidence: null,
+        cancellationAcknowledgedAt: null,
+        lastDurableUpdateAt: working.lastDurableUpdateAt,
+      });
+      await waitForObserverIntent(intentPath, keyPath, before.cursor);
+      const terminal = await proof.cancelFromObserver();
+      const after = await proof.evidence();
+      const acknowledgedAt = terminal.lastDurableUpdateAt;
+      await writePrivateJson(projectionPath, {
+        cursor: after.cursor,
+        projectionLag: 0,
+        jobRevision: 1,
+        jobState: "CANCELED",
+        workflowKind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+        workflowVersion: 1,
+        logicalStep: terminal.logicalStep,
+        actionPhase: terminal.actionPhase,
+        lastEffectActor: terminal.lastEffectActor,
+        controller: terminal.controller,
+        connection: terminal.connection,
+        automationFenced: true,
+        humanGate: null,
+        terminalEvidence: "CANCELLED",
+        cancellationAcknowledgedAt: acknowledgedAt,
+        lastDurableUpdateAt: terminal.lastDurableUpdateAt,
+      });
+      await writeFile(
+        reportPath,
+        JSON.stringify({
+          status: "OBSERVER_CANCELED",
+          provider: providerMode,
+          terminal,
+          finalizationEffects: after.finalizationEffects,
+        }),
+        { mode: 0o600 },
+      );
+      return;
+    }
     if (ownerCheckpoint === "owner-handback-restart") {
       if (
         !(await clickVisibleButton(
@@ -221,7 +384,8 @@ async function run(): Promise<void> {
     if (
       resumedFrom === "post-effect-before-receipt" ||
       resumedFrom === "crash-after-effect-before-observation" ||
-      resumedFrom === "owner-handback-restart"
+      resumedFrom === "owner-handback-restart" ||
+      resumedFrom === "observer-cancel-restart"
     ) {
       await proof.delegatedWorkflow.retry();
     } else {
@@ -240,10 +404,13 @@ async function run(): Promise<void> {
         status:
           terminal.state === "RECEIPTED_SUCCESS"
             ? "PASS"
-            : interruption === "post-effect-before-receipt" &&
-                terminal.state === "OFFLINE"
-              ? "INTERRUPTED"
-              : "STOPPED",
+            : resumedFrom === "observer-cancel-restart" &&
+                terminal.state === "CANCELLED"
+              ? "CANCELED_RESTART"
+              : interruption === "post-effect-before-receipt" &&
+                  terminal.state === "OFFLINE"
+                ? "INTERRUPTED"
+                : "STOPPED",
         provider: providerMode,
         readyLabel,
         terminal,

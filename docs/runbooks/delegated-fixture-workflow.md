@@ -15,6 +15,7 @@ pnpm verify:delegated-workflow
 pnpm verify:delegated-workflow:recovery
 pnpm verify:delegated-workflow:abrupt-recovery
 pnpm verify:delegated-workflow:owner-recovery
+pnpm verify:delegated-workflow:observer-recovery
 ```
 
 The final command launches the packaged internal application, clicks the visible `Start demo setup` control in the immutable local renderer, drives the dedicated fixture `WebContentsView`, and requires:
@@ -45,6 +46,13 @@ the local fixture fields, and selects `Return control to Village`. The first
 process must persist `OWNER` attribution, two completed effects, and a fresh
 Lease Epoch before closing. The second process must resume from that checkpoint
 and reach exactly-once terminal success.
+
+The observer-recovery command uses three separate processes: the packaged
+desktop, a canceling observer, and a reconnecting observer. A proof-only 0600
+channel carries an HMAC-bound cancel intent and an exact-key sanitized
+projection; it is not the production HTTP connector. The reconnect must advance
+past its saved cursor, observe durable `CANCELLED` evidence with automation
+fenced, and a desktop restart must remain canceled with zero finalization.
 
 The normal test suite separately injects takeover/hand-back, cancellation, desktop/provider recreation, coordinator eviction semantics, lost receipt, observer replay, Human Gates, hostile page text, and forged LinkedIn destinations. Passing those tests is deterministic integration evidence; it is not the genuine model milestone.
 

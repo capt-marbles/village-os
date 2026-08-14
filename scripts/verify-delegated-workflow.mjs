@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -100,6 +101,46 @@ export function assertPackagedDelegatedWorkflowOwnerRecovery(
     throw new Error("PACKAGED_DELEGATED_WORKFLOW_OWNER_RECOVERY_MISSING");
   }
   return { checkpoint, recovered };
+}
+
+export function assertPackagedDelegatedWorkflowObserverRecovery(
+  canceled,
+  sent,
+  reconnected,
+  restarted,
+  provider,
+) {
+  if (
+    canceled.status !== "OBSERVER_CANCELED" ||
+    canceled.provider !== provider ||
+    canceled.terminal?.state !== "CANCELLED" ||
+    canceled.finalizationEffects !== 0
+  ) {
+    throw new Error("PACKAGED_DELEGATED_WORKFLOW_OBSERVER_CANCEL_MISSING");
+  }
+  if (sent.status !== "CANCEL_SENT" || !Number.isInteger(sent.cursor)) {
+    throw new Error("PACKAGED_DELEGATED_WORKFLOW_OBSERVER_INTENT_MISSING");
+  }
+  if (
+    reconnected.status !== "RECONNECTED" ||
+    reconnected.previousCursor !== sent.cursor ||
+    !Number.isInteger(reconnected.cursor) ||
+    reconnected.cursor <= sent.cursor ||
+    reconnected.terminalEvidence !== "CANCELLED" ||
+    reconnected.automationFenced !== true
+  ) {
+    throw new Error("PACKAGED_DELEGATED_WORKFLOW_OBSERVER_RECONNECT_MISSING");
+  }
+  if (
+    restarted.status !== "CANCELED_RESTART" ||
+    restarted.provider !== provider ||
+    restarted.terminal?.state !== "CANCELLED" ||
+    restarted.finalizationEffects !== 0 ||
+    restarted.resumedFrom !== "observer-cancel-restart"
+  ) {
+    throw new Error("PACKAGED_DELEGATED_WORKFLOW_CANCELED_RESTART_MISSING");
+  }
+  return { canceled, sent, reconnected, restarted };
 }
 
 function assertPackagedDelegatedWorkflowInterruption(report, provider) {
@@ -402,6 +443,128 @@ export async function runPackagedDelegatedWorkflowOwnerRecovery({
   }
 }
 
+async function runPackagedCanceledRestart({
+  applicationPath,
+  provider,
+  profilePath,
+  timeoutMs,
+}) {
+  const temporaryDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "village-canceled-restart-"),
+  );
+  const reportPath = path.join(temporaryDirectory, "report.json");
+  try {
+    await execFileAsync(
+      path.join(applicationPath, "Contents/MacOS/Village"),
+      [
+        ...packagedDelegatedWorkflowArguments({
+          reportPath,
+          profilePath,
+          provider,
+        }),
+        "--village-proof-resume",
+        "observer-cancel-restart",
+      ],
+      { cwd: root, timeout: timeoutMs },
+    );
+    return JSON.parse(await readFile(reportPath, "utf8"));
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+}
+
+export async function runPackagedDelegatedWorkflowObserverRecovery({
+  applicationPath = defaultApplicationPath,
+  provider = "DETERMINISTIC",
+  timeoutMs = 180_000,
+} = {}) {
+  await verifyPackagedMac(applicationPath);
+  const profileRoot = await mkdtemp(
+    path.join(os.tmpdir(), "village-observer-recovery-profile-"),
+  );
+  const profilePath = path.join(profileRoot, "profile");
+  const channelPath = path.join(profileRoot, "observer-channel");
+  const projectionPath = path.join(channelPath, "projection.json");
+  const intentPath = path.join(channelPath, "intent.json");
+  const keyPath = path.join(channelPath, "key.bin");
+  const reportPath = path.join(profileRoot, "canceled-report.json");
+  const observerClient = path.join(
+    root,
+    "scripts/internal-observer-proof-client.mjs",
+  );
+  try {
+    await mkdir(profilePath, { recursive: true, mode: 0o700 });
+    await mkdir(channelPath, { recursive: true, mode: 0o700 });
+    await writeFile(keyPath, randomBytes(32), { mode: 0o600, flag: "wx" });
+    const desktop = execFileAsync(
+      path.join(applicationPath, "Contents/MacOS/Village"),
+      [
+        ...packagedDelegatedWorkflowArguments({
+          reportPath,
+          profilePath,
+          provider,
+        }),
+        "--village-proof-checkpoint",
+        "observer-cancel-restart",
+        "--village-proof-observer-projection",
+        projectionPath,
+        "--village-proof-observer-intent",
+        intentPath,
+        "--village-proof-observer-key",
+        keyPath,
+      ],
+      { cwd: root, timeout: timeoutMs },
+    );
+    const cancel = execFileAsync(
+      process.execPath,
+      [
+        observerClient,
+        "--mode",
+        "cancel",
+        "--projection",
+        projectionPath,
+        "--intent",
+        intentPath,
+        "--key",
+        keyPath,
+      ],
+      { cwd: root, timeout: timeoutMs },
+    );
+    const [, canceledIntent] = await Promise.all([desktop, cancel]);
+    const sent = JSON.parse(canceledIntent.stdout.trim());
+    const canceled = JSON.parse(await readFile(reportPath, "utf8"));
+    const reconnect = await execFileAsync(
+      process.execPath,
+      [
+        observerClient,
+        "--mode",
+        "reconnect",
+        "--projection",
+        projectionPath,
+        "--cursor",
+        String(sent.cursor),
+      ],
+      { cwd: root, timeout: timeoutMs },
+    );
+    const reconnected = JSON.parse(reconnect.stdout.trim());
+    const restarted = await runPackagedCanceledRestart({
+      applicationPath,
+      provider,
+      profilePath,
+      timeoutMs,
+    });
+    return assertPackagedDelegatedWorkflowObserverRecovery(
+      canceled,
+      sent,
+      reconnected,
+      restarted,
+      provider,
+    );
+  } finally {
+    await rm(profileRoot, { recursive: true, force: true });
+  }
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const provider = process.argv.includes("--genuine")
     ? "CHATGPT_ACCOUNT"
@@ -412,6 +575,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const recovery = process.argv.includes("--recovery");
   const abruptRecovery = process.argv.includes("--abrupt-recovery");
   const ownerRecovery = process.argv.includes("--owner-recovery");
+  const observerRecovery = process.argv.includes("--observer-recovery");
   const repeat =
     repeatIndex === -1 ? 1 : Number.parseInt(process.argv[repeatIndex + 1], 10);
   if (!Number.isInteger(repeat) || repeat < 1 || repeat > 10) {
@@ -419,7 +583,20 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   let ownedProfileRoot;
   try {
-    if (ownerRecovery) {
+    if (observerRecovery) {
+      console.log(
+        JSON.stringify(
+          await runPackagedDelegatedWorkflowObserverRecovery({
+            applicationPath:
+              applicationIndex === -1
+                ? defaultApplicationPath
+                : process.argv[applicationIndex + 1],
+            provider,
+          }),
+        ),
+      );
+      process.exitCode = 0;
+    } else if (ownerRecovery) {
       console.log(
         JSON.stringify(
           await runPackagedDelegatedWorkflowOwnerRecovery({

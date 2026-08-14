@@ -542,8 +542,13 @@ export async function createInternalDelegatedProof(options: {
       ).count,
       stopReason: coordinator.stopReason(),
       leaseEpoch: coordinator.snapshot().leaseEpoch,
+      cursor: coordinator.snapshot().cursor,
       completedEffectCount: coordinator.snapshot().completedEffects.length,
     }),
+    cancelFromObserver: async () => {
+      await coordinator.cancel();
+      return workflow.cancel();
+    },
     close: async () => {
       adapter?.detach();
     },
