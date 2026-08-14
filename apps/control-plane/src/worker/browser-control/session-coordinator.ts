@@ -1,13 +1,17 @@
 import { DurableObject } from "cloudflare:workers";
 import {
   browserControlStateSchema,
+  actionPhaseSchema,
   browserSessionIdSchema,
   deviceIdSchema,
+  effectIdSchema,
   instantSchema,
   jobIdSchema,
   principalIdSchema,
   setupActionReceiptSchema,
   setupCheckpointSchema,
+  setupLogicalStepSchema,
+  setupObjectiveSchema,
   signedCommandEnvelopeSchema,
   signedResultEnvelopeSchema,
   type BrowserAction,
@@ -85,6 +89,22 @@ const workflowCancellationSchema = z.strictObject({
   expectedJobRevision: z.number().int().positive(),
   cancellationId: z.string().regex(/^cnl_[0-9A-HJKMNP-TV-Z]{26}$/),
   now: instantSchema,
+});
+
+const ownerProgressSchema = z.strictObject({
+  principalId: principalIdSchema,
+  deviceId: deviceIdSchema,
+  jobId: jobIdSchema,
+  browserSessionId: browserSessionIdSchema,
+  objective: setupObjectiveSchema,
+  jobRevision: z.number().int().positive(),
+  logicalStep: setupLogicalStepSchema,
+  effectId: effectIdSchema,
+  actionPhase: actionPhaseSchema,
+  leaseEpoch: z.number().int().positive(),
+  cursor: z.number().int().nonnegative(),
+  actor: z.literal("OWNER"),
+  occurredAt: instantSchema,
 });
 
 type MetadataRow = {
@@ -692,6 +712,94 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
     return { ok: true as const, eventSequence: checkpoint.eventSequence };
   }
 
+  recordOwnerProgress(candidate: unknown) {
+    const parsed = ownerProgressSchema.safeParse(candidate);
+    if (!parsed.success)
+      return { ok: false as const, code: "INVALID_OWNER_PROGRESS" };
+    const input = parsed.data;
+    const metadata = this.metadata();
+    const controlRow = this.control();
+    if (!metadata || !controlRow)
+      return { ok: false as const, code: "NOT_INITIALIZED" };
+    const control = browserControlStateSchema.parse(
+      JSON.parse(controlRow.state_json),
+    );
+    if (
+      metadata.principal_id !== input.principalId ||
+      metadata.browser_session_id !== input.browserSessionId ||
+      metadata.site !== "OWNED_FIXTURE" ||
+      metadata.workflow_job_revision !== input.jobRevision ||
+      control.deviceId !== input.deviceId ||
+      control.jobId !== input.jobId ||
+      control.controller !== "USER" ||
+      !control.automationBlocked ||
+      control.leaseEpoch !== input.leaseEpoch ||
+      input.cursor !== metadata.event_sequence
+    ) {
+      return { ok: false as const, code: "OWNER_PROGRESS_IDENTITY_MISMATCH" };
+    }
+    const existingStep = this.ctx.storage.sql
+      .exec<WorkflowEffectRow>(
+        "SELECT * FROM workflow_effects WHERE logical_step = ?",
+        input.logicalStep,
+      )
+      .toArray()[0];
+    const existingEffect = this.ctx.storage.sql
+      .exec<WorkflowEffectRow>(
+        "SELECT * FROM workflow_effects WHERE effect_id = ?",
+        input.effectId,
+      )
+      .toArray()[0];
+    if (
+      (existingStep && existingStep.effect_id !== input.effectId) ||
+      (existingEffect && existingEffect.logical_step !== input.logicalStep)
+    ) {
+      return { ok: false as const, code: "LOGICAL_EFFECT_CONFLICT" };
+    }
+    if (!existingStep && !existingEffect) {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO workflow_effects
+         (logical_step, effect_id, job_revision, capability, canonical_action_id,
+          phase, receipt_id, checkpoint_id, updated_at)
+         VALUES (?, ?, ?, NULL, NULL, ?, NULL, NULL, ?)`,
+        input.logicalStep,
+        input.effectId,
+        input.jobRevision,
+        input.actionPhase,
+        input.occurredAt,
+      );
+    } else {
+      this.ctx.storage.sql.exec(
+        `UPDATE workflow_effects SET phase = ?, updated_at = ?
+         WHERE logical_step = ? AND effect_id = ?`,
+        input.actionPhase,
+        input.occurredAt,
+        input.logicalStep,
+        input.effectId,
+      );
+    }
+    const sequence = metadata.event_sequence + 1;
+    this.ctx.storage.sql.exec(
+      "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
+      sequence,
+    );
+    this.appendEventAt(
+      sequence,
+      "WORKFLOW_OWNER_PROGRESS_RECORDED",
+      {
+        jobId: input.jobId,
+        objective: input.objective,
+        jobRevision: input.jobRevision,
+        logicalStep: input.logicalStep,
+        effectId: input.effectId,
+        actionPhase: input.actionPhase,
+        actor: "OWNER",
+      },
+      input.occurredAt,
+    );
+    return { ok: true as const, eventSequence: sequence, cursor: sequence };
+  }
+
   workflowSnapshot(principalId: unknown) {
     const identity = principalIdSchema.safeParse(principalId);
     const metadata = this.metadata();
@@ -998,6 +1106,7 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
         eventSequence?: number;
         jobRevision?: number;
         replayed?: boolean;
+        acknowledgedAt?: string;
       }
     | { ok: false; code: string } {
     const modern = workflowCancellationSchema.safeParse(candidate);
@@ -1031,6 +1140,7 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
           expected_job_revision: number;
           resulting_job_revision: number;
           event_sequence: number;
+          accepted_at: string;
         }>(
           "SELECT * FROM workflow_cancellations WHERE cancellation_id = ?",
           modern.data.cancellationId,
@@ -1044,6 +1154,7 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
               replayed: true,
               eventSequence: replay.event_sequence,
               jobRevision: replay.resulting_job_revision,
+              acknowledgedAt: replay.accepted_at,
             }
           : { ok: false, code: "CANCELLATION_REPLAY_CONFLICT" };
       }
@@ -1107,6 +1218,7 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
           replayed: false,
           eventSequence: sequence,
           jobRevision: modern.data.expectedJobRevision + 1,
+          acknowledgedAt: modern.data.now,
         }
       : { ok: true };
   }

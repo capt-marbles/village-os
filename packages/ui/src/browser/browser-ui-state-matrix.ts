@@ -52,6 +52,78 @@ export interface BrowserUiSnapshot {
   lastUpdatedAt: string;
 }
 
+export type ObserverCancellationState =
+  | "READY"
+  | "SUBMITTING"
+  | "DURABLY_ACCEPTED"
+  | "PENDING_DESKTOP_SYNC"
+  | "AUTOMATION_FENCED"
+  | "ALREADY_TERMINAL"
+  | "FAILED";
+
+export interface ObserverCancellationModel {
+  label: string;
+  explanation: string;
+  disabled: boolean;
+  retry: boolean;
+}
+
+const observerCancellationCopy: Record<
+  ObserverCancellationState,
+  ObserverCancellationModel
+> = {
+  READY: {
+    label: "Cancel future automation",
+    explanation: "Stops the next automated effect after durable acceptance.",
+    disabled: false,
+    retry: false,
+  },
+  SUBMITTING: {
+    label: "Submitting cancellation…",
+    explanation: "Waiting for the coordinator to durably accept the request.",
+    disabled: true,
+    retry: false,
+  },
+  DURABLY_ACCEPTED: {
+    label: "Cancellation accepted",
+    explanation: "The coordinator recorded the cancellation durably.",
+    disabled: true,
+    retry: false,
+  },
+  PENDING_DESKTOP_SYNC: {
+    label: "Cancellation saved — desktop offline",
+    explanation:
+      "Future automation is cancelled in the coordinator and will be fenced when the paired desktop synchronizes.",
+    disabled: true,
+    retry: false,
+  },
+  AUTOMATION_FENCED: {
+    label: "Future automation cancelled",
+    explanation:
+      "The paired desktop has synchronized and automation is fenced.",
+    disabled: true,
+    retry: false,
+  },
+  ALREADY_TERMINAL: {
+    label: "Workflow already finished",
+    explanation: "No future automated effect can start for this workflow.",
+    disabled: true,
+    retry: false,
+  },
+  FAILED: {
+    label: "Retry cancellation",
+    explanation: "The coordinator did not durably accept the cancellation.",
+    disabled: false,
+    retry: true,
+  },
+};
+
+export function deriveObserverCancellationModel(
+  state: ObserverCancellationState,
+): ObserverCancellationModel {
+  return observerCancellationCopy[state];
+}
+
 export interface BrowserUiModel {
   label: string;
   explanation: string;

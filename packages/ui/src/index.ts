@@ -7,12 +7,15 @@ export { BrowserStatusCard } from "./browser/BrowserStatusCard.js";
 export {
   browserActionLabel,
   deriveBrowserUiModel,
+  deriveObserverCancellationModel,
 } from "./browser/browser-ui-state-matrix.js";
 export type {
   BrowserUiAction,
   BrowserUiModel,
   BrowserUiSnapshot,
   BrowserVerification,
+  ObserverCancellationModel,
+  ObserverCancellationState,
 } from "./browser/browser-ui-state-matrix.js";
 export {
   delegatedWorkflowActionLabel,

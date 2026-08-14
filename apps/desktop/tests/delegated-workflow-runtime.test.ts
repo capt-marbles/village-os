@@ -83,6 +83,10 @@ async function harness(
       cursor: 2,
     })),
     recordReceipt: vi.fn(async () => ({ ok: true as const, cursor: 3 })),
+    recordOwnerProgress: vi.fn(async () => ({
+      ok: true as const,
+      cursor: 3,
+    })),
     claimFreshLease: vi.fn(async () => ({
       ok: true as const,
       leaseEpoch: 2,
@@ -193,6 +197,15 @@ describe("delegated workflow runtime", () => {
       leaseEpoch: 2,
     });
     expect(valid.fixture.execute).not.toHaveBeenCalled();
+    expect(valid.coordinator.recordOwnerProgress).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor: "OWNER",
+        logicalStep: "SET_DISPLAY_NAME",
+        effectId: ids.effectId,
+        actionPhase: "ACCEPTED",
+        cursor: 1,
+      }),
+    );
 
     const invalid = await harness({
       fixture: { observe: vi.fn(async () => observation("INVALID")) },

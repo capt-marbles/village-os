@@ -7,6 +7,7 @@ import {
 import { beforeEach, describe, expect, it } from "vitest";
 import type { BrowserControlState } from "@village/contracts";
 import {
+  getObserverWorkflowProjection,
   projectSessionEvents,
   rebuildSessionProjection,
 } from "../../browser-control/projection-outbox.js";
@@ -25,6 +26,7 @@ type WorkflowCoordinator = {
   claimAgentLease(candidate: unknown): Promise<unknown>;
   acceptAuthenticatedCommand(candidate: unknown): Promise<any>;
   recordWorkflowReceipt(candidate: unknown): Promise<any>;
+  recordOwnerProgress(candidate: unknown): Promise<any>;
   workflowSnapshot(principalId: unknown): Promise<any>;
 };
 
@@ -341,6 +343,82 @@ describe("owned fixture workflow durability", () => {
       receiptId: receipt.receiptId,
       checkpointId: checkpoint.checkpointId,
     });
+    await expect(
+      env.VILLAGE_DB.prepare(
+        `SELECT actor FROM workflow_last_effect_actor
+         WHERE principal_id = ? AND browser_session_id = ?`,
+      )
+        .bind(principalId, browserSessionId)
+        .first(),
+    ).resolves.toEqual({ actor: "AGENT" });
+
+    await runInDurableObject(
+      env.BROWSER_SESSION_COORDINATOR.getByName(browserSessionId),
+      async (_instance: BrowserSessionCoordinator, state) => {
+        const ownerControl: BrowserControlState = {
+          principalId,
+          deviceId,
+          jobId,
+          browserSessionId,
+          controller: "USER",
+          connection: "ONLINE",
+          leaseEpoch: 1,
+          leaseExpiresAt: null,
+          lastAcceptedSequence: 0,
+          automationBlocked: true,
+          takeover: "NONE",
+          profile: "PRESENT",
+        };
+        state.storage.sql.exec(
+          "UPDATE control_state SET state_json = ?, holder_connection_id = NULL WHERE singleton = 1",
+          JSON.stringify(ownerControl),
+        );
+      },
+    );
+    await expect(
+      coordinator().recordOwnerProgress({
+        principalId,
+        deviceId,
+        jobId,
+        browserSessionId,
+        objective: { kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1", version: 1 },
+        jobRevision: 1,
+        logicalStep: "SELECT_ROLE",
+        effectId: checkpoint.currentEffectId,
+        actionPhase: "RECEIPTED",
+        leaseEpoch: 1,
+        cursor: 4,
+        actor: "OWNER",
+        occurredAt: "2026-08-13T18:00:06.500Z",
+      }),
+    ).resolves.toMatchObject({ ok: true, eventSequence: 5 });
+    await expect(
+      projectSessionEvents(
+        env,
+        principalId,
+        browserSessionId,
+        "2026-08-13T18:00:06.750Z",
+      ),
+    ).resolves.toMatchObject({ ok: true, projected: 1 });
+    await expect(
+      env.VILLAGE_DB.prepare(
+        `SELECT actor, logical_step AS logicalStep
+         FROM workflow_last_effect_actor
+         WHERE principal_id = ? AND browser_session_id = ?`,
+      )
+        .bind(principalId, browserSessionId)
+        .first(),
+    ).resolves.toEqual({ actor: "OWNER", logicalStep: "SELECT_ROLE" });
+    await expect(
+      getObserverWorkflowProjection(env, principalId, browserSessionId, 4),
+    ).resolves.toMatchObject({
+      ok: true,
+      projection: {
+        cursor: 5,
+        logicalStep: "SELECT_ROLE",
+        lastEffectActor: "OWNER",
+      },
+    });
     // A lost projection acknowledgement is safe: duplicate delivery converges.
     await expect(
       projectSessionEvents(
@@ -363,7 +441,7 @@ describe("owned fixture workflow durability", () => {
         browserSessionId,
         "2026-08-13T18:00:08.000Z",
       ),
-    ).resolves.toMatchObject({ ok: true, projected: 4 });
+    ).resolves.toMatchObject({ ok: true, projected: 5 });
     await expect(
       env.VILLAGE_DB.prepare(
         `SELECT COUNT(*) AS count FROM browser_session_event_projections
@@ -371,7 +449,7 @@ describe("owned fixture workflow durability", () => {
       )
         .bind(principalId, browserSessionId)
         .first<{ count: number }>(),
-    ).resolves.toEqual({ count: 4 });
+    ).resolves.toEqual({ count: 5 });
     await expect(
       coordinator().workflowSnapshot(otherPrincipalId),
     ).resolves.toEqual({ ok: false, code: "IDENTITY_MISMATCH" });

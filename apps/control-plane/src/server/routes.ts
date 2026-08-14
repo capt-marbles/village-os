@@ -16,6 +16,7 @@ import {
   createOwnedBrowserSession,
 } from "../worker/handlers/browser-control.js";
 import {
+  getObserverWorkflowProjection,
   projectSessionEvents,
   rebuildSessionProjection,
 } from "../worker/browser-control/projection-outbox.js";
@@ -351,7 +352,7 @@ export async function routeRequest(
     }
 
     const sessionOperation = url.pathname.match(
-      /^\/api\/browser-sessions\/([^/]+)\/(connect|commands|results|events|stream|cancel|project|rebuild-projection)$/,
+      /^\/api\/browser-sessions\/([^/]+)\/(connect|commands|results|events|stream|observer|cancel|project|rebuild-projection)$/,
     );
     if (sessionOperation) {
       const sessionId = browserSessionIdSchema.safeParse(sessionOperation[1]);
@@ -432,6 +433,16 @@ export async function routeRequest(
       const coordinator = environment.BROWSER_SESSION_COORDINATOR.getByName(
         sessionId.data,
       );
+      if (request.method === "GET" && operation === "observer") {
+        const cursor = Number(url.searchParams.get("cursor") ?? "0");
+        const result = await getObserverWorkflowProjection(
+          environment,
+          auth.principalId,
+          sessionId.data,
+          cursor,
+        );
+        return json(request, environment, result, result.ok ? 200 : 409);
+      }
       if (request.method === "GET" && operation === "stream") {
         const origin = authorizeNonBrowserClient(request, environment);
         if (!origin.ok) return json(request, environment, origin, 403);

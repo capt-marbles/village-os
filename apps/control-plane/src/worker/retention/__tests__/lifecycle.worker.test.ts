@@ -133,6 +133,7 @@ describe("principal data lifecycle", () => {
         CHECKPOINTS: expect.objectContaining({ scope: "PRINCIPAL" }),
         RECEIPTS: expect.objectContaining({ scope: "PRINCIPAL" }),
         WORKFLOW_EFFECTS: expect.objectContaining({ scope: "PRINCIPAL" }),
+        WORKFLOW_ACTORS: expect.objectContaining({ scope: "PRINCIPAL" }),
         CANCELLATIONS: expect.objectContaining({ scope: "PRINCIPAL" }),
       }),
     );

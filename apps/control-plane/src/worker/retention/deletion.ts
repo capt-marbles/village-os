@@ -24,6 +24,7 @@ const deletionCountQueries = [
   "SELECT COUNT(*) AS count FROM authenticated_quota_usage WHERE principal_id = ?",
   "SELECT COUNT(*) AS count FROM authenticated_principal_quota_usage WHERE principal_id = ?",
   "SELECT COUNT(*) AS count FROM workflow_effect_projections WHERE principal_id = ?",
+  "SELECT COUNT(*) AS count FROM workflow_last_effect_actor WHERE principal_id = ?",
   "SELECT COUNT(*) AS count FROM workflow_cancellations WHERE principal_id = ?",
 ] as const;
 
@@ -34,6 +35,7 @@ export async function exportPrincipalRecords(
   const principal = principalIdSchema.parse(principalCandidate);
   const [
     projections,
+    workflowActors,
     events,
     checkpoints,
     receipts,
@@ -46,6 +48,17 @@ export async function exportPrincipalRecords(
                 occurred_at AS occurredAt
          FROM browser_session_event_projections
          WHERE principal_id = ? ORDER BY browser_session_id, sequence`,
+      )
+      .bind(principal)
+      .all(),
+    db
+      .prepare(
+        `SELECT browser_session_id AS browserSessionId, job_id AS jobId,
+                workflow_kind AS workflowKind, workflow_version AS workflowVersion,
+                logical_step AS logicalStep, actor, event_sequence AS eventSequence,
+                occurred_at AS occurredAt
+         FROM workflow_last_effect_actor WHERE principal_id = ?
+         ORDER BY browser_session_id`,
       )
       .bind(principal)
       .all(),
@@ -106,6 +119,7 @@ export async function exportPrincipalRecords(
     checkpoints: checkpoints.results,
     receipts: receipts.results,
     workflowEffects: workflowEffects.results,
+    workflowActors: workflowActors.results,
     cancellations: cancellations.results,
   };
 }

@@ -4,6 +4,7 @@ export type CloudRecordClass =
   | "CHECKPOINTS"
   | "RECEIPTS"
   | "WORKFLOW_EFFECTS"
+  | "WORKFLOW_ACTORS"
   | "CANCELLATIONS";
 
 export type RecordRetentionPolicy = {
@@ -35,6 +36,7 @@ export const recordRetentionPolicies: Readonly<
   CHECKPOINTS: defaultRecordPolicy,
   RECEIPTS: defaultRecordPolicy,
   WORKFLOW_EFFECTS: defaultRecordPolicy,
+  WORKFLOW_ACTORS: defaultRecordPolicy,
   CANCELLATIONS: defaultRecordPolicy,
 };
 
@@ -59,6 +61,15 @@ export async function executeRetentionBatch(
       AND jobs.updated_at < ?
   )`;
   const statements = [
+    db
+      .prepare(
+        `DELETE FROM workflow_last_effect_actor WHERE rowid IN (
+           SELECT target.rowid FROM workflow_last_effect_actor AS target
+           WHERE target.occurred_at < ? AND ${terminalJobs}
+           ORDER BY target.occurred_at LIMIT ?
+         )`,
+      )
+      .bind(cutoff, cutoff, batchSize),
     db
       .prepare(
         `DELETE FROM workflow_cancellations WHERE rowid IN (

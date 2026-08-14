@@ -253,6 +253,55 @@ describe("authenticated pairing routes", () => {
       ok: false,
       code: "STALE_JOB_REVISION",
     });
+
+    const projected = await SELF.fetch(
+      new Request(
+        `https://village.test/api/browser-sessions/${browserSessionId}/project`,
+        { method: "POST", headers: ownerHeaders },
+      ),
+    );
+    expect(projected.status).toBe(200);
+    const observed = await SELF.fetch(
+      new Request(
+        `https://village.test/api/browser-sessions/${browserSessionId}/observer?cursor=0`,
+        { headers: ownerHeaders },
+      ),
+    );
+    expect(observed.status).toBe(200);
+    const observerBody = await observed.json<{
+      projection: Record<string, unknown>;
+    }>();
+    expect(observerBody.projection).toMatchObject({
+      workflowKind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+      workflowVersion: 1,
+      jobState: "CANCELED",
+      terminalEvidence: "CANCELLED",
+      automationFenced: true,
+      cancellationAcknowledgedAt: expect.any(String),
+    });
+    expect(Object.keys(observerBody.projection).sort()).toEqual(
+      [
+        "actionPhase",
+        "automationFenced",
+        "cancellationAcknowledgedAt",
+        "connection",
+        "controller",
+        "cursor",
+        "humanGate",
+        "jobRevision",
+        "jobState",
+        "lastDurableUpdateAt",
+        "lastEffectActor",
+        "logicalStep",
+        "projectionLag",
+        "terminalEvidence",
+        "workflowKind",
+        "workflowVersion",
+      ].sort(),
+    );
+    expect(JSON.stringify(observerBody)).not.toMatch(
+      /pageText|rawUrl|selector|cookie|screenshot|profile|<script/i,
+    );
   });
 
   it("binds confirmation and revocation to the authenticated owner", async () => {

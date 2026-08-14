@@ -1,22 +1,33 @@
 import {
   BrowserStatusCard,
-  browserActionLabel,
   deriveBrowserUiModel,
+  deriveObserverCancellationModel,
   type BrowserUiAction,
-  type BrowserUiSnapshot,
+  type ObserverCancellationState,
 } from "@village/ui";
+import type { ObserverWorkflowSnapshot } from "./observer-client.js";
 
 export function ObserverBrowserCard({
   snapshot,
   onIntent,
-  intentPending = false,
+  cancellationState = "READY",
 }: {
-  snapshot: BrowserUiSnapshot;
+  snapshot: ObserverWorkflowSnapshot;
   onIntent?: (intent: Extract<BrowserUiAction, "CANCEL_AUTOMATION">) => void;
-  intentPending?: boolean;
+  cancellationState?: ObserverCancellationState;
 }) {
   const observerSnapshot = { ...snapshot, surface: "OBSERVER" } as const;
   const model = deriveBrowserUiModel(observerSnapshot);
+  const cancellation = deriveObserverCancellationModel(
+    snapshot.terminalEvidence && snapshot.terminalEvidence !== "CANCELLED"
+      ? "ALREADY_TERMINAL"
+      : snapshot.terminalEvidence === "CANCELLED" &&
+          snapshot.connection === "OFFLINE"
+        ? "PENDING_DESKTOP_SYNC"
+        : snapshot.terminalEvidence === "CANCELLED" && snapshot.automationFenced
+          ? "AUTOMATION_FENCED"
+          : cancellationState,
+  );
   return (
     <section className="observer-card" aria-label="Paired desktop browser">
       <BrowserStatusCard model={model} />
@@ -28,6 +39,30 @@ export function ObserverBrowserCard({
           browser pixels, cookies, page text, or remote control.
         </p>
         <dl className="observer-card__facts">
+          <div>
+            <dt>Workflow</dt>
+            <dd>
+              {snapshot.workflowKind} v{snapshot.workflowVersion}
+            </dd>
+          </div>
+          <div>
+            <dt>Current step</dt>
+            <dd>
+              {snapshot.logicalStep?.replaceAll("_", " ").toLowerCase() ??
+                "Not started"}
+            </dd>
+          </div>
+          <div>
+            <dt>Action phase</dt>
+            <dd>
+              {snapshot.actionPhase?.replaceAll("_", " ").toLowerCase() ??
+                "None"}
+            </dd>
+          </div>
+          <div>
+            <dt>Last effect</dt>
+            <dd>{snapshot.lastEffectActor ?? "None"}</dd>
+          </div>
           <div>
             <dt>Controller</dt>
             <dd>{snapshot.controller.toLowerCase()}</dd>
@@ -45,12 +80,21 @@ export function ObserverBrowserCard({
           <button
             type="button"
             className="button-secondary"
-            disabled={!onIntent || intentPending}
+            disabled={!onIntent || cancellation.disabled}
             onClick={() => onIntent?.("CANCEL_AUTOMATION")}
           >
-            {browserActionLabel.CANCEL_AUTOMATION}
+            {cancellation.label}
           </button>
         </div>
+        <p role="status">{cancellation.explanation}</p>
+        {snapshot.cancellationAcknowledgedAt ? (
+          <p>
+            Durably acknowledged:{" "}
+            <time dateTime={snapshot.cancellationAcknowledgedAt}>
+              {snapshot.cancellationAcknowledgedAt}
+            </time>
+          </p>
+        ) : null}
       </div>
     </section>
   );

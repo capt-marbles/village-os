@@ -75,6 +75,14 @@ export interface AuthenticatedWorkflowCoordinator {
     receipt: Record<string, unknown>;
     checkpoint: Record<string, unknown>;
   }): Promise<{ ok: true; cursor: number } | { ok: false; code: string }>;
+  recordOwnerProgress?(
+    input: WorkflowRuntimeBinding & {
+      cursor: number;
+      actor: "OWNER";
+      actionPhase: CoordinatorSnapshot["actionPhase"];
+      occurredAt: string;
+    },
+  ): Promise<{ ok: true; cursor: number } | { ok: false; code: string }>;
   claimFreshLease(input: {
     principalId: string;
     deviceId: string;
@@ -425,6 +433,22 @@ export class DelegatedWorkflowController {
     if (ownerFieldIsInvalid(observed.observation)) {
       return { status: "WAITING_FOR_USER", reason: "INVALID_OWNER_EDIT" };
     }
+    let ownerProgress;
+    try {
+      ownerProgress = await this.options.coordinator.recordOwnerProgress?.({
+        ...this.binding,
+        cursor: this.cursor,
+        actor: "OWNER",
+        actionPhase: synchronized.snapshot.actionPhase,
+        occurredAt: new Date(this.now()).toISOString(),
+      });
+    } catch {
+      return { status: "FENCED", reason: "COORDINATOR_UNAVAILABLE" };
+    }
+    if (!ownerProgress?.ok || ownerProgress.cursor <= this.cursor) {
+      return { status: "FENCED", reason: "COORDINATOR_UNAVAILABLE" };
+    }
+    this.cursor = ownerProgress.cursor;
     let lease;
     try {
       lease = await this.options.coordinator.claimFreshLease({
