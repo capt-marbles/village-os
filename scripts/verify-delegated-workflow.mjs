@@ -77,6 +77,31 @@ export function assertPackagedDelegatedWorkflowAbruptRecovery(
   return { interruption, recovered };
 }
 
+export function assertPackagedDelegatedWorkflowOwnerRecovery(
+  checkpoint,
+  recovered,
+  provider,
+) {
+  if (
+    checkpoint.status !== "OWNER_CHECKPOINT" ||
+    checkpoint.provider !== provider ||
+    checkpoint.ownerControlVisible !== true ||
+    checkpoint.returnControlVisible !== true ||
+    checkpoint.lastEffectActor !== "OWNER" ||
+    checkpoint.logicalStep !== "SET_PREFERRED_FOCUS" ||
+    !Number.isInteger(checkpoint.leaseEpoch) ||
+    checkpoint.leaseEpoch < 3 ||
+    checkpoint.completedEffectCount !== 2
+  ) {
+    throw new Error("PACKAGED_DELEGATED_WORKFLOW_OWNER_CHECKPOINT_MISSING");
+  }
+  assertPackagedDelegatedWorkflowRun(recovered, provider);
+  if (recovered.resumedFrom !== "owner-handback-restart") {
+    throw new Error("PACKAGED_DELEGATED_WORKFLOW_OWNER_RECOVERY_MISSING");
+  }
+  return { checkpoint, recovered };
+}
+
 function assertPackagedDelegatedWorkflowInterruption(report, provider) {
   if (
     report.status !== "INTERRUPTED" ||
@@ -311,6 +336,72 @@ export async function runPackagedDelegatedWorkflowAbruptRecovery({
   }
 }
 
+async function runPackagedOwnerCheckpoint({
+  applicationPath,
+  provider,
+  profilePath,
+  timeoutMs,
+}) {
+  await verifyPackagedMac(applicationPath);
+  const temporaryDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "village-owner-checkpoint-"),
+  );
+  const reportPath = path.join(temporaryDirectory, "report.json");
+  const executable = path.join(applicationPath, "Contents/MacOS/Village");
+  try {
+    await mkdir(profilePath, { recursive: true, mode: 0o700 });
+    await execFileAsync(
+      executable,
+      [
+        ...packagedDelegatedWorkflowArguments({
+          reportPath,
+          profilePath,
+          provider,
+        }),
+        "--village-proof-checkpoint",
+        "owner-handback-restart",
+      ],
+      { cwd: root, timeout: timeoutMs },
+    );
+    return JSON.parse(await readFile(reportPath, "utf8"));
+  } finally {
+    await rm(temporaryDirectory, { recursive: true, force: true });
+  }
+}
+
+export async function runPackagedDelegatedWorkflowOwnerRecovery({
+  applicationPath = defaultApplicationPath,
+  provider = "DETERMINISTIC",
+  timeoutMs = 180_000,
+} = {}) {
+  const profileRoot = await mkdtemp(
+    path.join(os.tmpdir(), "village-owner-recovery-profile-"),
+  );
+  const profilePath = path.join(profileRoot, "profile");
+  try {
+    const checkpoint = await runPackagedOwnerCheckpoint({
+      applicationPath,
+      provider,
+      profilePath,
+      timeoutMs,
+    });
+    const recovered = await runPackagedDelegatedWorkflow({
+      applicationPath,
+      provider,
+      profilePath,
+      resumedFrom: "owner-handback-restart",
+      timeoutMs,
+    });
+    return assertPackagedDelegatedWorkflowOwnerRecovery(
+      checkpoint,
+      recovered,
+      provider,
+    );
+  } finally {
+    await rm(profileRoot, { recursive: true, force: true });
+  }
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const provider = process.argv.includes("--genuine")
     ? "CHATGPT_ACCOUNT"
@@ -320,6 +411,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const repeatIndex = process.argv.indexOf("--repeat");
   const recovery = process.argv.includes("--recovery");
   const abruptRecovery = process.argv.includes("--abrupt-recovery");
+  const ownerRecovery = process.argv.includes("--owner-recovery");
   const repeat =
     repeatIndex === -1 ? 1 : Number.parseInt(process.argv[repeatIndex + 1], 10);
   if (!Number.isInteger(repeat) || repeat < 1 || repeat > 10) {
@@ -327,7 +419,20 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   let ownedProfileRoot;
   try {
-    if (abruptRecovery) {
+    if (ownerRecovery) {
+      console.log(
+        JSON.stringify(
+          await runPackagedDelegatedWorkflowOwnerRecovery({
+            applicationPath:
+              applicationIndex === -1
+                ? defaultApplicationPath
+                : process.argv[applicationIndex + 1],
+            provider,
+          }),
+        ),
+      );
+      process.exitCode = 0;
+    } else if (abruptRecovery) {
       console.log(
         JSON.stringify(
           await runPackagedDelegatedWorkflowAbruptRecovery({

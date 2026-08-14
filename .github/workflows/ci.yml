@@ -50,3 +50,4 @@ jobs:
       - run: pnpm verify:delegated-workflow
       - run: pnpm verify:delegated-workflow:recovery
       - run: pnpm verify:delegated-workflow:abrupt-recovery
+      - run: pnpm verify:delegated-workflow:owner-recovery

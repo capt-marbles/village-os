@@ -14,6 +14,7 @@ pnpm --filter @village/desktop package:mac:e2e
 pnpm verify:delegated-workflow
 pnpm verify:delegated-workflow:recovery
 pnpm verify:delegated-workflow:abrupt-recovery
+pnpm verify:delegated-workflow:owner-recovery
 ```
 
 The final command launches the packaged internal application, clicks the visible `Start demo setup` control in the immutable local renderer, drives the dedicated fixture `WebContentsView`, and requires:
@@ -37,6 +38,13 @@ code 86 after the fixture confirms finalization; the local journal must still
 end at `DISPATCHED`. A second packaged process then reconciles from the live
 fixture predicate and the persisted outstanding action. Success requires one
 finalization and a terminal `RECEIPTED_SUCCESS` checkpoint.
+
+The owner-recovery command drives the visible delegated-workflow controls. It
+waits until the first agent effect is receipted, selects `Take control`, edits
+the local fixture fields, and selects `Return control to Village`. The first
+process must persist `OWNER` attribution, two completed effects, and a fresh
+Lease Epoch before closing. The second process must resume from that checkpoint
+and reach exactly-once terminal success.
 
 The normal test suite separately injects takeover/hand-back, cancellation, desktop/provider recreation, coordinator eviction semantics, lost receipt, observer replay, Human Gates, hostile page text, and forged LinkedIn destinations. Passing those tests is deterministic integration evidence; it is not the genuine model milestone.
 

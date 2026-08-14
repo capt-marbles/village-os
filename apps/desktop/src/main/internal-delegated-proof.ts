@@ -406,6 +406,7 @@ export async function createInternalDelegatedProof(options: {
   variantId?: string;
   interruptAfterEffectBeforeReceipt?: boolean;
   abruptlyExitAfterFinalEffect?: () => void;
+  delayProviderAfterFirstStepMs?: number;
 }) {
   const fixtureRoot = join(
     process.resourcesPath,
@@ -476,15 +477,25 @@ export async function createInternalDelegatedProof(options: {
     provider: provider
       ? async (context: SetupModelProviderContext) =>
           provider.nextSetupAction(context, { timeoutMs: 30_000 })
-      : async (context: SetupModelProviderContext) => ({
-          status: "action" as const,
-          jobId: context.jobId,
-          jobRevision: context.jobRevision,
-          logicalStep: context.logicalStep,
-          effectId: context.effectId,
-          leaseEpoch: context.leaseEpoch,
-          command: context.allowedActions[0]!,
-        }),
+      : async (context: SetupModelProviderContext) => {
+          if (
+            context.logicalStep !== "SET_DISPLAY_NAME" &&
+            options.delayProviderAfterFirstStepMs
+          ) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, options.delayProviderAfterFirstStepMs),
+            );
+          }
+          return {
+            status: "action" as const,
+            jobId: context.jobId,
+            jobRevision: context.jobRevision,
+            logicalStep: context.logicalStep,
+            effectId: context.effectId,
+            leaseEpoch: context.leaseEpoch,
+            command: context.allowedActions[0]!,
+          };
+        },
     createActionId: () => createInternalProofId("act"),
     createReceiptId: () => createInternalProofId("rcp"),
     createCheckpointId: () => createInternalProofId("chk"),
@@ -530,6 +541,8 @@ export async function createInternalDelegatedProof(options: {
         })
       ).count,
       stopReason: coordinator.stopReason(),
+      leaseEpoch: coordinator.snapshot().leaseEpoch,
+      completedEffectCount: coordinator.snapshot().completedEffects.length,
     }),
     close: async () => {
       adapter?.detach();

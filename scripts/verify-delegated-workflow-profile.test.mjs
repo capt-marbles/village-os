@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assertPackagedDelegatedWorkflowAbruptRecovery,
+  assertPackagedDelegatedWorkflowOwnerRecovery,
   assertPackagedDelegatedWorkflowRecovery,
   packagedDelegatedWorkflowArguments,
   packagedDelegatedWorkflowRecoveryArguments,
@@ -148,5 +149,58 @@ test("abrupt recovery requires a dispatched-only final action before restart", (
         "DETERMINISTIC",
       ),
     /ABRUPT_INTERRUPTION_MISSING/,
+  );
+});
+
+test("owner hand-back recovery requires attribution and a fresh lease", () => {
+  assert.doesNotThrow(() =>
+    assertPackagedDelegatedWorkflowOwnerRecovery(
+      {
+        status: "OWNER_CHECKPOINT",
+        provider: "DETERMINISTIC",
+        ownerControlVisible: true,
+        returnControlVisible: true,
+        lastEffectActor: "OWNER",
+        logicalStep: "SET_PREFERRED_FOCUS",
+        leaseEpoch: 3,
+        completedEffectCount: 2,
+      },
+      {
+        status: "PASS",
+        provider: "DETERMINISTIC",
+        readyLabel: "Ready for delegated setup",
+        terminal: { state: "RECEIPTED_SUCCESS" },
+        finalizationEffects: 1,
+        fixtureSurfaceVisible: true,
+        resumedFrom: "owner-handback-restart",
+      },
+      "DETERMINISTIC",
+    ),
+  );
+  assert.throws(
+    () =>
+      assertPackagedDelegatedWorkflowOwnerRecovery(
+        {
+          status: "OWNER_CHECKPOINT",
+          provider: "DETERMINISTIC",
+          ownerControlVisible: true,
+          returnControlVisible: true,
+          lastEffectActor: "AGENT",
+          logicalStep: "SET_PREFERRED_FOCUS",
+          leaseEpoch: 3,
+          completedEffectCount: 2,
+        },
+        {
+          status: "PASS",
+          provider: "DETERMINISTIC",
+          readyLabel: "Ready for delegated setup",
+          terminal: { state: "RECEIPTED_SUCCESS" },
+          finalizationEffects: 1,
+          fixtureSurfaceVisible: true,
+          resumedFrom: "owner-handback-restart",
+        },
+        "DETERMINISTIC",
+      ),
+    /OWNER_CHECKPOINT_MISSING/,
   );
 });

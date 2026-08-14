@@ -1,4 +1,4 @@
-import { app, shell } from "electron";
+import { app, shell, type WebContents } from "electron";
 import { writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import {
@@ -43,6 +43,63 @@ async function waitForTerminal(
   });
 }
 
+async function waitForWorkflowSnapshot(
+  workflow: Awaited<
+    ReturnType<typeof createInternalDelegatedProof>
+  >["delegatedWorkflow"],
+  predicate: (snapshot: ReturnType<typeof workflow.snapshot>) => boolean,
+  timeoutCode: string,
+  timeoutMs = 10_000,
+) {
+  const current = workflow.snapshot();
+  if (predicate(current)) return current;
+  return new Promise<typeof current>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      unsubscribe();
+      reject(
+        new Error(
+          `${timeoutCode}_${JSON.stringify({
+            state: workflow.snapshot().state,
+            logicalStep: workflow.snapshot().logicalStep,
+            controller: workflow.snapshot().controller,
+            actionPhase: workflow.snapshot().actionPhase,
+            lastEffectActor: workflow.snapshot().lastEffectActor,
+          })}`,
+        ),
+      );
+    }, timeoutMs);
+    const unsubscribe = workflow.subscribe((snapshot) => {
+      if (!predicate(snapshot)) return;
+      clearTimeout(timeout);
+      unsubscribe();
+      resolve(snapshot);
+    });
+  });
+}
+
+async function clickVisibleButton(
+  renderer: WebContents,
+  label: string,
+  timeoutMs = 10_000,
+): Promise<boolean> {
+  return renderer.executeJavaScript(
+    `(async () => {
+      const label = ${JSON.stringify(label)};
+      const deadline = Date.now() + ${timeoutMs};
+      while (Date.now() < deadline) {
+        const root = document.querySelector('[aria-labelledby="delegated-workflow-title"]');
+        const button = Array.from(root?.querySelectorAll('button') ?? []).find(
+          (candidate) => candidate.textContent === label && !candidate.disabled
+        );
+        if (button) { button.click(); return true; }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      return false;
+    })()`,
+    true,
+  );
+}
+
 async function run(): Promise<void> {
   const proofProfilePath = argument("--village-proof-profile");
   if (proofProfilePath) {
@@ -59,6 +116,7 @@ async function run(): Promise<void> {
   const variantId = argument("--village-proof-variant");
   const interruption = argument("--village-proof-interrupt");
   const resumedFrom = argument("--village-proof-resume");
+  const ownerCheckpoint = argument("--village-proof-checkpoint");
   const modelProviders = createRuntimeModelProviderComposition((url) =>
     shell.openExternal(url),
   );
@@ -73,6 +131,9 @@ async function run(): Promise<void> {
       interruption === "post-effect-before-receipt",
     ...(interruption === "crash-after-effect-before-observation"
       ? { abruptlyExitAfterFinalEffect: () => app.exit(86) }
+      : {}),
+    ...(ownerCheckpoint === "owner-handback-restart"
+      ? { delayProviderAfterFirstStepMs: 3_000 }
       : {}),
   }).catch(async (error: unknown) => {
     await modelProviders.modelProviderAccount.close();
@@ -96,9 +157,71 @@ async function run(): Promise<void> {
       `document.querySelector('[aria-labelledby="delegated-workflow-title"] h3')?.textContent`,
       true,
     );
+    if (ownerCheckpoint === "owner-handback-restart") {
+      if (
+        !(await clickVisibleButton(
+          application.trustedRenderer,
+          "Start demo setup",
+        ))
+      ) {
+        throw new Error("PACKAGED_DELEGATED_WORKFLOW_START_CONTROL_MISSING");
+      }
+      if (
+        !(await clickVisibleButton(application.trustedRenderer, "Take control"))
+      ) {
+        throw new Error("PACKAGED_DELEGATED_WORKFLOW_TAKEOVER_CONTROL_MISSING");
+      }
+      await waitForWorkflowSnapshot(
+        proof.delegatedWorkflow,
+        (snapshot) => snapshot.state === "OWNER_CONTROL",
+        "PACKAGED_DELEGATED_WORKFLOW_OWNER_CONTROL_TIMEOUT",
+      );
+      const ownerControlVisible =
+        await application.trustedRenderer.executeJavaScript(
+          `document.querySelector('[aria-labelledby="delegated-workflow-title"] h3')?.textContent === 'You have control'`,
+          true,
+        );
+      const fixtureRenderer = application.fixtureBrowserHost?.view.webContents;
+      if (!fixtureRenderer) {
+        throw new Error("PACKAGED_DELEGATED_WORKFLOW_FIXTURE_SURFACE_MISSING");
+      }
+      await fixtureRenderer.executeJavaScript(
+        `document.querySelector('[data-field="ROLE"]').value = 'BUILDER';
+         document.querySelector('[data-field="PREFERRED_FOCUS"]').value = 'RELIABILITY'`,
+        true,
+      );
+      const returnControlVisible = await clickVisibleButton(
+        application.trustedRenderer,
+        "Return control to Village",
+      );
+      const checkpoint = await waitForWorkflowSnapshot(
+        proof.delegatedWorkflow,
+        (snapshot) =>
+          snapshot.lastEffectActor === "OWNER" &&
+          snapshot.logicalStep === "SET_PREFERRED_FOCUS",
+        "PACKAGED_DELEGATED_WORKFLOW_HAND_BACK_TIMEOUT",
+      );
+      const evidence = await proof.evidence();
+      await writeFile(
+        reportPath,
+        JSON.stringify({
+          status: "OWNER_CHECKPOINT",
+          provider: providerMode,
+          ownerControlVisible,
+          returnControlVisible,
+          lastEffectActor: checkpoint.lastEffectActor,
+          logicalStep: checkpoint.logicalStep,
+          leaseEpoch: evidence.leaseEpoch,
+          completedEffectCount: evidence.completedEffectCount,
+        }),
+        { mode: 0o600 },
+      );
+      return;
+    }
     if (
       resumedFrom === "post-effect-before-receipt" ||
-      resumedFrom === "crash-after-effect-before-observation"
+      resumedFrom === "crash-after-effect-before-observation" ||
+      resumedFrom === "owner-handback-restart"
     ) {
       await proof.delegatedWorkflow.retry();
     } else {
