@@ -270,6 +270,11 @@ describe("portable trust-boundary schemas", () => {
     ]) {
       expect(validateSetupModelProviderResult(context, stale)).toEqual({
         status: "waiting",
+        jobId: context.jobId,
+        jobRevision: context.jobRevision,
+        logicalStep: context.logicalStep,
+        effectId: context.effectId,
+        leaseEpoch: context.leaseEpoch,
         reason: "STALE_PROVIDER_RESULT",
       });
     }

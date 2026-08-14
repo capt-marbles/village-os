@@ -98,6 +98,7 @@ export const setupModelProviderResultSchema = z.discriminatedUnion("status", [
       "SITE_POLICY_DENIED",
       "TURN_BUDGET_EXHAUSTED",
       "TIME_BUDGET_EXHAUSTED",
+      "STALE_PROVIDER_RESULT",
     ]),
   }),
 ]);
@@ -107,10 +108,7 @@ export function validateSetupModelProviderResult(
   candidate: unknown,
 ):
   | z.infer<typeof setupModelProviderResultSchema>
-  | {
-      status: "waiting";
-      reason: "MALFORMED_PROVIDER_OUTPUT" | "STALE_PROVIDER_RESULT";
-    } {
+  | { status: "waiting"; reason: "MALFORMED_PROVIDER_OUTPUT" } {
   const parsedContext =
     setupModelProviderContextSchema.safeParse(contextCandidate);
   if (!parsedContext.success) {
@@ -129,7 +127,15 @@ export function validateSetupModelProviderResult(
     result.effectId !== context.effectId ||
     result.leaseEpoch !== context.leaseEpoch
   ) {
-    return { status: "waiting", reason: "STALE_PROVIDER_RESULT" };
+    return setupModelProviderResultSchema.parse({
+      status: "waiting",
+      jobId: context.jobId,
+      jobRevision: context.jobRevision,
+      logicalStep: context.logicalStep,
+      effectId: context.effectId,
+      leaseEpoch: context.leaseEpoch,
+      reason: "STALE_PROVIDER_RESULT",
+    });
   }
   if (
     result.status === "action" &&
@@ -232,6 +238,12 @@ export const modelProviderAccountSnapshotSchema = z.discriminatedUnion(
 );
 
 export type SanitizedModelContext = z.infer<typeof sanitizedModelContextSchema>;
+export type SetupModelProviderContext = z.infer<
+  typeof setupModelProviderContextSchema
+>;
+export type SetupModelProviderResult = z.infer<
+  typeof setupModelProviderResultSchema
+>;
 export type ModelProviderResult = z.infer<typeof modelProviderResultSchema>;
 export type ModelProviderAccountSnapshot = z.infer<
   typeof modelProviderAccountSnapshotSchema
