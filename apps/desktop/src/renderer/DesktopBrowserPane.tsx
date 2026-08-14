@@ -3,6 +3,9 @@ import {
   type BrowserDiagnosticEntry,
   type BrowserUiAction,
   type BrowserUiSnapshot,
+  type DelegatedWorkflowAction,
+  type DelegatedWorkflowSnapshot,
+  type DelegatedWorkflowTask,
 } from "@village/ui";
 import { useEffect, useState } from "react";
 import {
@@ -13,6 +16,16 @@ import {
   PersonalAgentTaskOnboarding,
   type PersonalAgentTaskBridge,
 } from "./PersonalAgentTaskCard.js";
+import {
+  InternalDelegatedWorkflowPanel,
+  type DelegatedWorkflowBridge,
+} from "./DelegatedWorkflowCard.js";
+
+declare const __VILLAGE_INTERNAL_BUILD__: boolean;
+const internalBuild =
+  typeof __VILLAGE_INTERNAL_BUILD__ === "undefined"
+    ? true
+    : __VILLAGE_INTERNAL_BUILD__;
 
 export interface VillageDesktopBridge
   extends ModelProviderAccountBridge, PersonalAgentTaskBridge {
@@ -37,6 +50,16 @@ export interface VillageDesktopBridge
     "STEP_UP_REQUIRED" | "DECLINED" | "COMPLETE" | "PARTIAL_FAILURE"
   >;
   requestObserverIntent(intent: "CANCEL_FUTURE_AUTOMATION"): Promise<void>;
+  getDelegatedWorkflowState?(): Promise<DelegatedWorkflowSnapshot>;
+  subscribeDelegatedWorkflowState?(
+    listener: (snapshot: DelegatedWorkflowSnapshot) => void,
+  ): () => void;
+  runDelegatedWorkflowAction?(
+    action: DelegatedWorkflowAction,
+  ): Promise<DelegatedWorkflowSnapshot>;
+  selectDesktopTask?(
+    task: DelegatedWorkflowTask,
+  ): Promise<DelegatedWorkflowTask>;
 }
 
 export async function dispatchDesktopBrowserAction(
@@ -183,6 +206,12 @@ export function DesktopBrowserPane({
       />
       {activeBridge ? (
         <>
+          {internalBuild && activeBridge.getDelegatedWorkflowState ? (
+            <InternalDelegatedWorkflowPanel
+              bridge={activeBridge as DelegatedWorkflowBridge}
+              onError={setActionError}
+            />
+          ) : null}
           <ModelProviderAccountOnboarding bridge={activeBridge} />
           <PersonalAgentTaskOnboarding bridge={activeBridge} />
         </>

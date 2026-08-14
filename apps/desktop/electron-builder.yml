@@ -13,6 +13,9 @@ electronFuses:
   grantFileProtocolExtraPrivileges: false
 files:
   - dist/**
+  - "!dist/main/browser-host-manager*"
+  - "!dist/main/desktop-delegated-workflow*"
+  - "!dist/main/fixture-session-handler*"
   - package.json
 protocols:
   - name: Village Pairing

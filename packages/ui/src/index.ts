@@ -14,3 +14,15 @@ export type {
   BrowserUiSnapshot,
   BrowserVerification,
 } from "./browser/browser-ui-state-matrix.js";
+export {
+  delegatedWorkflowActionLabel,
+  delegatedWorkflowStates,
+  deriveDelegatedWorkflowModel,
+} from "./browser/delegated-workflow-state-matrix.js";
+export type {
+  DelegatedWorkflowAction,
+  DelegatedWorkflowModel,
+  DelegatedWorkflowSnapshot,
+  DelegatedWorkflowState,
+  DelegatedWorkflowTask,
+} from "./browser/delegated-workflow-state-matrix.js";

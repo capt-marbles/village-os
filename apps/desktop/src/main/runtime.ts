@@ -27,6 +27,7 @@ import { verifyMacOsOwnerPresence } from "./step-up-auth.js";
 import { createCodexAppServerProvider } from "../model-provider/codex-app-server.js";
 import { ModelProviderAccountController } from "./model-provider-account.js";
 import { PersonalAgentTaskController } from "./personal-agent-task.js";
+import type { InternalDelegatedWorkflowOperations } from "./app-window.js";
 
 registerVillageScheme(protocol);
 installGlobalSecurityPolicy(app);
@@ -49,6 +50,10 @@ function controlPlaneUrl(): URL {
 
 export async function startVillageRuntime(
   pairedIdentitySource?: PairedRuntimeIdentitySource,
+  internalComposition?: {
+    /** Supplied only by the internal packaged proof harness. */
+    delegatedWorkflow: InternalDelegatedWorkflowOperations;
+  },
 ): Promise<void> {
   installVillageProtocol(
     protocol,
@@ -116,6 +121,9 @@ export async function startVillageRuntime(
     personalAgentTask: new PersonalAgentTaskController(
       createCodexAppServerProvider(),
     ),
+    ...(internalComposition
+      ? { delegatedWorkflow: internalComposition.delegatedWorkflow }
+      : {}),
     verifyStepUp: () => verifyMacOsOwnerPresence(),
     // LinkedIn authentication is human-only: Village never persists a
     // LinkedIn credential reference. Keeping this required callback in the

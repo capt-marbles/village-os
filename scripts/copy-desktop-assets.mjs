@@ -2,8 +2,11 @@ import { cp, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
+const internal = process.env.VILLAGE_BUILD_CHANNEL !== "release";
 const source = new URL(
-  "../apps/desktop/src/preload/village-bridge.cjs",
+  internal
+    ? "../apps/desktop/src/preload/village-bridge.internal.cjs"
+    : "../apps/desktop/src/preload/village-bridge.cjs",
   import.meta.url,
 );
 const destination = new URL(
