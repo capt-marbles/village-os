@@ -1,5 +1,6 @@
 import type {
   BrowserCommand,
+  OwnedFixtureSetupCommand,
   SignedCommandEnvelope,
   SignedResultEnvelope,
   UnsignedResultEnvelope,
@@ -55,6 +56,18 @@ export type CommandIdentity = {
   browserSessionId: string;
 };
 
+export type WorkflowCommandBinding = {
+  workflowKind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1";
+  workflowVersion: 1;
+  jobRevision: number;
+  logicalStep:
+    | "SET_DISPLAY_NAME"
+    | "SELECT_ROLE"
+    | "SET_PREFERRED_FOCUS"
+    | "FINALIZE_SETUP";
+  effectId: string;
+};
+
 export class ControlPlaneClient {
   constructor(
     private readonly baseUrl: string,
@@ -92,6 +105,23 @@ export class ControlPlaneClient {
     return this.send(identity.browserSessionId, "commands", envelope);
   }
 
+  async workflowCommand(
+    identity: CommandIdentity,
+    binding: WorkflowCommandBinding,
+    actionId: string,
+    leaseEpoch: number,
+    command: OwnedFixtureSetupCommand,
+  ) {
+    const envelope = await this.envelope(
+      identity,
+      actionId,
+      leaseEpoch,
+      command,
+      binding,
+    );
+    return this.send(identity.browserSessionId, "commands", envelope);
+  }
+
   async result(
     result: Omit<UnsignedResultEnvelope, "sequence" | "issuedAt" | "expiresAt">,
   ) {
@@ -117,6 +147,7 @@ export class ControlPlaneClient {
     actionId: string,
     leaseEpoch: number,
     command: BrowserCommand,
+    workflow?: WorkflowCommandBinding,
   ): Promise<SignedCommandEnvelope> {
     const issuedAt = new Date();
     const sequence = await this.sequences.reserveNext(
@@ -129,6 +160,7 @@ export class ControlPlaneClient {
         ...identity,
         actionId,
         leaseEpoch,
+        ...workflow,
         sequence,
         issuedAt: issuedAt.toISOString(),
         expiresAt: new Date(issuedAt.getTime() + 30_000).toISOString(),
