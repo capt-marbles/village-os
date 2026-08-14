@@ -2,6 +2,8 @@ import { env } from "cloudflare:workers";
 import { SELF, applyD1Migrations } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  automationSyncRequestSchema,
+  canonicalAutomationSyncRequestBytes,
   canonicalCommandEnvelopeBytes,
   signedCommandEnvelopeSchema,
   type BrowserControlState,
@@ -550,5 +552,141 @@ describe("authenticated pairing routes", () => {
       ),
     );
     expect(foreignEvents.status).toBe(400);
+  });
+
+  it("returns authoritative automation fencing to a signed paired desktop", async () => {
+    const deviceId = "dev_01J00000000000000000000008" as const;
+    const jobId = "job_01J00000000000000000000008" as const;
+    const browserSessionId = "brs_01J00000000000000000000008" as const;
+    const nowDate = new Date();
+    const now = nowDate.toISOString();
+    const keys = await crypto.subtle.generateKey("Ed25519", true, [
+      "sign",
+      "verify",
+    ]);
+    const publicKey = await crypto.subtle.exportKey("jwk", keys.publicKey);
+    await env.VILLAGE_DB.batch([
+      env.VILLAGE_DB.prepare(
+        "INSERT OR IGNORE INTO principals (principal_id, created_at) VALUES (?, ?)",
+      ).bind(principalId, now),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO devices
+         (principal_id, device_id, public_key, credential_status, protocol_version,
+          last_accepted_sequence, created_at) VALUES (?, ?, ?, 'ACTIVE', 1, 0, ?)`,
+      ).bind(principalId, deviceId, JSON.stringify(publicKey), now),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO jobs
+         (principal_id, job_id, state, version, last_event_sequence, created_at, updated_at)
+         VALUES (?, ?, 'RUNNING_AGENT', 1, 1, ?, ?)`,
+      ).bind(principalId, jobId, now, now),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO browser_sessions
+         (principal_id, browser_session_id, job_id, device_id, host_id, site,
+          controller, connection_state, lease_epoch, last_accepted_sequence,
+          automation_blocked, takeover_state, profile_state, updated_at)
+         VALUES (?, ?, ?, ?, 'hst_01J00000000000000000000008', 'OWNED_FIXTURE',
+                 'AGENT', 'ONLINE', 4, 3, 0, 'NONE', 'PRESENT', ?)`,
+      ).bind(principalId, browserSessionId, jobId, deviceId, now),
+    ]);
+    const coordinator =
+      env.BROWSER_SESSION_COORDINATOR.getByName(browserSessionId);
+    await coordinator.initialize({
+      principalId,
+      browserSessionId,
+      site: "OWNED_FIXTURE",
+      initializedAt: now,
+      control: {
+        principalId,
+        deviceId,
+        jobId,
+        browserSessionId,
+        controller: "AGENT",
+        connection: "ONLINE",
+        leaseEpoch: 4,
+        leaseExpiresAt: new Date(nowDate.getTime() + 60_000).toISOString(),
+        lastAcceptedSequence: 3,
+        automationBlocked: false,
+        takeover: "NONE",
+        profile: "PRESENT",
+      },
+    });
+    await coordinator.cancel(principalId, now);
+
+    const unsigned = {
+      protocolVersion: 1 as const,
+      principalId,
+      deviceId,
+      browserSessionId,
+      connectionId: "connector-desktop",
+      sequence: 5,
+      cursor: 0,
+      issuedAt: now,
+      expiresAt: new Date(nowDate.getTime() + 30_000).toISOString(),
+    };
+    const signature = await crypto.subtle.sign(
+      "Ed25519",
+      keys.privateKey,
+      canonicalAutomationSyncRequestBytes(unsigned),
+    );
+    const envelope = automationSyncRequestSchema.parse({
+      ...unsigned,
+      signature: Buffer.from(signature).toString("base64url"),
+    });
+    const synchronize = (body: unknown = envelope) =>
+      SELF.fetch(
+        new Request(
+          `https://village.test/api/browser-sessions/${browserSessionId}/automation-sync`,
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-village-connection-id": "connector-desktop",
+            },
+            body: JSON.stringify(body),
+          },
+        ),
+      );
+
+    const response = await synchronize();
+    expect(response.status, await response.clone().text()).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      ok: true,
+      cursor: 2,
+      jobId,
+      controller: "NONE",
+      connection: "ONLINE",
+      leaseEpoch: 5,
+      automationBlocked: true,
+    });
+    const replay = await synchronize();
+    expect(replay.status).toBe(409);
+    await expect(replay.json()).resolves.toEqual({
+      ok: false,
+      code: "REPLAYED_SEQUENCE",
+    });
+    const tampered = await synchronize({ ...envelope, cursor: 1 });
+    expect(tampered.status).toBe(409);
+    await expect(tampered.json()).resolves.toEqual({
+      ok: false,
+      code: "INVALID_SIGNATURE",
+    });
+
+    const restartedUnsigned = { ...unsigned, sequence: 6, cursor: 2 };
+    const restartedSignature = await crypto.subtle.sign(
+      "Ed25519",
+      keys.privateKey,
+      canonicalAutomationSyncRequestBytes(restartedUnsigned),
+    );
+    const restarted = await synchronize({
+      ...restartedUnsigned,
+      signature: Buffer.from(restartedSignature).toString("base64url"),
+    });
+    expect(restarted.status).toBe(200);
+    await expect(restarted.json()).resolves.toMatchObject({
+      ok: true,
+      cursor: 2,
+      leaseEpoch: 5,
+      automationBlocked: true,
+    });
   });
 });

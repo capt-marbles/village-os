@@ -1,9 +1,13 @@
 import {
+  automationSyncRequestSchema,
+  canonicalAutomationSyncRequestBytes,
   canonicalCommandEnvelopeBytes,
   canonicalResultEnvelopeBytes,
   signedCommandEnvelopeSchema,
   signedResultEnvelopeSchema,
   type BrowserCommand,
+  type AutomationSyncRequest,
+  type UnsignedAutomationSyncRequest,
   type SignedCommandEnvelope,
   type SignedResultEnvelope,
   type UnsignedCommandEnvelope,
@@ -56,6 +60,21 @@ export async function signResultEnvelope(
   );
   return signedResultEnvelopeSchema.parse({
     ...envelope,
+    signature: encodeBase64Url(new Uint8Array(signature)),
+  });
+}
+
+export async function signAutomationSyncRequest(
+  request: UnsignedAutomationSyncRequest,
+  privateKey: CryptoKey,
+): Promise<AutomationSyncRequest> {
+  const signature = await crypto.subtle.sign(
+    "Ed25519",
+    privateKey,
+    canonicalAutomationSyncRequestBytes(request),
+  );
+  return automationSyncRequestSchema.parse({
+    ...request,
     signature: encodeBase64Url(new Uint8Array(signature)),
   });
 }

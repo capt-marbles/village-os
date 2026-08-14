@@ -1,4 +1,6 @@
 import {
+  automationSyncRequestSchema,
+  canonicalAutomationSyncRequestBytes,
   canonicalCommandEnvelopeBytes,
   canonicalResultEnvelopeBytes,
   signedCommandEnvelopeSchema,
@@ -66,6 +68,32 @@ export async function verifyCommandEnvelope(
       key,
       decodeBase64Url(signature),
       canonicalCommandEnvelopeBytes(unsigned),
+    );
+  } catch {
+    return false;
+  }
+}
+
+export async function verifyAutomationSyncRequest(
+  candidate: unknown,
+  publicJwk: JsonWebKey,
+): Promise<boolean> {
+  const parsed = automationSyncRequestSchema.safeParse(candidate);
+  if (!parsed.success) return false;
+  try {
+    const key = await crypto.subtle.importKey(
+      "jwk",
+      publicJwk,
+      "Ed25519",
+      false,
+      ["verify"],
+    );
+    const { signature, ...unsigned } = parsed.data;
+    return crypto.subtle.verify(
+      "Ed25519",
+      key,
+      decodeBase64Url(signature),
+      canonicalAutomationSyncRequestBytes(unsigned),
     );
   } catch {
     return false;

@@ -1,4 +1,5 @@
 import {
+  automationSyncRequestSchema,
   browserControlStateSchema,
   browserSessionIdSchema,
   deviceIdSchema,
@@ -14,6 +15,7 @@ import {
 import { z } from "zod";
 import type { Environment } from "../../env.js";
 import {
+  verifyAutomationSyncRequest,
   verifyCommandEnvelope,
   verifyResultEnvelope,
 } from "../browser-control/device-credentials.js";
@@ -335,4 +337,98 @@ export async function dispatchAuthenticatedResult(
   return environment.BROWSER_SESSION_COORDINATOR.getByName(
     envelope.browserSessionId,
   ).acceptAuthenticatedResult({ envelope, connectionId, now });
+}
+
+export async function dispatchAuthenticatedAutomationSync(
+  environment: Environment,
+  candidate: unknown,
+  connectionId: string,
+  now: string,
+  expectedSessionId?: string,
+) {
+  const parsed = automationSyncRequestSchema.safeParse(candidate);
+  if (!parsed.success) return { ok: false as const, code: "INVALID_ENVELOPE" };
+  const envelope = parsed.data;
+  if (envelope.connectionId !== connectionId) {
+    return { ok: false as const, code: "CONNECTION_ID_MISMATCH" };
+  }
+  if (
+    expectedSessionId !== undefined &&
+    envelope.browserSessionId !== expectedSessionId
+  ) {
+    return { ok: false as const, code: "SESSION_ROUTE_MISMATCH" };
+  }
+  if (
+    Date.parse(envelope.issuedAt) > Date.parse(now) ||
+    Date.parse(envelope.expiresAt) <= Date.parse(now)
+  ) {
+    return {
+      ok: false as const,
+      code: "ENVELOPE_EXPIRED_OR_NOT_YET_VALID",
+    };
+  }
+  const device = await environment.VILLAGE_DB.prepare(
+    `SELECT public_key, credential_status, protocol_version FROM devices
+     WHERE principal_id = ? AND device_id = ?`,
+  )
+    .bind(envelope.principalId, envelope.deviceId)
+    .first<DeviceRow>();
+  if (!device || device.credential_status !== "ACTIVE") {
+    return { ok: false as const, code: "DEVICE_REVOKED_OR_UNKNOWN" };
+  }
+  if (device.protocol_version !== envelope.protocolVersion) {
+    return { ok: false as const, code: "PROTOCOL_DOWNGRADE_REJECTED" };
+  }
+  let publicKey: JsonWebKey;
+  try {
+    publicKey = JSON.parse(device.public_key) as JsonWebKey;
+  } catch {
+    return { ok: false as const, code: "INVALID_DEVICE_CREDENTIAL" };
+  }
+  if (!(await verifyAutomationSyncRequest(envelope, publicKey))) {
+    return { ok: false as const, code: "INVALID_SIGNATURE" };
+  }
+  const session = await environment.VILLAGE_DB.prepare(
+    `SELECT 1 AS owned FROM browser_sessions
+     WHERE principal_id = ? AND device_id = ? AND browser_session_id = ?`,
+  )
+    .bind(envelope.principalId, envelope.deviceId, envelope.browserSessionId)
+    .first<{ owned: number }>();
+  if (!session) return { ok: false as const, code: "SESSION_NOT_OWNED" };
+  const accepted = await environment.VILLAGE_DB.prepare(
+    `UPDATE devices SET last_automation_sync_sequence = ?
+     WHERE principal_id = ? AND device_id = ? AND credential_status = 'ACTIVE'
+       AND protocol_version = ?
+       AND last_automation_sync_sequence < ?`,
+  )
+    .bind(
+      envelope.sequence,
+      envelope.principalId,
+      envelope.deviceId,
+      envelope.protocolVersion,
+      envelope.sequence,
+    )
+    .run();
+  if (accepted.meta.changes !== 1) {
+    return { ok: false as const, code: "REPLAYED_SEQUENCE" };
+  }
+  const snapshot = await environment.BROWSER_SESSION_COORDINATOR.getByName(
+    envelope.browserSessionId,
+  ).snapshot(envelope.principalId);
+  if (!snapshot.ok) return snapshot;
+  if (
+    snapshot.control.deviceId !== envelope.deviceId ||
+    snapshot.control.browserSessionId !== envelope.browserSessionId
+  ) {
+    return { ok: false as const, code: "SESSION_NOT_OWNED" };
+  }
+  return {
+    ok: true as const,
+    cursor: snapshot.eventSequence,
+    jobId: snapshot.control.jobId,
+    controller: snapshot.control.controller,
+    connection: snapshot.control.connection,
+    leaseEpoch: snapshot.control.leaseEpoch,
+    automationBlocked: snapshot.control.automationBlocked,
+  };
 }

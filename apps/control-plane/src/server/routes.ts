@@ -10,6 +10,7 @@ import {
 import { z } from "zod";
 import type { Environment } from "../env.js";
 import {
+  dispatchAuthenticatedAutomationSync,
   dispatchAuthenticatedCommand,
   dispatchAuthenticatedResult,
   dispatchAuthenticatedSessionOpen,
@@ -352,7 +353,7 @@ export async function routeRequest(
     }
 
     const sessionOperation = url.pathname.match(
-      /^\/api\/browser-sessions\/([^/]+)\/(connect|commands|results|events|stream|observer|cancel|project|rebuild-projection)$/,
+      /^\/api\/browser-sessions\/([^/]+)\/(connect|commands|results|events|stream|observer|cancel|project|rebuild-projection|automation-sync)$/,
     );
     if (sessionOperation) {
       const sessionId = browserSessionIdSchema.safeParse(sessionOperation[1]);
@@ -426,6 +427,27 @@ export async function routeRequest(
           sessionId.data,
         );
         return json(request, environment, result, result.ok ? 202 : 409);
+      }
+      if (request.method === "POST" && operation === "automation-sync") {
+        const origin = authorizeNonBrowserClient(request, environment);
+        if (!origin.ok) return json(request, environment, origin, 403);
+        const connectionId = request.headers.get("x-village-connection-id");
+        if (!connectionId) {
+          return json(
+            request,
+            environment,
+            { ok: false, code: "CONNECTION_ID_REQUIRED" },
+            400,
+          );
+        }
+        const result = await dispatchAuthenticatedAutomationSync(
+          environment,
+          await boundedJson(request),
+          connectionId,
+          new Date().toISOString(),
+          sessionId.data,
+        );
+        return json(request, environment, result, result.ok ? 200 : 409);
       }
 
       const auth = await authenticateRequest(request, environment);

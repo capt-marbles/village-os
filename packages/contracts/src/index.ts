@@ -16,6 +16,7 @@ export type HealthResponse = z.infer<typeof healthResponseSchema>;
 
 export * from "./commands.js";
 export * from "./actions.js";
+export * from "./automation-sync.js";
 export * from "./browser.js";
 export * from "./ids.js";
 export * from "./events.js";

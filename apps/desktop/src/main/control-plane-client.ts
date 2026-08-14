@@ -1,16 +1,99 @@
 import type {
+  AutomationSyncResponse,
   BrowserCommand,
   OwnedFixtureSetupCommand,
   SignedCommandEnvelope,
   SignedResultEnvelope,
   UnsignedResultEnvelope,
 } from "@village/contracts";
+import { automationSyncResponseSchema } from "@village/contracts";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { signCommandEnvelope, signResultEnvelope } from "./device-identity.js";
+import {
+  signAutomationSyncRequest,
+  signCommandEnvelope,
+  signResultEnvelope,
+} from "./device-identity.js";
 
 export interface ProtocolSequenceStore {
   reserveNext(deviceId: string, browserSessionId: string): Promise<number>;
+}
+
+export interface AutomationSyncCursorStore {
+  load(browserSessionId: string): Promise<number>;
+  save(browserSessionId: string, cursor: number): Promise<void>;
+}
+
+export class MemoryAutomationSyncCursorStore implements AutomationSyncCursorStore {
+  constructor(private cursor = 0) {}
+
+  async load() {
+    return this.cursor;
+  }
+
+  async save(_browserSessionId: string, cursor: number) {
+    this.cursor = cursor;
+  }
+}
+
+export class FileAutomationSyncCursorStore implements AutomationSyncCursorStore {
+  private mutation: Promise<void> = Promise.resolve();
+
+  constructor(private readonly path: string) {}
+
+  async load(browserSessionId: string) {
+    const values = await this.read();
+    return values[browserSessionId] ?? 0;
+  }
+
+  async save(browserSessionId: string, cursor: number) {
+    if (!Number.isInteger(cursor) || cursor < 0) {
+      throw new Error("INVALID_AUTOMATION_SYNC_CURSOR");
+    }
+    const operation = this.mutation.then(async () => {
+      const values = await this.read();
+      if (cursor < (values[browserSessionId] ?? 0)) {
+        throw new Error("STALE_AUTOMATION_SYNC_CURSOR");
+      }
+      values[browserSessionId] = cursor;
+      await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
+      const temporary = `${this.path}.${crypto.randomUUID()}.tmp`;
+      await writeFile(temporary, JSON.stringify(values), {
+        mode: 0o600,
+        flag: "wx",
+      });
+      await rename(temporary, this.path);
+    });
+    this.mutation = operation.catch(() => undefined);
+    await operation;
+  }
+
+  private async read(): Promise<Record<string, number>> {
+    let candidate: unknown;
+    try {
+      candidate = JSON.parse(await readFile(this.path, "utf8"));
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
+        return {};
+      }
+      throw new Error("AUTOMATION_SYNC_CURSOR_STORE_CORRUPT");
+    }
+    if (
+      !candidate ||
+      typeof candidate !== "object" ||
+      Array.isArray(candidate) ||
+      Object.values(candidate).some(
+        (value) => !Number.isInteger(value) || Number(value) < 0,
+      )
+    ) {
+      throw new Error("AUTOMATION_SYNC_CURSOR_STORE_CORRUPT");
+    }
+    return candidate as Record<string, number>;
+  }
 }
 
 export class FileProtocolSequenceStore implements ProtocolSequenceStore {
@@ -55,6 +138,8 @@ export type CommandIdentity = {
   jobId: string;
   browserSessionId: string;
 };
+
+export type AutomationSyncIdentity = Omit<CommandIdentity, "jobId">;
 
 export type WorkflowCommandBinding = {
   workflowKind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1";
@@ -140,6 +225,58 @@ export class ControlPlaneClient {
       this.privateKey,
     );
     return this.send(result.browserSessionId, "results", envelope);
+  }
+
+  async synchronizeAutomation(
+    identity: AutomationSyncIdentity,
+    cursors: AutomationSyncCursorStore,
+  ): Promise<AutomationSyncResponse> {
+    const cursor = await cursors.load(identity.browserSessionId);
+    const issuedAt = new Date();
+    const sequence = await this.sequences.reserveNext(
+      identity.deviceId,
+      identity.browserSessionId,
+    );
+    const envelope = await signAutomationSyncRequest(
+      {
+        protocolVersion: 1,
+        ...identity,
+        connectionId: this.connectionId,
+        sequence,
+        cursor,
+        issuedAt: issuedAt.toISOString(),
+        expiresAt: new Date(issuedAt.getTime() + 30_000).toISOString(),
+      },
+      this.privateKey,
+    );
+    const response = await this.request(
+      new URL(
+        `/api/browser-sessions/${identity.browserSessionId}/automation-sync`,
+        this.baseUrl,
+      ),
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-village-connection-id": this.connectionId,
+        },
+        body: JSON.stringify(envelope),
+      },
+    );
+    const candidate: unknown = await response.json();
+    const parsed = automationSyncResponseSchema.safeParse(candidate);
+    if (!response.ok || !parsed.success) {
+      const code =
+        candidate && typeof candidate === "object" && "code" in candidate
+          ? String(candidate.code)
+          : "INVALID_AUTOMATION_SYNC_RESPONSE";
+      throw new Error(code);
+    }
+    if (parsed.data.cursor < cursor) {
+      throw new Error("STALE_AUTOMATION_SYNC_RESPONSE");
+    }
+    await cursors.save(identity.browserSessionId, parsed.data.cursor);
+    return parsed.data;
   }
 
   private async envelope(
