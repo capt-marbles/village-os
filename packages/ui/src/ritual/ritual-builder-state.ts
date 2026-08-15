@@ -1,16 +1,10 @@
 import {
   approveRitualDraft,
+  RitualApprovalError,
   ritualDraftSchema,
   type ApprovedRitualRevision,
   type RitualDraft,
 } from "@village/contracts";
-
-export type RitualBuilderPhase =
-  | "DESCRIBE_PURPOSE"
-  | "CHOOSE_TRIGGER"
-  | "CHOOSE_REVIEW"
-  | "READY_FOR_APPROVAL"
-  | "APPROVED";
 
 export interface RitualBuilderMessage {
   id: string;
@@ -18,20 +12,44 @@ export interface RitualBuilderMessage {
   text: string;
 }
 
-export interface RitualBuilderState {
-  phase: RitualBuilderPhase;
-  draft: RitualDraft | null;
-  approved: ApprovedRitualRevision | null;
-  runState: "NOT_STARTED";
+interface RitualBuilderStateBase {
   messages: readonly RitualBuilderMessage[];
   error: string | null;
 }
 
+export type RitualBuilderState =
+  | (RitualBuilderStateBase & {
+      phase: "DESCRIBE_PURPOSE";
+      draft: null;
+      approved: null;
+    })
+  | (RitualBuilderStateBase & {
+      phase: "CHOOSE_TRIGGER" | "CHOOSE_REVIEW" | "READY_FOR_APPROVAL";
+      draft: RitualDraft;
+      approved: null;
+    })
+  | (RitualBuilderStateBase & {
+      phase: "APPROVED";
+      draft: RitualDraft;
+      approved: ApprovedRitualRevision;
+    });
+
+export interface RitualBuilderIdentity {
+  draftId: string;
+  ritualId: string;
+}
+
 export type RitualBuilderEvent =
-  | { type: "SUBMIT_PURPOSE"; purpose: string; occurredAt: string }
+  | {
+      type: "SUBMIT_PURPOSE";
+      draftId: string;
+      purpose: string;
+      occurredAt: string;
+    }
   | {
       type: "SELECT_TRIGGER";
       trigger: "ON_DEMAND" | "WEEKDAYS" | "EVENT";
+      timeZone: string;
       occurredAt: string;
     }
   | {
@@ -45,10 +63,12 @@ export type RitualBuilderEvent =
       value: string;
       occurredAt: string;
     }
-  | { type: "APPROVE"; expectedRevision: number; occurredAt: string };
-
-const prototypeDraftId = "rtd_01J00000000000000000000000";
-const prototypeRitualId = "rtl_01J00000000000000000000000";
+  | {
+      type: "APPROVE";
+      ritualId: string;
+      expectedRevision: number;
+      occurredAt: string;
+    };
 
 const triggerCopy = {
   ON_DEMAND: {
@@ -90,13 +110,23 @@ function revise(
       "name" | "purpose" | "completion" | "trigger" | "reviewPolicy"
     >
   >,
-): RitualDraft {
-  return ritualDraftSchema.parse({
+): RitualDraft | null {
+  const result = ritualDraftSchema.safeParse({
     ...draft,
     ...patch,
     revision: draft.revision + 1,
     updatedAt: occurredAt,
   });
+  return result.success ? result.data : null;
+}
+
+function isValidTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone }).format();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function createRitualBuilderState(): RitualBuilderState {
@@ -104,7 +134,6 @@ export function createRitualBuilderState(): RitualBuilderState {
     phase: "DESCRIBE_PURPOSE",
     draft: null,
     approved: null,
-    runState: "NOT_STARTED",
     messages: [
       {
         id: "message-1",
@@ -122,18 +151,25 @@ export function reduceRitualBuilder(
 ): RitualBuilderState {
   switch (event.type) {
     case "SUBMIT_PURPOSE": {
+      if (state.phase !== "DESCRIBE_PURPOSE") return state;
       const purpose = event.purpose.trim();
       if (!purpose) return { ...state, error: "Describe the outcome first." };
-      const draft = ritualDraftSchema.parse({
+      if (purpose.length > 320) {
+        return {
+          ...state,
+          error: "Keep the Ritual outcome to 320 characters or fewer.",
+        };
+      }
+      const parsedDraft = ritualDraftSchema.safeParse({
         schemaVersion: 1,
-        draftId: prototypeDraftId,
+        draftId: event.draftId,
         revision: 1,
         status: "DRAFT",
         name: nameFromPurpose(purpose),
         purpose,
         trigger: {
-          kind: "ON_DEMAND",
-          summary: "Whenever you ask the Steward",
+          kind: triggerCopy.ON_DEMAND.kind,
+          summary: triggerCopy.ON_DEMAND.summary,
         },
         steps: [
           {
@@ -168,6 +204,14 @@ export function reduceRitualBuilder(
         },
         updatedAt: event.occurredAt,
       });
+      if (!parsedDraft.success) {
+        return {
+          ...state,
+          error:
+            "The Ritual draft details are not valid. Review them and try again.",
+        };
+      }
+      const draft = parsedDraft.data;
       let messages = message(state.messages, "OWNER", purpose);
       messages = message(
         messages,
@@ -183,11 +227,21 @@ export function reduceRitualBuilder(
       };
     }
     case "SELECT_TRIGGER": {
-      if (!state.draft || state.phase === "APPROVED") return state;
+      if (state.phase !== "CHOOSE_TRIGGER") return state;
       const selected = triggerCopy[event.trigger];
+      if (event.trigger === "WEEKDAYS" && !isValidTimeZone(event.timeZone)) {
+        return { ...state, error: "Choose a valid local timezone." };
+      }
+      const summary =
+        event.trigger === "WEEKDAYS"
+          ? `Every weekday at 8:30 AM ${event.timeZone}`
+          : selected.summary;
       const draft = revise(state.draft, event.occurredAt, {
-        trigger: { kind: selected.kind, summary: selected.summary },
+        trigger: { kind: selected.kind, summary },
       });
+      if (!draft) {
+        return { ...state, error: "The trigger could not be saved." };
+      }
       let messages = message(state.messages, "OWNER", selected.ownerMessage);
       messages = message(
         messages,
@@ -203,7 +257,7 @@ export function reduceRitualBuilder(
       };
     }
     case "SELECT_REVIEW": {
-      if (!state.draft || state.phase === "APPROVED") return state;
+      if (state.phase !== "CHOOSE_REVIEW") return state;
       const everyRun = event.ownerReview === "EVERY_RUN";
       const draft = revise(state.draft, event.occurredAt, {
         reviewPolicy: {
@@ -211,6 +265,9 @@ export function reduceRitualBuilder(
           learning: "PROPOSE_ONLY",
         },
       });
+      if (!draft) {
+        return { ...state, error: "The Review policy could not be saved." };
+      }
       let messages = message(
         state.messages,
         "OWNER",
@@ -232,15 +289,30 @@ export function reduceRitualBuilder(
       };
     }
     case "EDIT_FIELD": {
-      if (!state.draft || state.phase === "APPROVED") return state;
+      if (
+        state.phase !== "CHOOSE_TRIGGER" &&
+        state.phase !== "CHOOSE_REVIEW" &&
+        state.phase !== "READY_FOR_APPROVAL"
+      )
+        return state;
       const value = event.value.trim();
       if (!value) {
         return { ...state, error: "Ritual fields cannot be empty." };
+      }
+      const maximumLength = event.field === "name" ? 80 : 320;
+      if (value.length > maximumLength) {
+        return {
+          ...state,
+          error: `Keep the Ritual ${event.field} to ${maximumLength} characters or fewer.`,
+        };
       }
       if (state.draft[event.field] === value) return state;
       const draft = revise(state.draft, event.occurredAt, {
         [event.field]: value,
       });
+      if (!draft) {
+        return { ...state, error: `The Ritual ${event.field} is not valid.` };
+      }
       return {
         ...state,
         draft,
@@ -256,9 +328,10 @@ export function reduceRitualBuilder(
       if (!state.draft || state.phase !== "READY_FOR_APPROVAL") return state;
       try {
         const approved = approveRitualDraft(state.draft, {
+          schemaVersion: 1,
           draftId: state.draft.draftId,
           expectedRevision: event.expectedRevision,
-          ritualId: prototypeRitualId,
+          ritualId: event.ritualId,
           approvedAt: event.occurredAt,
         });
         return {
@@ -273,14 +346,21 @@ export function reduceRitualBuilder(
           error: null,
         };
       } catch (error) {
-        if (error instanceof Error && error.message === "STALE_RITUAL_DRAFT") {
+        if (
+          error instanceof RitualApprovalError &&
+          error.code === "STALE_RITUAL_DRAFT"
+        ) {
           return {
             ...state,
             error:
               "The Ritual changed after this approval view opened. Review the latest revision before approving.",
           };
         }
-        throw error;
+        return {
+          ...state,
+          error:
+            "The Ritual identity is not valid. Reopen the draft and try again.",
+        };
       }
     }
   }

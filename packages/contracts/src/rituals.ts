@@ -57,6 +57,7 @@ export const ritualDraftSchema = z.strictObject({
 });
 
 export const ritualApprovalRequestSchema = z.strictObject({
+  schemaVersion: z.literal(1),
   draftId: ritualDraftIdSchema,
   expectedRevision: z.number().int().positive(),
   ritualId: ritualIdSchema,
@@ -68,6 +69,7 @@ export const approvedRitualRevisionSchema = z.strictObject({
   ritualId: ritualIdSchema,
   ritualRevision: z.literal(1),
   status: z.literal("APPROVED"),
+  approvedDraftId: ritualDraftIdSchema,
   approvedDraftRevision: z.number().int().positive(),
   ...ritualDefinition,
   approvedAt: instantSchema,
@@ -79,6 +81,16 @@ export type ApprovedRitualRevision = z.infer<
   typeof approvedRitualRevisionSchema
 >;
 
+export type RitualApprovalErrorCode =
+  "RITUAL_DRAFT_ID_MISMATCH" | "STALE_RITUAL_DRAFT";
+
+export class RitualApprovalError extends Error {
+  constructor(readonly code: RitualApprovalErrorCode) {
+    super(code);
+    this.name = "RitualApprovalError";
+  }
+}
+
 export function approveRitualDraft(
   draftCandidate: RitualDraft,
   requestCandidate: RitualApprovalRequest,
@@ -86,16 +98,17 @@ export function approveRitualDraft(
   const draft = ritualDraftSchema.parse(draftCandidate);
   const request = ritualApprovalRequestSchema.parse(requestCandidate);
   if (draft.draftId !== request.draftId) {
-    throw new Error("RITUAL_DRAFT_ID_MISMATCH");
+    throw new RitualApprovalError("RITUAL_DRAFT_ID_MISMATCH");
   }
   if (draft.revision !== request.expectedRevision) {
-    throw new Error("STALE_RITUAL_DRAFT");
+    throw new RitualApprovalError("STALE_RITUAL_DRAFT");
   }
   return approvedRitualRevisionSchema.parse({
     schemaVersion: 1,
     ritualId: request.ritualId,
     ritualRevision: 1,
     status: "APPROVED",
+    approvedDraftId: draft.draftId,
     approvedDraftRevision: draft.revision,
     name: draft.name,
     purpose: draft.purpose,

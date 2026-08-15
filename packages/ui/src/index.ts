@@ -30,8 +30,8 @@ export {
 } from "./ritual/ritual-builder-state.js";
 export type {
   RitualBuilderEvent,
+  RitualBuilderIdentity,
   RitualBuilderMessage,
-  RitualBuilderPhase,
   RitualBuilderState,
 } from "./ritual/ritual-builder-state.js";
 export type {

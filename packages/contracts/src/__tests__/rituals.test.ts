@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   approveRitualDraft,
+  RitualApprovalError,
   ritualApprovalRequestSchema,
   ritualDraftSchema,
 } from "../index.js";
@@ -60,6 +61,7 @@ describe("Ritual contracts", () => {
 
   it("approves only the exact displayed draft revision", () => {
     const request = ritualApprovalRequestSchema.parse({
+      schemaVersion: 1,
       draftId: draft.draftId,
       expectedRevision: 3,
       ritualId: "rtl_01J00000000000000000000000",
@@ -70,16 +72,33 @@ describe("Ritual contracts", () => {
       status: "APPROVED",
       ritualId: request.ritualId,
       ritualRevision: 1,
+      approvedDraftId: draft.draftId,
       approvedDraftRevision: 3,
     });
-    expect(() =>
-      approveRitualDraft(draft, { ...request, expectedRevision: 2 }),
-    ).toThrow("STALE_RITUAL_DRAFT");
-    expect(() =>
+    expect(
+      ritualApprovalRequestSchema.safeParse({
+        ...request,
+        schemaVersion: 2,
+      }).success,
+    ).toBe(false);
+    try {
+      approveRitualDraft(draft, { ...request, expectedRevision: 2 });
+      throw new Error("expected stale approval to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(RitualApprovalError);
+      expect((error as RitualApprovalError).code).toBe("STALE_RITUAL_DRAFT");
+    }
+    try {
       approveRitualDraft(draft, {
         ...request,
         draftId: "rtd_01J00000000000000000000001",
-      }),
-    ).toThrow("RITUAL_DRAFT_ID_MISMATCH");
+      });
+      throw new Error("expected mismatched draft to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(RitualApprovalError);
+      expect((error as RitualApprovalError).code).toBe(
+        "RITUAL_DRAFT_ID_MISMATCH",
+      );
+    }
   });
 });

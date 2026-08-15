@@ -1,23 +1,29 @@
-import type { FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import type {
   RitualBuilderEvent,
+  RitualBuilderIdentity,
   RitualBuilderState,
 } from "./ritual-builder-state.js";
 
 const now = () => new Date().toISOString();
+const localTimeZone = () =>
+  Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
 export function RitualBuilder({
   state,
   onEvent,
+  identity,
 }: {
   state: RitualBuilderState;
   onEvent(event: RitualBuilderEvent): void;
+  identity: RitualBuilderIdentity;
 }) {
   const submitPurpose = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     onEvent({
       type: "SUBMIT_PURPOSE",
+      draftId: identity.draftId,
       purpose: String(data.get("purpose") ?? ""),
       occurredAt: now(),
     });
@@ -59,6 +65,7 @@ export function RitualBuilder({
               id="ritual-goal"
               name="purpose"
               rows={3}
+              maxLength={320}
               placeholder="For example: Review my pipeline each weekday and prepare the next follow-ups."
               required
             />
@@ -78,6 +85,7 @@ export function RitualBuilder({
                   onEvent({
                     type: "SELECT_TRIGGER",
                     trigger: "ON_DEMAND",
+                    timeZone: localTimeZone(),
                     occurredAt: now(),
                   }),
               },
@@ -89,6 +97,7 @@ export function RitualBuilder({
                   onEvent({
                     type: "SELECT_TRIGGER",
                     trigger: "WEEKDAYS",
+                    timeZone: localTimeZone(),
                     occurredAt: now(),
                   }),
               },
@@ -100,6 +109,7 @@ export function RitualBuilder({
                   onEvent({
                     type: "SELECT_TRIGGER",
                     trigger: "EVENT",
+                    timeZone: localTimeZone(),
                     occurredAt: now(),
                   }),
               },
@@ -137,7 +147,7 @@ export function RitualBuilder({
           />
         ) : null}
 
-        {state.error ? <p role="alert">{state.error}</p> : null}
+        {state.error && !state.draft ? <p role="alert">{state.error}</p> : null}
       </section>
 
       <aside className="ritual-draft" aria-label="Ritual draft side pane">
@@ -157,21 +167,23 @@ export function RitualBuilder({
 
         {state.draft ? (
           <div className="ritual-charter">
-            <label htmlFor="ritual-name">Name</label>
-            <input
+            <EditableRitualField
               id="ritual-name"
-              defaultValue={state.draft.name}
+              label="Name"
+              value={state.draft.name}
+              maxLength={80}
               disabled={state.phase === "APPROVED"}
-              onBlur={(event) => edit("name", event.currentTarget.value)}
+              onCommit={(value) => edit("name", value)}
             />
 
-            <label htmlFor="ritual-purpose">Purpose</label>
-            <textarea
+            <EditableRitualField
               id="ritual-purpose"
+              label="Purpose"
+              value={state.draft.purpose}
+              maxLength={320}
               rows={3}
-              defaultValue={state.draft.purpose}
               disabled={state.phase === "APPROVED"}
-              onBlur={(event) => edit("purpose", event.currentTarget.value)}
+              onCommit={(value) => edit("purpose", value)}
             />
 
             <RitualField label="Begins">
@@ -202,19 +214,42 @@ export function RitualBuilder({
               </ol>
             </section>
 
-            <label htmlFor="ritual-completion">Done when</label>
-            <textarea
+            <EditableRitualField
               id="ritual-completion"
+              label="Done when"
+              value={state.draft.completion}
+              maxLength={320}
               rows={2}
-              defaultValue={state.draft.completion}
               disabled={state.phase === "APPROVED"}
-              onBlur={(event) => edit("completion", event.currentTarget.value)}
+              onCommit={(value) => edit("completion", value)}
             />
+
+            <RitualField label="Permissions">
+              <ul>
+                {state.draft.permissions.map((permission) => (
+                  <li key={permission}>{permission}</li>
+                ))}
+              </ul>
+            </RitualField>
+
+            <RitualField label="Review">
+              <strong>
+                {state.draft.reviewPolicy.ownerReview === "EVERY_RUN"
+                  ? "Review every Run"
+                  : "Review exceptions and uncertain results"}
+              </strong>
+            </RitualField>
 
             <RitualField label="Learning">
               <strong>Suggest improvements after Review</strong>
               <small>Changes always require your approval.</small>
             </RitualField>
+
+            {state.error ? (
+              <p className="ritual-charter__error" role="alert">
+                {state.error}
+              </p>
+            ) : null}
 
             {state.phase === "READY_FOR_APPROVAL" ? (
               <div className="ritual-approval">
@@ -224,10 +259,12 @@ export function RitualBuilder({
                 </p>
                 <button
                   type="button"
+                  disabled={state.error !== null}
                   onClick={() =>
                     onEvent({
                       type: "APPROVE",
-                      expectedRevision: state.draft!.revision,
+                      ritualId: identity.ritualId,
+                      expectedRevision: state.draft.revision,
                       occurredAt: now(),
                     })
                   }
@@ -255,6 +292,43 @@ export function RitualBuilder({
         )}
       </aside>
     </main>
+  );
+}
+
+function EditableRitualField({
+  id,
+  label,
+  value,
+  maxLength,
+  rows,
+  disabled,
+  onCommit,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  maxLength: number;
+  rows?: number;
+  disabled: boolean;
+  onCommit(value: string): void;
+}) {
+  const [pendingValue, setPendingValue] = useState(value);
+  useEffect(() => setPendingValue(value), [value]);
+  const shared = {
+    id,
+    value: pendingValue,
+    maxLength,
+    disabled,
+    onChange: (
+      event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
+    ) => setPendingValue(event.currentTarget.value),
+    onBlur: () => onCommit(pendingValue),
+  };
+  return (
+    <>
+      <label htmlFor={id}>{label}</label>
+      {rows ? <textarea {...shared} rows={rows} /> : <input {...shared} />}
+    </>
   );
 }
 

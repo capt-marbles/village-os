@@ -20,18 +20,24 @@ export async function createRitualBuilderWindow(): Promise<RitualBuilderWindow> 
     webPreferences: trustedWebPreferences(),
   });
   window.contentView.addChildView(appView);
+  let disposed = false;
+  const disposeView = () => {
+    if (disposed) return;
+    disposed = true;
+    window.contentView.removeChildView(appView);
+    if (!appView.webContents.isDestroyed()) appView.webContents.close();
+  };
   const layout = () => {
     const [width = 0, height = 0] = window.getContentSize();
     appView.setBounds({ x: 0, y: 0, width, height });
   };
   window.on("resize", layout);
   layout();
-  window.on("close", () => {
-    if (!appView.webContents.isDestroyed()) appView.webContents.close();
-  });
+  window.on("close", disposeView);
   try {
     await appView.webContents.loadURL("village://app/?mode=ritual-builder");
   } catch (error) {
+    disposeView();
     window.destroy();
     throw error;
   }
