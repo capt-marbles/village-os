@@ -95,6 +95,7 @@ export function validateReleaseFiles({
     "!dist/main/fixture-session-handler*",
     "!dist/main/internal-fixture-provisioner*",
     "!dist/main/internal-delegated-proof*",
+    "!dist/main/internal-continuity-proof-entry*",
     "!dist/main/internal-proof-entry*",
     "!dist/main/internal-paired-bootstrap*",
     "!dist/main/lazy-delegated-workflow*",

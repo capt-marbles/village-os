@@ -23,6 +23,15 @@ const ritualPackageEntry = await readFile(
   new URL("../apps/desktop/src/main/ritual-builder-entry.ts", import.meta.url),
   "utf8",
 );
+const continuityPackageConfig = parse(
+  await readFile(
+    new URL(
+      "../apps/desktop/electron-builder.continuity-e2e.yml",
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+);
 
 test("the packaged desktop command builds its complete workspace graph", () => {
   assert.match(
@@ -54,4 +63,19 @@ test("the Ritual smoke package opens its isolated surface, never the delegated p
   );
   assert.match(ritualPackageEntry, /runRitualBuilderApplication\(\)/);
   assert.doesNotMatch(ritualPackageEntry, /runVillageApplication/);
+});
+
+test("the continuity smoke package uses only its isolated proof entry", () => {
+  assert.match(
+    desktopPackage.scripts["package:mac:continuity-e2e"],
+    /electron-builder --dir --config electron-builder\.continuity-e2e\.yml --mac/,
+  );
+  assert.equal(
+    continuityPackageConfig.extraMetadata.main,
+    "dist/main/internal-continuity-proof-entry.js",
+  );
+  assert.notEqual(
+    continuityPackageConfig.extraMetadata.main,
+    "dist/main/production-entry.js",
+  );
 });
