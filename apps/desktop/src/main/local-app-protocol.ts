@@ -104,13 +104,31 @@ body { margin: 0; min-width: 320px; min-height: 100vh; background: radial-gradie
 .ritual-receipt h4 { margin: 1rem 0 .4rem; color: #607063; font-size: .65rem; letter-spacing: .1em; text-transform: uppercase; }
 .ritual-receipt ul { margin: 0; padding-left: 1.1rem; color: #37433a; font-size: .82rem; line-height: 1.55; }
 .ritual-receipt__uncertainty { border-left: 3px solid #b38c50; padding-left: .8rem; }
+.ritual-learning-pending { margin-top: 1.4rem; border: 1px dashed #8c9986; border-radius: 1rem; padding: 1rem; }
+.ritual-learning-pending strong { display: block; margin-bottom: .35rem; }
+.ritual-learning { margin-top: 1.4rem; border: 1px solid #718574; border-radius: 1.1rem; padding: 1.15rem; background: #f6f4e7; box-shadow: 0 16px 40px rgba(46, 58, 45, .1); }
+.ritual-learning > header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; }
+.ritual-learning h3 { margin: 0; font: 500 1.75rem "Iowan Old Style", serif; }
+.ritual-learning > header > span { border-radius: 999px; padding: .35rem .55rem; color: #5d4930; background: #eadbb3; font: 800 .62rem ui-monospace, monospace; text-transform: uppercase; }
+.ritual-learning__rationale { color: #263429; font-weight: 650; line-height: 1.5; }
+.ritual-learning blockquote { margin: .9rem 0; border-left: 3px solid #617562; padding: .2rem 0 .2rem .8rem; color: #516054; font-size: .82rem; }
+.ritual-learning__comparison { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
+.ritual-learning__comparison article { border: 1px solid #c2cabb; border-radius: .8rem; padding: .9rem; background: #fffdf2; }
+.ritual-learning__comparison article:last-child { border-color: #809c78; background: #edf5e8; }
+.ritual-learning__comparison h4, .ritual-learning__comparison small { margin: 0 0 .55rem; color: #617064; font: 800 .62rem ui-monospace, monospace; letter-spacing: .07em; text-transform: uppercase; }
+.ritual-learning__comparison p, .ritual-learning__comparison li { color: #364238; font-size: .78rem; line-height: 1.45; }
+.ritual-learning__comparison ol, .ritual-learning__comparison ul { margin: .45rem 0 .9rem; padding-left: 1.1rem; }
+.ritual-learning__guardrail { border-radius: .7rem; padding: .7rem; color: #3f553f; background: #e1ead9; font-size: .75rem; line-height: 1.45; }
+.ritual-learning footer button { min-height: 40px; margin: .5rem .45rem 0 0; border: 1px solid #617562; border-radius: 999px; padding: .6rem .9rem; color: #263429; background: transparent; font: 800 .76rem ui-sans-serif, system-ui; cursor: pointer; }
+.ritual-learning footer button:first-child { border-color: #38523a; color: #f3f7ed; background: #38523a; }
+.ritual-learning footer button:disabled { cursor: wait; opacity: .58; }
 .ritual-draft__empty { display: grid; place-items: center; min-height: 68vh; color: #637067; text-align: center; }
 .ritual-draft__empty span { display: grid; place-items: center; width: 4.5rem; height: 4.5rem; border: 1px solid #899488; border-radius: 50%; font: 500 2.4rem "Iowan Old Style", serif; }
 .ritual-draft__empty p { max-width: 24rem; line-height: 1.6; }
 button:focus-visible { outline: 3px solid white !important; outline-offset: 3px; }
 button:disabled { cursor: not-allowed !important; opacity: .52; }
 input:focus-visible, textarea:focus-visible { outline: 3px solid #b8e19f; outline-offset: 3px; }
-@media (max-width: 860px) { .ritual-builder { grid-template-columns: 1fr; } .ritual-conversation { padding: 2rem 1.25rem 3rem; } .ritual-draft { max-height: none; border-top: 1px solid #445043; border-left: 0; padding: 1.5rem 1.25rem; } .ritual-decisions > div { grid-template-columns: 1fr; } .ritual-message { grid-template-columns: 4rem 1fr; } }
+@media (max-width: 860px) { .ritual-builder { grid-template-columns: 1fr; } .ritual-conversation { padding: 2rem 1.25rem 3rem; } .ritual-draft { max-height: none; border-top: 1px solid #445043; border-left: 0; padding: 1.5rem 1.25rem; } .ritual-decisions > div, .ritual-learning__comparison { grid-template-columns: 1fr; } .ritual-message { grid-template-columns: 4rem 1fr; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; } }`;
 
 const shieldHtml = `<!doctype html>

@@ -3,6 +3,10 @@ import {
   ritualTestRunResultContentJsonSchema,
   ritualTestRunResultContentSchema,
   ritualTestRunResultSchema,
+  ritualLearningContextSchema,
+  ritualLearningProposalContentJsonSchema,
+  ritualLearningProposalContentSchema,
+  ritualLearningResultSchema,
   ritualStewardContextSchema,
   ritualStewardProposalContentJsonSchema,
   ritualStewardProposalContentSchema,
@@ -11,12 +15,15 @@ import {
   type RitualStewardResult,
   type RitualTestRunProviderContext,
   type RitualTestRunResult,
+  type RitualLearningContext,
+  type RitualLearningResult,
 } from "@village/contracts";
 import type { AppServerTransport } from "./codex-app-server.js";
 
 export interface RitualStewardProvider {
   draft(context: RitualStewardContext): Promise<RitualStewardResult>;
   testRun(context: RitualTestRunProviderContext): Promise<RitualTestRunResult>;
+  learn(context: RitualLearningContext): Promise<RitualLearningResult>;
   close(): Promise<void>;
 }
 
@@ -44,6 +51,83 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
     candidate: RitualTestRunProviderContext,
   ): Promise<RitualTestRunResult> {
     return this.enqueue(() => this.testRunExclusive(candidate));
+  }
+
+  learn(candidate: RitualLearningContext): Promise<RitualLearningResult> {
+    return this.enqueue(() => this.learnExclusive(candidate));
+  }
+
+  private async learnExclusive(
+    candidate: RitualLearningContext,
+  ): Promise<RitualLearningResult> {
+    const context = ritualLearningContextSchema.parse(candidate);
+    if (this.closed) return learningWaiting(context, "PROVIDER_UNAVAILABLE");
+    const transport = this.transport ?? this.transportFactory();
+    this.transport = transport;
+    try {
+      await this.ensureInitialized(transport);
+      const account = (await transport.request("account/read", {
+        refreshToken: false,
+      })) as { account?: { type?: unknown } | null };
+      if (account.account?.type !== "chatgpt") {
+        return learningWaiting(context, "AUTHENTICATION_REQUIRED");
+      }
+      const threadId = await this.startLearningThread();
+      if (!threadId) return learningWaiting(context, "PROVIDER_UNAVAILABLE");
+      const raw = await transport.runToolTurn(
+        threadId,
+        {
+          schemaVersion: 1,
+          currentRitual: {
+            name: context.ritual.name,
+            purpose: context.ritual.purpose,
+            trigger: context.ritual.trigger,
+            steps: context.ritual.steps,
+            permissions: context.ritual.permissions,
+            completion: context.ritual.completion,
+            reviewPolicy: context.ritual.reviewPolicy,
+          },
+          testReceipt: {
+            outcome: context.receipt.outcome,
+            summary: context.receipt.summary,
+            evidence: context.receipt.evidence,
+            uncertainties: context.receipt.uncertainties,
+            externalEffects: context.receipt.externalEffects,
+          },
+          ownerFeedback: context.ownerFeedback,
+          constraints: {
+            mode: "PROPOSE_ONLY",
+            execution: "NO_RUN",
+            externalEffects: "NONE",
+          },
+        },
+        { toolName: "village_ritual_learning_proposal", timeoutMs: 30_000 },
+      );
+      const content = ritualLearningProposalContentSchema.safeParse(
+        normalizeProposedDefinitionStepKeys(raw),
+      );
+      if (!content.success) {
+        return learningWaiting(context, "MALFORMED_PROVIDER_OUTPUT");
+      }
+      return ritualLearningResultSchema.parse({
+        status: "proposal",
+        proposalId: context.proposalId,
+        ritualId: context.ritual.ritualId,
+        fromRevision: context.ritual.ritualRevision,
+        receiptId: context.receipt.receiptId,
+        ownerFeedback: context.ownerFeedback,
+        ...content.data,
+      });
+    } catch (error) {
+      const timeout =
+        error instanceof Error &&
+        error.message === "CODEX_APP_SERVER_TURN_TIMEOUT";
+      if (!timeout) await this.invalidateTransport();
+      return learningWaiting(
+        context,
+        timeout ? "TIME_BUDGET_EXHAUSTED" : "PROVIDER_UNAVAILABLE",
+      );
+    }
   }
 
   private async draftExclusive(
@@ -213,6 +297,29 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
       : undefined;
   }
 
+  private async startLearningThread(): Promise<string | undefined> {
+    if (!this.transport) return undefined;
+    const created = (await this.transport.request("thread/start", {
+      ephemeral: true,
+      experimentalRawEvents: false,
+      environments: [],
+      baseInstructions:
+        "You are the Village Steward proposing one governed improvement to an approved Ritual. Use only the current Ritual, its bounded Test Receipt, and explicit owner feedback. Call village_ritual_learning_proposal exactly once. Return a complete proposed definition and concise rationale. Do not execute, browse, add credentials or URLs, broaden permissions beyond the feedback, or silently apply the change.",
+      dynamicTools: [
+        {
+          type: "function",
+          name: "village_ritual_learning_proposal",
+          description:
+            "Propose a complete replacement Ritual definition for explicit owner review.",
+          inputSchema: ritualLearningProposalContentJsonSchema,
+        },
+      ],
+    })) as { thread?: { id?: unknown } };
+    return typeof created.thread?.id === "string"
+      ? created.thread.id
+      : undefined;
+  }
+
   private async ensureInitialized(
     transport: AppServerTransport,
   ): Promise<void> {
@@ -285,6 +392,16 @@ function normalizeProposalStepKeys(candidate: unknown): unknown {
   return { ...candidate, steps };
 }
 
+function normalizeProposedDefinitionStepKeys(candidate: unknown): unknown {
+  if (!isRecord(candidate) || !isRecord(candidate.proposedDefinition)) {
+    return candidate;
+  }
+  return {
+    ...candidate,
+    proposedDefinition: normalizeProposalStepKeys(candidate.proposedDefinition),
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -297,6 +414,20 @@ function waiting(
     status: "waiting",
     draftId: context.draftId,
     requestRevision: context.requestRevision,
+    reason,
+  };
+}
+
+function learningWaiting(
+  context: RitualLearningContext,
+  reason: Extract<RitualLearningResult, { status: "waiting" }>["reason"],
+): RitualLearningResult {
+  return {
+    status: "waiting",
+    proposalId: context.proposalId,
+    ritualId: context.ritual.ritualId,
+    fromRevision: context.ritual.ritualRevision,
+    receiptId: context.receipt.receiptId,
     reason,
   };
 }

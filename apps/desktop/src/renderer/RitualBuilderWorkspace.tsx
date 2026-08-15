@@ -2,6 +2,9 @@ import type {
   ApprovedRitualRevision,
   RitualStewardContext,
   RitualStewardResult,
+  RitualLearningApprovalRequest,
+  RitualLearningFeedbackRequest,
+  RitualLearningResult,
   RitualTestReceipt,
   RitualTestRunControllerResult,
   RitualTestRunRequest,
@@ -28,6 +31,12 @@ export interface RitualBuilderBridge {
   testRun(
     request: RitualTestRunRequest,
   ): Promise<RitualTestRunControllerResult>;
+  proposeLearning(
+    request: RitualLearningFeedbackRequest,
+  ): Promise<RitualLearningResult>;
+  approveLearning(
+    request: RitualLearningApprovalRequest,
+  ): Promise<ApprovedRitualRevision>;
 }
 
 declare global {
@@ -48,6 +57,7 @@ export function RitualBuilderWorkspace({
   const [startupError, setStartupError] = useState<string | null>(null);
   const generation = useRef(0);
   const testRunInFlight = useRef(false);
+  const learningInFlight = useRef(false);
 
   useEffect(() => {
     if (!bridge) {
@@ -82,6 +92,7 @@ export function RitualBuilderWorkspace({
       active = false;
       generation.current += 1;
       testRunInFlight.current = false;
+      learningInFlight.current = false;
     };
   }, [bridge]);
 
@@ -209,12 +220,102 @@ export function RitualBuilderWorkspace({
         });
       return;
     }
+    if (event.type === "SUBMIT_FEEDBACK") {
+      if (learningInFlight.current || state.phase !== "GIVE_FEEDBACK") return;
+      const next = reduceRitualBuilder(state, event);
+      setState(next);
+      if (next.phase !== "SHAPING_LEARNING") return;
+      learningInFlight.current = true;
+      const requestGeneration = ++generation.current;
+      void bridge
+        .proposeLearning({
+          schemaVersion: 1,
+          ritualId: next.approved.ritualId,
+          ritualRevision: next.approved.ritualRevision,
+          receiptId: next.receipt.receiptId,
+          feedback: next.pendingFeedback,
+        })
+        .then((result) => {
+          if (generation.current !== requestGeneration) return;
+          setState((current) =>
+            result.status === "proposal"
+              ? reduceRitualBuilder(current, {
+                  type: "LEARNING_PROPOSED",
+                  proposal: result,
+                })
+              : reduceRitualBuilder(current, {
+                  type: "LEARNING_FAILED",
+                  message: learningFailureCopy(result.reason),
+                }),
+          );
+        })
+        .catch(() => {
+          if (generation.current !== requestGeneration) return;
+          setState((current) =>
+            reduceRitualBuilder(current, {
+              type: "LEARNING_FAILED",
+              message:
+                "The Steward could not shape a safe revision. Nothing changed; try again.",
+            }),
+          );
+        })
+        .finally(() => {
+          learningInFlight.current = false;
+        });
+      return;
+    }
+    if (event.type === "APPROVE_LEARNING") {
+      if (learningInFlight.current) return;
+      const next = reduceRitualBuilder(state, event);
+      setState(next);
+      if (next.phase !== "SAVING_LEARNING") return;
+      learningInFlight.current = true;
+      void bridge
+        .approveLearning({
+          schemaVersion: 1,
+          proposalId: next.proposal.proposalId,
+          ritualId: next.approved.ritualId,
+          expectedFromRevision: next.approved.ritualRevision,
+          approvedAt: next.pendingRevision.approvedAt,
+        })
+        .then(() => {
+          setState((current) =>
+            reduceRitualBuilder(current, { type: "LEARNING_SAVED" }),
+          );
+        })
+        .catch(() => {
+          setState((current) =>
+            reduceRitualBuilder(current, { type: "LEARNING_SAVE_FAILED" }),
+          );
+        })
+        .finally(() => {
+          learningInFlight.current = false;
+        });
+      return;
+    }
     setState((current) => reduceRitualBuilder(current, event));
   };
 
   if (startupError) return <p role="alert">{startupError}</p>;
   if (!identity) return <p role="status">Opening the Steward’s workroom…</p>;
   return <RitualBuilder identity={identity} state={state} onEvent={onEvent} />;
+}
+
+function learningFailureCopy(
+  reason: Extract<RitualLearningResult, { status: "waiting" }>["reason"],
+): string {
+  switch (reason) {
+    case "AUTHENTICATION_REQUIRED":
+      return "Sign in to ChatGPT in Village, then ask the Steward again.";
+    case "TIME_BUDGET_EXHAUSTED":
+      return "The Steward took too long to shape the revision. Nothing changed; try again.";
+    case "MALFORMED_PROVIDER_OUTPUT":
+      return "The Steward returned a revision Village could not safely validate. Nothing changed.";
+    case "STALE_STEWARD_RESULT":
+      return "Village ignored an outdated learning proposal. Nothing changed; try again.";
+    case "PROVIDER_UNAVAILABLE":
+      return "The local ChatGPT provider became unavailable. Nothing changed; try again.";
+  }
 }
 
 function testRunFailureCopy(

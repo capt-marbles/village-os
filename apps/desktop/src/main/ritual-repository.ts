@@ -11,10 +11,13 @@ import { dirname } from "node:path";
 import {
   approvedRitualRevisionSchema,
   approvedRitualStoreSchema,
+  ritualLearningProposalSchema,
   ritualStoreSchema,
+  ritualStoreV2Schema,
   ritualTestReceiptSchema,
   type ApprovedRitualRevision,
   type RitualStore,
+  type RitualLearningProposal,
   type RitualTestReceipt,
 } from "@village/contracts";
 
@@ -38,7 +41,9 @@ export class RitualRepository {
         approved,
         receipt: approved
           ? (store.receipts.findLast(
-              (receipt) => receipt.ritualId === approved.ritualId,
+              (receipt) =>
+                receipt.ritualId === approved.ritualId &&
+                receipt.ritualRevision === approved.ritualRevision,
             ) ?? null)
           : null,
       };
@@ -48,7 +53,7 @@ export class RitualRepository {
   find(ritualId: string): Promise<ApprovedRitualRevision | null> {
     return this.enqueue(async () => {
       return (
-        (await this.read()).rituals.find(
+        (await this.read()).rituals.findLast(
           (ritual) => ritual.ritualId === ritualId,
         ) ?? null
       );
@@ -60,16 +65,23 @@ export class RitualRepository {
       const ritual = approvedRitualRevisionSchema.parse(candidate);
       const current = await this.read();
       const stored = current.rituals.find(
-        (entry) => entry.ritualId === ritual.ritualId,
+        (entry) =>
+          entry.ritualId === ritual.ritualId &&
+          entry.ritualRevision === ritual.ritualRevision,
       );
       if (stored && JSON.stringify(stored) === JSON.stringify(ritual)) return;
       if (stored) throw new Error("RITUAL_CONFLICT");
-      const rituals = current.rituals.filter(
-        (stored) => stored.ritualId !== ritual.ritualId,
+      const latest = current.rituals.findLast(
+        (entry) => entry.ritualId === ritual.ritualId,
       );
-      if (rituals.length >= 100) throw new Error("RITUAL_STORE_FULL");
-      rituals.push(ritual);
-      await this.write({ ...current, rituals });
+      if (latest && ritual.ritualRevision !== latest.ritualRevision + 1) {
+        throw new Error("STALE_RITUAL_REVISION");
+      }
+      if (current.rituals.length >= 100) throw new Error("RITUAL_STORE_FULL");
+      await this.write({
+        ...current,
+        rituals: [...current.rituals, ritual],
+      });
     });
   }
 
@@ -78,7 +90,9 @@ export class RitualRepository {
       const receipt = ritualTestReceiptSchema.parse(candidate);
       const current = await this.read();
       const ritual = current.rituals.find(
-        (entry) => entry.ritualId === receipt.ritualId,
+        (entry) =>
+          entry.ritualId === receipt.ritualId &&
+          entry.ritualRevision === receipt.ritualRevision,
       );
       if (!ritual || ritual.ritualRevision !== receipt.ritualRevision) {
         throw new Error("STALE_RITUAL_TEST_RUN");
@@ -98,6 +112,63 @@ export class RitualRepository {
     });
   }
 
+  findLearningProposal(
+    proposalId: string,
+  ): Promise<RitualLearningProposal | null> {
+    return this.enqueue(async () => {
+      return (
+        (await this.read()).learningProposals.find(
+          (proposal) => proposal.proposalId === proposalId,
+        ) ?? null
+      );
+    });
+  }
+
+  findReceipt(receiptId: string): Promise<RitualTestReceipt | null> {
+    return this.enqueue(async () => {
+      return (
+        (await this.read()).receipts.find(
+          (receipt) => receipt.receiptId === receiptId,
+        ) ?? null
+      );
+    });
+  }
+
+  saveLearningProposal(candidate: RitualLearningProposal): Promise<void> {
+    return this.enqueue(async () => {
+      const proposal = ritualLearningProposalSchema.parse(candidate);
+      const current = await this.read();
+      const ritual = current.rituals.find(
+        (entry) =>
+          entry.ritualId === proposal.ritualId &&
+          entry.ritualRevision === proposal.fromRevision,
+      );
+      const receipt = current.receipts.find(
+        (entry) => entry.receiptId === proposal.receiptId,
+      );
+      if (
+        !ritual ||
+        !receipt ||
+        receipt.ritualId !== ritual.ritualId ||
+        receipt.ritualRevision !== ritual.ritualRevision
+      ) {
+        throw new Error("STALE_RITUAL_LEARNING_PROPOSAL");
+      }
+      const stored = current.learningProposals.find(
+        (entry) => entry.proposalId === proposal.proposalId,
+      );
+      if (stored && JSON.stringify(stored) === JSON.stringify(proposal)) return;
+      if (stored) throw new Error("RITUAL_LEARNING_PROPOSAL_CONFLICT");
+      if (current.learningProposals.length >= 100) {
+        throw new Error("RITUAL_LEARNING_PROPOSAL_STORE_FULL");
+      }
+      await this.write({
+        ...current,
+        learningProposals: [...current.learningProposals, proposal],
+      });
+    });
+  }
+
   private async read(): Promise<RitualStore> {
     try {
       const metadata = await lstat(this.path);
@@ -112,9 +183,23 @@ export class RitualRepository {
       const raw = JSON.parse(await readFile(this.path, "utf8"));
       const current = ritualStoreSchema.safeParse(raw);
       if (current.success) return current.data;
+      const versionTwo = ritualStoreV2Schema.safeParse(raw);
+      if (versionTwo.success) {
+        return {
+          schemaVersion: 3,
+          rituals: versionTwo.data.rituals,
+          receipts: versionTwo.data.receipts,
+          learningProposals: [],
+        };
+      }
       const legacy = approvedRitualStoreSchema.safeParse(raw);
       if (!legacy.success) throw new Error("RITUAL_STORE_CORRUPT");
-      return { schemaVersion: 2, rituals: legacy.data.rituals, receipts: [] };
+      return {
+        schemaVersion: 3,
+        rituals: legacy.data.rituals,
+        receipts: [],
+        learningProposals: [],
+      };
     } catch (error) {
       if (error instanceof Error && error.message === "RITUAL_STORE_CORRUPT") {
         throw error;
@@ -124,7 +209,12 @@ export class RitualRepository {
         "code" in error &&
         error.code === "ENOENT"
       ) {
-        return { schemaVersion: 2, rituals: [], receipts: [] };
+        return {
+          schemaVersion: 3,
+          rituals: [],
+          receipts: [],
+          learningProposals: [],
+        };
       }
       throw new Error("RITUAL_STORE_CORRUPT", { cause: error });
     }

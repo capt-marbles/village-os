@@ -26,6 +26,7 @@ export const effectIdSchema = villageId("efx");
 export const ritualDraftIdSchema = villageId("rtd");
 export const ritualIdSchema = villageId("rtl");
 export const ritualRunIdSchema = villageId("rrn");
+export const ritualLearningProposalIdSchema = villageId("rlp");
 
 export const setupWorkflowKindSchema = z.literal(
   "OWNED_FIXTURE_ACCOUNT_SETUP_V1",

@@ -3,7 +3,7 @@ import vm from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 
 describe("Ritual Builder preload", () => {
-  it("exposes only the five fixed Ritual operations", async () => {
+  it("exposes only the seven fixed Ritual operations", async () => {
     const source = await readFile(
       new URL("../src/preload/ritual-builder-bridge.cjs", import.meta.url),
       "utf8",
@@ -23,9 +23,11 @@ describe("Ritual Builder preload", () => {
     });
     expect(Object.keys(bridge).sort()).toEqual([
       "approve",
+      "approveLearning",
       "createDraftIdentity",
       "draft",
       "initialize",
+      "proposeLearning",
       "testRun",
     ]);
     await bridge.initialize!();
@@ -33,6 +35,8 @@ describe("Ritual Builder preload", () => {
     await bridge.draft!({ purpose: "bounded" });
     await bridge.approve!({ ritualId: "bounded" });
     await bridge.testRun!({ ritualId: "bounded", sample: "bounded" });
+    await bridge.proposeLearning!({ ritualId: "bounded", feedback: "bounded" });
+    await bridge.approveLearning!({ ritualId: "bounded" });
     expect(invoke).toHaveBeenNthCalledWith(
       1,
       "village:ritual-builder:initialize",
@@ -53,6 +57,16 @@ describe("Ritual Builder preload", () => {
       5,
       "village:ritual-builder:test-run",
       { ritualId: "bounded", sample: "bounded" },
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      6,
+      "village:ritual-builder:propose-learning",
+      { ritualId: "bounded", feedback: "bounded" },
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      7,
+      "village:ritual-builder:approve-learning",
+      { ritualId: "bounded" },
     );
   });
 });
