@@ -1,4 +1,5 @@
-export type SensitiveOperation = "TAKEOVER" | "SECRET_USE" | "FORGET_SESSION";
+export type SensitiveOperation =
+  "TAKEOVER" | "SECRET_USE" | "FORGET_SESSION" | "IMPORT_SITE_SESSION";
 
 export interface SensitiveActionBinding {
   principalId: string;
