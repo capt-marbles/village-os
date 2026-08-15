@@ -1,8 +1,10 @@
 import {
+  canonicalContinuityActivationRequestBytes,
   canonicalContinuityAcknowledgementBytes,
   canonicalContinuityFetchBytes,
   canonicalContinuityRecipientKeyEnrollmentBytes,
   continuityAcknowledgementEnvelopeSchema,
+  continuityActivationRequestSchema,
   continuityFetchEnvelopeSchema,
   continuityRecipientKeyEnrollmentSchema,
 } from "@village/contracts";
@@ -20,6 +22,61 @@ const binding = {
 };
 
 describe("desktop encrypted continuity mailbox client", () => {
+  it("signs activation discovery and validates role-scoped public material", async () => {
+    const keys = await crypto.subtle.generateKey("Ed25519", false, [
+      "sign",
+      "verify",
+    ]);
+    let candidate: unknown;
+    const request = vi.fn<typeof fetch>(async (_input, init) => {
+      candidate = JSON.parse(String(init?.body));
+      return Response.json({
+        ok: true,
+        activations: [
+          {
+            role: "DESTINATION",
+            binding,
+            peerSigningPublicKey: {
+              kty: "OKP",
+              crv: "Ed25519",
+              x: "s".repeat(43),
+            },
+          },
+        ],
+      });
+    });
+    const client = new ContinuityMailboxClient({
+      baseUrl: new URL("https://village.test"),
+      privateKey: keys.privateKey,
+      sequences: { reserveNext: async () => 7 },
+      request,
+      now: () => Date.parse("2026-08-15T20:00:00.000Z"),
+    });
+
+    await expect(
+      client.loadActivations({
+        principalId: binding.principalId,
+        deviceId: binding.destinationDeviceId,
+        browserSessionId: binding.destinationBrowserSessionId,
+        site: binding.site,
+      }),
+    ).resolves.toMatchObject([{ role: "DESTINATION", binding }]);
+
+    const activation = continuityActivationRequestSchema.parse(candidate);
+    const { signature, ...unsigned } = activation;
+    await expect(
+      crypto.subtle.verify(
+        "Ed25519",
+        keys.publicKey,
+        Buffer.from(signature, "base64url"),
+        canonicalContinuityActivationRequestBytes(unsigned),
+      ),
+    ).resolves.toBe(true);
+    expect(String(request.mock.calls[0]![0])).toBe(
+      "https://village.test/api/site-session-continuity/activations",
+    );
+  });
+
   it("signs recipient-key enrollment for the paired destination session", async () => {
     const keys = await crypto.subtle.generateKey("Ed25519", false, [
       "sign",

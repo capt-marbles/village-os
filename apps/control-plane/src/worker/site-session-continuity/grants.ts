@@ -1,5 +1,7 @@
 import {
   continuityAcknowledgementEnvelopeSchema,
+  continuityActivationRequestSchema,
+  continuityActivationResponseSchema,
   continuityFetchEnvelopeSchema,
   continuityGrantIdSchema,
   continuityGrantRequestSchema,
@@ -8,10 +10,14 @@ import {
   deviceCredentialSchema,
   encryptedContinuityRevisionSchema,
   principalIdSchema,
+  x25519PublicKeySchema,
   type ContinuityBinding,
 } from "@village/contracts";
 import type { Environment } from "../../env.js";
-import { verifyContinuityRecipientKeyEnrollment } from "../browser-control/device-credentials.js";
+import {
+  verifyContinuityActivationRequest,
+  verifyContinuityRecipientKeyEnrollment,
+} from "../browser-control/device-credentials.js";
 
 type GrantRow = {
   principal_id: string;
@@ -37,6 +43,122 @@ type EligibleSessionRow = {
   credential_status: string;
   protocol_version: number;
 };
+
+type ActivationGrantRow = GrantRow & {
+  destination_encryption_public_key: string;
+  source_signing_public_key: string;
+  destination_signing_public_key: string;
+};
+
+export async function getContinuityActivations(
+  environment: Environment,
+  candidate: unknown,
+  now: string,
+) {
+  const request = continuityActivationRequestSchema.safeParse(candidate);
+  if (!request.success) {
+    return { ok: false as const, code: "INVALID_CONTINUITY_ACTIVATION" };
+  }
+  if (
+    Date.parse(request.data.issuedAt) > Date.parse(now) + 5_000 ||
+    Date.parse(request.data.expiresAt) <= Date.parse(now)
+  ) {
+    return { ok: false as const, code: "CONTINUITY_ACTIVATION_EXPIRED" };
+  }
+  const session = await eligibleSession(
+    environment.VILLAGE_DB,
+    request.data.principalId,
+    request.data.browserSessionId,
+  );
+  if (
+    !session ||
+    session.device_id !== request.data.deviceId ||
+    session.site !== request.data.site ||
+    session.profile_state !== "PRESENT" ||
+    session.credential_status !== "ACTIVE" ||
+    session.protocol_version !== 1
+  ) {
+    return { ok: false as const, code: "CONTINUITY_SESSION_NOT_ELIGIBLE" };
+  }
+  const signingKey = parseSigningKey(session.public_key);
+  if (
+    !signingKey ||
+    !(await verifyContinuityActivationRequest(request.data, signingKey))
+  ) {
+    return { ok: false as const, code: "INVALID_DEVICE_SIGNATURE" };
+  }
+  const accepted = await environment.VILLAGE_DB.prepare(
+    `UPDATE browser_sessions
+     SET last_continuity_activation_sequence = ?
+     WHERE principal_id = ? AND browser_session_id = ? AND device_id = ?
+       AND site = ? AND last_continuity_activation_sequence < ?`,
+  )
+    .bind(
+      request.data.sequence,
+      request.data.principalId,
+      request.data.browserSessionId,
+      request.data.deviceId,
+      request.data.site,
+      request.data.sequence,
+    )
+    .run();
+  if (accepted.meta.changes !== 1) {
+    return { ok: false as const, code: "CONTINUITY_ACTIVATION_REPLAYED" };
+  }
+
+  const rows = await environment.VILLAGE_DB.prepare(
+    `SELECT * FROM continuity_grants
+     WHERE principal_id = ? AND site = ? AND state = 'ACTIVE'
+       AND expires_at > ?
+       AND ((source_device_id = ? AND source_browser_session_id = ?)
+         OR (destination_device_id = ? AND destination_browser_session_id = ?))
+     ORDER BY created_at DESC LIMIT 20`,
+  )
+    .bind(
+      request.data.principalId,
+      request.data.site,
+      now,
+      request.data.deviceId,
+      request.data.browserSessionId,
+      request.data.deviceId,
+      request.data.browserSessionId,
+    )
+    .all<ActivationGrantRow>();
+  const activations = rows.results.map((row) => {
+    const binding: ContinuityBinding = {
+      principalId: row.principal_id,
+      grantId: row.grant_id,
+      sourceDeviceId: row.source_device_id,
+      destinationDeviceId: row.destination_device_id,
+      sourceBrowserSessionId: row.source_browser_session_id,
+      destinationBrowserSessionId: row.destination_browser_session_id,
+      site: row.site,
+    };
+    if (
+      row.source_device_id === request.data.deviceId &&
+      row.source_browser_session_id === request.data.browserSessionId
+    ) {
+      return {
+        role: "SOURCE" as const,
+        binding,
+        peerSigningPublicKey: parseRequiredSigningKey(
+          row.destination_signing_public_key,
+        ),
+        destinationEncryptionPublicKey: parseRequiredEncryptionKey(
+          row.destination_encryption_public_key,
+        ),
+      };
+    }
+    return {
+      role: "DESTINATION" as const,
+      binding,
+      peerSigningPublicKey: parseRequiredSigningKey(
+        row.source_signing_public_key,
+      ),
+    };
+  });
+  return continuityActivationResponseSchema.parse({ ok: true, activations });
+}
 
 export async function createContinuityGrant(
   environment: Environment,
@@ -701,6 +823,14 @@ function parseSigningKey(value: string) {
   } catch {
     return null;
   }
+}
+
+function parseRequiredSigningKey(value: string) {
+  return deviceCredentialSchema.shape.publicKey.parse(JSON.parse(value));
+}
+
+function parseRequiredEncryptionKey(value: string) {
+  return x25519PublicKeySchema.parse(JSON.parse(value));
 }
 
 function sameSigningKey(

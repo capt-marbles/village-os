@@ -1,14 +1,19 @@
 import {
   browserSessionIdSchema,
+  canonicalContinuityActivationRequestBytes,
   canonicalContinuityAcknowledgementBytes,
   canonicalContinuityFetchBytes,
   canonicalContinuityRecipientKeyEnrollmentBytes,
   continuityAcknowledgementEnvelopeSchema,
+  continuityActivationRequestSchema,
+  continuityActivationResponseSchema,
   continuityFetchEnvelopeSchema,
   continuityRecipientKeyEnrollmentSchema,
   encryptedContinuityRevisionSchema,
   deviceIdSchema,
   type ContinuityBinding,
+  type ContinuityActivation,
+  type ContinuityActivationIdentity,
   type EncryptedContinuityRevision,
 } from "@village/contracts";
 import { z } from "zod";
@@ -63,6 +68,41 @@ export class ContinuityMailboxClient {
     this.request = options.request ?? fetch;
     this.now = options.now ?? Date.now;
     this.timeoutMs = options.timeoutMs ?? 30_000;
+  }
+
+  async loadActivations(
+    identity: ContinuityActivationIdentity,
+  ): Promise<ContinuityActivation[]> {
+    const sequence = await this.options.sequences.reserveNext(
+      identity.deviceId,
+      identity.browserSessionId,
+    );
+    const issuedAt = this.now();
+    const unsigned = {
+      protocolVersion: 1 as const,
+      ...identity,
+      sequence,
+      issuedAt: new Date(issuedAt).toISOString(),
+      expiresAt: new Date(issuedAt + 30_000).toISOString(),
+    };
+    const signature = await crypto.subtle.sign(
+      "Ed25519",
+      this.options.privateKey,
+      canonicalContinuityActivationRequestBytes(unsigned),
+    );
+    const activation = continuityActivationRequestSchema.parse({
+      ...unsigned,
+      signature: Buffer.from(signature).toString("base64url"),
+    });
+    const response = await this.postPath(
+      "/api/site-session-continuity/activations",
+      activation,
+    );
+    const body = continuityActivationResponseSchema.safeParse(response);
+    if (!body.success) {
+      throw responseError(response, "INVALID_CONTINUITY_ACTIVATION_RESPONSE");
+    }
+    return body.data.activations;
   }
 
   async enrollRecipientKey(

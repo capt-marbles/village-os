@@ -41,6 +41,7 @@ import {
   deleteContinuityGrant,
   fetchContinuityRevision,
   getContinuityGrant,
+  getContinuityActivations,
   getContinuitySetup,
   enrollContinuityRecipientKey,
   publishContinuityRevision,
@@ -145,6 +146,20 @@ export async function routeRequest(
         environment,
         auth.principalId,
         await boundedJson(request),
+      );
+      return json(request, environment, result, result.ok ? 200 : 409);
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/site-session-continuity/activations"
+    ) {
+      const origin = authorizeNonBrowserClient(request, environment);
+      if (!origin.ok) return json(request, environment, origin, 403);
+      const result = await getContinuityActivations(
+        environment,
+        await boundedJson(request),
+        new Date().toISOString(),
       );
       return json(request, environment, result, result.ok ? 200 : 409);
     }

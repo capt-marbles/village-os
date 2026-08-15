@@ -12,6 +12,13 @@ const storageRecoveryCodes = new Set([
   "SECURE_RECIPIENT_KEY_STORAGE_UNAVAILABLE",
 ]);
 
+const stateRecoveryCodes = new Set([
+  "CONTINUITY_SOURCE_JOURNAL_CORRUPT",
+  "CONTINUITY_JOURNAL_CORRUPT",
+  "CONTINUITY_JOURNAL_BINDING_MISMATCH",
+  "MULTIPLE_CONTINUITY_GRANTS_OWNER_RECOVERY_REQUIRED",
+]);
+
 export function classifyContinuityEnrollmentError(
   error: unknown,
 ): LocalDiagnostic {
@@ -30,9 +37,17 @@ export function classifyContinuityEnrollmentError(
       retriable: false,
     };
   }
+  if (stateRecoveryCodes.has(code)) {
+    return {
+      component: "CONTINUITY",
+      code: "SESSION_CONTINUITY_OWNER_RECOVERY_REQUIRED",
+      retriable: false,
+    };
+  }
   if (
     code === "CONTINUITY_CONTROL_PLANE_TIMEOUT" ||
     code === "CONTINUITY_CONTROL_PLANE_REJECTED" ||
+    code === "PROFILE_IN_USE" ||
     error instanceof TypeError
   ) {
     return {

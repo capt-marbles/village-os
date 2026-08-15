@@ -1,4 +1,4 @@
-import { app, protocol, shell } from "electron";
+import { app, protocol, session, shell } from "electron";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,7 +26,10 @@ import {
 import { PairingClient } from "./pairing-client.js";
 import { PairingDeepLinkInbox } from "./pairing-deep-link.js";
 import { createPairingWindow } from "./pairing-window.js";
-import { installGlobalSecurityPolicy } from "./security.js";
+import {
+  configureBrowserSession,
+  installGlobalSecurityPolicy,
+} from "./security.js";
 import { verifyMacOsOwnerPresence } from "./step-up-auth.js";
 import type { InternalDelegatedWorkflowOperations } from "./app-window.js";
 import {
@@ -39,6 +42,12 @@ import {
 } from "./runtime-control-plane.js";
 import { ContinuityRecipientKeyVault } from "./continuity-recipient-key-vault.js";
 import { startNonBlockingContinuityEnrollment } from "./runtime-continuity-enrollment.js";
+import { RuntimeContinuityActivation } from "./runtime-continuity-activation.js";
+import { LocalBrowserHost } from "../browser/local-browser-host.js";
+import {
+  ensureProtectedProfile,
+  ProfileLock,
+} from "../browser/profile-protection.js";
 import {
   createRitualBuilderWindow,
   type RitualBuilderWindow,
@@ -158,17 +167,50 @@ export async function startVillageRuntime(
       identity,
       deviceIdentitySource,
     });
-    enrollContinuityRecipient = () =>
-      createRuntimeFixtureContinuityRecipient({
+    const recipientKeySource = new ContinuityRecipientKeyVault(
+      join(identityDirectory, "continuity-recipient.json"),
+      packagedProtector!,
+    );
+    enrollContinuityRecipient = async () => {
+      const continuity = await createRuntimeFixtureContinuityRecipient({
         controlPlaneUrl,
         userDataPath,
         identity,
         deviceIdentitySource,
-        recipientKeySource: new ContinuityRecipientKeyVault(
-          join(identityDirectory, "continuity-recipient.json"),
-          packagedProtector!,
-        ),
+        recipientKeySource,
       });
+      if (continuity.state === "NOT_CONFIGURED") return continuity;
+      const fixtureBrowserSessionId = identity.fixtureBrowserSessionId!;
+      const profile = await ensureProtectedProfile(
+        LocalBrowserHost.profileRoot(userDataPath),
+        {
+          principalId: identity.principalId,
+          deviceId: identity.deviceId,
+          site: "OWNED_FIXTURE",
+        },
+      );
+      const profileLock = await ProfileLock.acquire(profile.path);
+      try {
+        const fixtureSession = session.fromPath(profile.path, { cache: true });
+        configureBrowserSession(fixtureSession);
+        const activation = new RuntimeContinuityActivation({
+          identity: {
+            principalId: identity.principalId,
+            deviceId: identity.deviceId,
+            browserSessionId: fixtureBrowserSessionId,
+            site: "OWNED_FIXTURE",
+          },
+          journalRoot: join(userDataPath, "continuity", "runtime"),
+          devicePrivateKey: deviceIdentity.privateKey,
+          recipientPrivateKey: continuity.recipientKey.privateKey,
+          cookieStore: fixtureSession.cookies,
+          mailbox: continuity.mailboxClient,
+        });
+        return await activation.synchronize();
+      } finally {
+        await profileLock.release();
+      }
+    };
   }
   const villageWindow = await createVillageAppWindow({
     ...identity,
