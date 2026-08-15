@@ -1,0 +1,11 @@
+extends: ./electron-builder.yml
+publish: null
+extraMetadata:
+  main: dist/main/internal-continuity-proof-entry.js
+files:
+  - dist/**
+  - package.json
+mac:
+  target: dir
+  identity: "-"
+  notarize: false

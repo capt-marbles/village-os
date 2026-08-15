@@ -13,6 +13,7 @@ import {
 } from "./control-plane-client.js";
 import { join } from "node:path";
 import type { CoordinatorSnapshot } from "./delegated-workflow-controller.js";
+import { ContinuityMailboxClient } from "./continuity-mailbox-client.js";
 
 interface DeviceIdentitySource {
   load(): Promise<DeviceIdentity>;
@@ -52,6 +53,20 @@ export async function createRuntimeControlPlaneAutomationFence(
   return (await createRuntimeControlPlaneComposition(options)).automationFence;
 }
 
+export async function createRuntimeContinuityMailboxClient(
+  options: RuntimeControlPlaneOptions,
+): Promise<ContinuityMailboxClient> {
+  const deviceIdentity = await loadPairedDeviceIdentity(options);
+  return new ContinuityMailboxClient({
+    baseUrl: options.controlPlaneUrl,
+    privateKey: deviceIdentity.privateKey,
+    sequences: new FileProtocolSequenceStore(
+      join(options.userDataPath, "continuity", "sequences.json"),
+    ),
+    ...(options.request ? { request: options.request } : {}),
+  });
+}
+
 export async function createRuntimeControlPlaneComposition(
   options: RuntimeControlPlaneOptions,
 ): Promise<{
@@ -62,11 +77,7 @@ export async function createRuntimeControlPlaneComposition(
     leaseEpoch: number,
   ): ReturnType<ControlPlaneClient["connect"]>;
 }> {
-  const deviceIdentity = await options.deviceIdentitySource.load();
-  const derivedDeviceId = await deviceIdForPublicKey(deviceIdentity.publicJwk);
-  if (derivedDeviceId !== options.identity.deviceId) {
-    throw new Error("PAIRED_DEVICE_KEY_MISMATCH");
-  }
+  const deviceIdentity = await loadPairedDeviceIdentity(options);
   const stateDirectory = join(options.userDataPath, "control-plane");
   const client = new ControlPlaneClient(
     options.controlPlaneUrl.origin,
@@ -90,6 +101,15 @@ export async function createRuntimeControlPlaneComposition(
         leaseEpoch,
       ),
   };
+}
+
+async function loadPairedDeviceIdentity(options: RuntimeControlPlaneOptions) {
+  const deviceIdentity = await options.deviceIdentitySource.load();
+  const derivedDeviceId = await deviceIdForPublicKey(deviceIdentity.publicJwk);
+  if (derivedDeviceId !== options.identity.deviceId) {
+    throw new Error("PAIRED_DEVICE_KEY_MISMATCH");
+  }
+  return deviceIdentity;
 }
 
 export async function createPairedWorkflowRuntimeComposition(

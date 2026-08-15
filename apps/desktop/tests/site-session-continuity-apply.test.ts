@@ -182,4 +182,37 @@ describe("authoritative fixture Site Session destination", () => {
     expect(setup.cookieStore.remove).not.toHaveBeenCalled();
     expect(setup.cookieStore.flushStore).not.toHaveBeenCalled();
   });
+
+  it("does not expose a stale cursor while an apply is still in flight", async () => {
+    const setup = await harness();
+    let releaseFlush!: () => void;
+    const flushBlocked = new Promise<void>((resolve) => {
+      releaseFlush = resolve;
+    });
+    setup.cookieStore.flushStore.mockImplementationOnce(() => flushBlocked);
+    const revision = await createEncryptedFixtureRevision({
+      binding,
+      revision: 1,
+      previousDigest: null,
+      cookies: [sessionCookie],
+      issuedAt: "2026-08-15T19:00:00.000Z",
+      expiresAt: "2026-08-16T19:00:00.000Z",
+      sourceSigningKey: setup.sourceSigningKeys.privateKey,
+      destinationEncryptionKey: setup.destinationEncryptionKeys.publicKey,
+    });
+
+    const apply = setup.destination.apply(revision);
+    const current = setup.destination.current();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    let settled = false;
+    void current.then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+
+    releaseFlush();
+    await apply;
+    await expect(current).resolves.toMatchObject({ revision: 1 });
+  });
 });
