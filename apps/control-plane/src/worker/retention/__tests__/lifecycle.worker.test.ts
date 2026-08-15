@@ -8,6 +8,7 @@ import {
   verifyPrincipalDeletion,
 } from "../deletion.js";
 import { executeRetentionBatch, recordRetentionPolicies } from "../policy.js";
+import type { SiteSessionMailbox } from "../../site-session-continuity/mailbox.js";
 
 const principalId = "prn_01J00000000000000000000020";
 const otherPrincipalId = "prn_01J00000000000000000000021";
@@ -109,10 +110,90 @@ async function seedPrincipal(principal: string, suffix: string) {
   ]);
 }
 
+async function seedContinuityMailbox() {
+  const grantId = "cgr_01J00000000000000000000020";
+  const destinationDeviceId = "dev_01J00000000000000000000022";
+  const destinationJobId = "job_01J00000000000000000000022";
+  const destinationSessionId = "brs_01J00000000000000000000022";
+  const sourceDeviceId = "dev_01J00000000000000000000020";
+  const sourceSessionId = "brs_01J00000000000000000000020";
+  const publicKey = { kty: "OKP", crv: "Ed25519", x: "a".repeat(43) };
+  await env.VILLAGE_DB.batch([
+    env.VILLAGE_DB.prepare(
+      `INSERT INTO devices
+       (principal_id, device_id, public_key, credential_status, protocol_version,
+        last_accepted_sequence, created_at)
+       VALUES (?, ?, ?, 'ACTIVE', 1, 0, ?)`,
+    ).bind(principalId, destinationDeviceId, JSON.stringify(publicKey), now),
+    env.VILLAGE_DB.prepare(
+      `INSERT INTO jobs
+       (principal_id, job_id, browser_session_id, state, version,
+        last_event_sequence, created_at, updated_at)
+       VALUES (?, ?, ?, 'WAITING_FOR_BROWSER', 1, 1, ?, ?)`,
+    ).bind(principalId, destinationJobId, destinationSessionId, now, now),
+    env.VILLAGE_DB.prepare(
+      `INSERT INTO browser_sessions
+       (principal_id, browser_session_id, job_id, device_id, host_id, site,
+        controller, connection_state, lease_epoch, last_accepted_sequence,
+        automation_blocked, takeover_state, profile_state, updated_at)
+       VALUES (?, ?, ?, ?, 'hst_01J00000000000000000000022', 'OWNED_FIXTURE',
+               'NONE', 'ONLINE', 0, 0, 1, 'NONE', 'PRESENT', ?)`,
+    ).bind(
+      principalId,
+      destinationSessionId,
+      destinationJobId,
+      destinationDeviceId,
+      now,
+    ),
+    env.VILLAGE_DB.prepare(
+      `INSERT INTO continuity_grants
+       (principal_id, grant_id, source_device_id, destination_device_id,
+        source_browser_session_id, destination_browser_session_id, site,
+        destination_encryption_public_key, source_signing_public_key,
+        destination_signing_public_key, state, created_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'OWNED_FIXTURE', ?, ?, ?, 'ACTIVE', ?, ?)`,
+    ).bind(
+      principalId,
+      grantId,
+      sourceDeviceId,
+      destinationDeviceId,
+      sourceSessionId,
+      destinationSessionId,
+      JSON.stringify({ kty: "OKP", crv: "X25519", x: "b".repeat(43) }),
+      JSON.stringify(publicKey),
+      JSON.stringify(publicKey),
+      now,
+      "2026-08-16T18:00:00.000Z",
+    ),
+  ]);
+  const mailbox = (
+    env as unknown as {
+      SITE_SESSION_MAILBOX: DurableObjectNamespace<SiteSessionMailbox>;
+    }
+  ).SITE_SESSION_MAILBOX.getByName(`${principalId}:${grantId}`);
+  await mailbox.initialize({
+    binding: {
+      principalId,
+      grantId,
+      sourceDeviceId,
+      destinationDeviceId,
+      sourceBrowserSessionId: sourceSessionId,
+      destinationBrowserSessionId: destinationSessionId,
+      site: "OWNED_FIXTURE",
+    },
+    sourceSigningPublicKey: publicKey,
+    destinationSigningPublicKey: publicKey,
+    createdAt: now,
+    expiresAt: "2026-08-16T18:00:00.000Z",
+  });
+  return mailbox;
+}
+
 beforeEach(async () => {
   await applyD1Migrations(env.VILLAGE_DB, env.TEST_MIGRATIONS!);
   await env.VILLAGE_DB.batch([
     env.VILLAGE_DB.prepare("DELETE FROM principal_deletion_plans"),
+    env.VILLAGE_DB.prepare("DELETE FROM continuity_grants"),
     env.VILLAGE_DB.prepare("DELETE FROM principals"),
   ]);
   await seedPrincipal(principalId, "20");
@@ -135,6 +216,7 @@ describe("principal data lifecycle", () => {
         WORKFLOW_EFFECTS: expect.objectContaining({ scope: "PRINCIPAL" }),
         WORKFLOW_ACTORS: expect.objectContaining({ scope: "PRINCIPAL" }),
         CANCELLATIONS: expect.objectContaining({ scope: "PRINCIPAL" }),
+        CONTINUITY_GRANTS: expect.objectContaining({ scope: "PRINCIPAL" }),
       }),
     );
     for (const policy of Object.values(recordRetentionPolicies)) {
@@ -163,6 +245,7 @@ describe("principal data lifecycle", () => {
           }),
         ],
         cancellations: [expect.objectContaining({ jobId })],
+        continuityGrants: [],
       }),
     );
     const exported = await exportPrincipalRecords(env.VILLAGE_DB, principalId);
@@ -170,6 +253,7 @@ describe("principal data lifecycle", () => {
   });
 
   it("plans, executes, and verifies a deletion idempotently without deleting another principal", async () => {
+    const mailbox = await seedContinuityMailbox();
     const request = {
       principalId,
       deletionRequestId: "del_01J00000000000000000000020",
@@ -188,22 +272,14 @@ describe("principal data lifecycle", () => {
       status: "PLANNED",
     });
     await expect(
-      executePrincipalDeletion(
-        env.VILLAGE_DB,
-        request,
-        "2026-08-12T18:05:00.000Z",
-      ),
+      executePrincipalDeletion(env, request, "2026-08-12T18:05:00.000Z"),
     ).resolves.toMatchObject({
       ok: true,
       status: "COMPLETED",
       verification: { verified: true },
     });
     await expect(
-      executePrincipalDeletion(
-        env.VILLAGE_DB,
-        request,
-        "2026-08-12T18:10:00.000Z",
-      ),
+      executePrincipalDeletion(env, request, "2026-08-12T18:10:00.000Z"),
     ).resolves.toMatchObject({
       ok: true,
       status: "COMPLETED",
@@ -222,6 +298,10 @@ describe("principal data lifecycle", () => {
     ).resolves.toEqual({
       verified: true,
       remainingRecords: 0,
+    });
+    await expect(mailbox.diagnostics(principalId)).resolves.toEqual({
+      ok: false,
+      code: "MAILBOX_NOT_FOUND",
     });
     await expect(
       exportPrincipalRecords(env.VILLAGE_DB, otherPrincipalId),

@@ -9,22 +9,17 @@ import {
 } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
-  browserSessionIdSchema,
-  deviceIdSchema,
-  principalIdSchema,
+  canonicalContinuityRevisionAssociatedData,
+  canonicalContinuityRevisionBytes,
+  continuityBindingSchema,
+  continuityRevisionDigestBytes,
+  encryptedContinuityRevisionSchema,
+  x25519PublicKeySchema,
+  type ContinuityBinding,
+  type EncryptedContinuityRevision,
 } from "@village/contracts";
 import type { CookiesSetDetails } from "electron";
 import { z } from "zod";
-
-const continuityBindingSchema = z.strictObject({
-  principalId: principalIdSchema,
-  grantId: z.string().regex(/^cgr_[0-9A-HJKMNP-TV-Z]{26}$/),
-  sourceDeviceId: deviceIdSchema,
-  destinationDeviceId: deviceIdSchema,
-  sourceBrowserSessionId: browserSessionIdSchema,
-  destinationBrowserSessionId: browserSessionIdSchema,
-  site: z.literal("OWNED_FIXTURE"),
-});
 
 const fixtureCookieSchema = z
   .strictObject({
@@ -52,34 +47,7 @@ const fixtureSnapshotSchema = z.strictObject({
   cookies: z.array(fixtureCookieSchema).max(64),
 });
 
-const x25519PublicKeySchema = z.strictObject({
-  kty: z.literal("OKP"),
-  crv: z.literal("X25519"),
-  x: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
-});
-
-const encryptedContinuityRevisionSchema = z.strictObject({
-  protocolVersion: z.literal(1),
-  ...continuityBindingSchema.shape,
-  revision: z.number().int().positive(),
-  previousDigest: z
-    .string()
-    .regex(/^[a-f0-9]{64}$/)
-    .nullable(),
-  issuedAt: z.iso.datetime({ offset: true }),
-  expiresAt: z.iso.datetime({ offset: true }),
-  ephemeralPublicKey: x25519PublicKeySchema,
-  salt: z.string().regex(/^[A-Za-z0-9_-]{22}$/),
-  iv: z.string().regex(/^[A-Za-z0-9_-]{16}$/),
-  ciphertext: z.string().min(1).max(131_072),
-  digest: z.string().regex(/^[a-f0-9]{64}$/),
-  signature: z.string().regex(/^[A-Za-z0-9_-]{86}$/),
-});
-
-export type ContinuityBinding = z.infer<typeof continuityBindingSchema>;
-export type EncryptedContinuityRevision = z.infer<
-  typeof encryptedContinuityRevisionSchema
->;
+export type { ContinuityBinding, EncryptedContinuityRevision };
 type FixtureCookie = z.infer<typeof fixtureCookieSchema>;
 
 const managedCookieSchema = z.strictObject({
@@ -148,17 +116,21 @@ export async function createEncryptedFixtureRevision(
   });
   const saltBytes = ownedBytes(crypto.getRandomValues(new Uint8Array(16)));
   const ivBytes = ownedBytes(crypto.getRandomValues(new Uint8Array(12)));
-  const associatedData = continuityAssociatedData({
-    protocolVersion: 1,
-    ...binding,
-    revision: input.revision,
-    previousDigest: input.previousDigest,
-    issuedAt: input.issuedAt,
-    expiresAt: input.expiresAt,
-    ephemeralPublicKey,
-    salt: encode(saltBytes),
-    iv: encode(ivBytes),
-  });
+  const associatedData = ownedBytes(
+    new Uint8Array(
+      canonicalContinuityRevisionAssociatedData({
+        protocolVersion: 1,
+        ...binding,
+        revision: input.revision,
+        previousDigest: input.previousDigest,
+        issuedAt: input.issuedAt,
+        expiresAt: input.expiresAt,
+        ephemeralPublicKey,
+        salt: encode(saltBytes),
+        iv: encode(ivBytes),
+      }),
+    ),
+  );
   const encryptionKey = await deriveEncryptionKey(
     ephemeral.privateKey,
     input.destinationEncryptionKey,
@@ -184,14 +156,17 @@ export async function createEncryptedFixtureRevision(
     iv: encode(ivBytes),
     ciphertext: encode(ciphertextBytes),
     digest: await sha256Hex(
-      revisionDigestBytes(associatedData, ciphertextBytes),
+      continuityRevisionDigestBytes(
+        associatedData.buffer,
+        ciphertextBytes.buffer,
+      ),
     ),
   };
   const signature = new Uint8Array(
     await crypto.subtle.sign(
       "Ed25519",
       input.sourceSigningKey,
-      revisionSignatureBytes(unsigned),
+      canonicalContinuityRevisionBytes(unsigned),
     ),
   );
   return encryptedContinuityRevisionSchema.parse({
@@ -224,14 +199,17 @@ export async function openEncryptedFixtureRevision(
     "Ed25519",
     options.sourceSigningKey,
     decode(signature),
-    revisionSignatureBytes(unsigned),
+    canonicalContinuityRevisionBytes(unsigned),
   );
   if (!verified) throw new Error("CONTINUITY_REVISION_UNAUTHENTICATED");
-  const associatedData = continuityAssociatedData(unsigned);
+  const associatedData = ownedBytes(
+    new Uint8Array(canonicalContinuityRevisionAssociatedData(unsigned)),
+  );
   const ciphertext = decode(revision.ciphertext);
   if (
-    (await sha256Hex(revisionDigestBytes(associatedData, ciphertext))) !==
-    revision.digest
+    (await sha256Hex(
+      continuityRevisionDigestBytes(associatedData.buffer, ciphertext.buffer),
+    )) !== revision.digest
   ) {
     throw new Error("CONTINUITY_REVISION_DIGEST_MISMATCH");
   }
@@ -590,88 +568,6 @@ function assertRevisionLifetime(issuedAt: string, expiresAt: string): void {
   }
 }
 
-function continuityAssociatedData(input: {
-  protocolVersion: 1;
-  principalId: string;
-  grantId: string;
-  sourceDeviceId: string;
-  destinationDeviceId: string;
-  sourceBrowserSessionId: string;
-  destinationBrowserSessionId: string;
-  site: "OWNED_FIXTURE";
-  revision: number;
-  previousDigest: string | null;
-  issuedAt: string;
-  expiresAt: string;
-  ephemeralPublicKey: { kty: "OKP"; crv: "X25519"; x: string };
-  salt: string;
-  iv: string;
-}): Uint8Array<ArrayBuffer> {
-  return ownedBytes(
-    new TextEncoder().encode(
-      JSON.stringify([
-        input.protocolVersion,
-        input.principalId,
-        input.grantId,
-        input.sourceDeviceId,
-        input.destinationDeviceId,
-        input.sourceBrowserSessionId,
-        input.destinationBrowserSessionId,
-        input.site,
-        input.revision,
-        input.previousDigest,
-        input.issuedAt,
-        input.expiresAt,
-        input.ephemeralPublicKey,
-        input.salt,
-        input.iv,
-      ]),
-    ),
-  );
-}
-
-function revisionDigestBytes(
-  associatedData: Uint8Array,
-  ciphertext: Uint8Array,
-): Uint8Array<ArrayBuffer> {
-  const bytes = new Uint8Array(associatedData.length + ciphertext.length);
-  bytes.set(associatedData);
-  bytes.set(ciphertext, associatedData.length);
-  return bytes;
-}
-
-function revisionSignatureBytes(input: {
-  protocolVersion: 1;
-  principalId: string;
-  grantId: string;
-  sourceDeviceId: string;
-  destinationDeviceId: string;
-  sourceBrowserSessionId: string;
-  destinationBrowserSessionId: string;
-  site: "OWNED_FIXTURE";
-  revision: number;
-  previousDigest: string | null;
-  issuedAt: string;
-  expiresAt: string;
-  ephemeralPublicKey: { kty: "OKP"; crv: "X25519"; x: string };
-  salt: string;
-  iv: string;
-  ciphertext: string;
-  digest: string;
-}): Uint8Array<ArrayBuffer> {
-  return ownedBytes(
-    new TextEncoder().encode(
-      JSON.stringify([
-        ...JSON.parse(
-          new TextDecoder().decode(continuityAssociatedData(input)),
-        ),
-        input.ciphertext,
-        input.digest,
-      ]),
-    ),
-  );
-}
-
 async function deriveEncryptionKey(
   privateKey: CryptoKey,
   publicKey: CryptoKey,
@@ -695,7 +591,7 @@ async function deriveEncryptionKey(
   );
 }
 
-async function sha256Hex(bytes: Uint8Array<ArrayBuffer>): Promise<string> {
+async function sha256Hex(bytes: BufferSource): Promise<string> {
   return Buffer.from(await crypto.subtle.digest("SHA-256", bytes)).toString(
     "hex",
   );

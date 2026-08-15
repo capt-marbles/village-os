@@ -1,0 +1,229 @@
+import { z } from "zod";
+import {
+  browserSessionIdSchema,
+  continuityGrantIdSchema,
+  deviceIdSchema,
+  instantSchema,
+  principalIdSchema,
+} from "./ids.js";
+
+export const continuityBindingSchema = z.strictObject({
+  principalId: principalIdSchema,
+  grantId: continuityGrantIdSchema,
+  sourceDeviceId: deviceIdSchema,
+  destinationDeviceId: deviceIdSchema,
+  sourceBrowserSessionId: browserSessionIdSchema,
+  destinationBrowserSessionId: browserSessionIdSchema,
+  site: z.literal("OWNED_FIXTURE"),
+});
+
+export const x25519PublicKeySchema = z.strictObject({
+  kty: z.literal("OKP"),
+  crv: z.literal("X25519"),
+  x: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+});
+
+export const continuityGrantRequestSchema = z
+  .strictObject({
+    grantId: continuityGrantIdSchema,
+    sourceDeviceId: deviceIdSchema,
+    destinationDeviceId: deviceIdSchema,
+    sourceBrowserSessionId: browserSessionIdSchema,
+    destinationBrowserSessionId: browserSessionIdSchema,
+    site: z.literal("OWNED_FIXTURE"),
+    destinationEncryptionPublicKey: x25519PublicKeySchema,
+    expiresAt: instantSchema,
+  })
+  .superRefine((grant, context) => {
+    if (grant.sourceDeviceId === grant.destinationDeviceId) {
+      context.addIssue({
+        code: "custom",
+        path: ["destinationDeviceId"],
+        message: "Source and destination devices must differ",
+      });
+    }
+    if (grant.sourceBrowserSessionId === grant.destinationBrowserSessionId) {
+      context.addIssue({
+        code: "custom",
+        path: ["destinationBrowserSessionId"],
+        message: "Source and destination Browser Sessions must differ",
+      });
+    }
+  });
+
+const unsignedContinuityRevisionSchema = z
+  .strictObject({
+    protocolVersion: z.literal(1),
+    ...continuityBindingSchema.shape,
+    revision: z.number().int().positive(),
+    previousDigest: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .nullable(),
+    issuedAt: instantSchema,
+    expiresAt: instantSchema,
+    ephemeralPublicKey: x25519PublicKeySchema,
+    salt: z.string().regex(/^[A-Za-z0-9_-]{22}$/),
+    iv: z.string().regex(/^[A-Za-z0-9_-]{16}$/),
+    ciphertext: z.string().regex(/^[A-Za-z0-9_-]{1,131072}$/),
+    digest: z.string().regex(/^[a-f0-9]{64}$/),
+  })
+  .superRefine((revision, context) => {
+    const lifetime =
+      Date.parse(revision.expiresAt) - Date.parse(revision.issuedAt);
+    if (lifetime <= 0 || lifetime > 24 * 60 * 60_000) {
+      context.addIssue({
+        code: "custom",
+        path: ["expiresAt"],
+        message: "Revision lifetime must be between 1ms and 24h",
+      });
+    }
+  });
+
+export const encryptedContinuityRevisionSchema =
+  unsignedContinuityRevisionSchema.safeExtend({
+    signature: z.string().regex(/^[A-Za-z0-9_-]{86}$/),
+  });
+
+const deviceEnvelopeBinding = {
+  protocolVersion: z.literal(1),
+  ...continuityBindingSchema.shape,
+  sequence: z.number().int().positive(),
+  issuedAt: instantSchema,
+  expiresAt: instantSchema,
+};
+
+function boundedDeviceEnvelope<Shape extends z.ZodRawShape>(shape: Shape) {
+  return z
+    .strictObject({
+      ...deviceEnvelopeBinding,
+      ...shape,
+      signature: z.string().regex(/^[A-Za-z0-9_-]{86}$/),
+    })
+    .superRefine((envelope, context) => {
+      const temporal = envelope as unknown as {
+        issuedAt: string;
+        expiresAt: string;
+      };
+      const lifetime =
+        Date.parse(temporal.expiresAt) - Date.parse(temporal.issuedAt);
+      if (lifetime <= 0 || lifetime > 60_000) {
+        context.addIssue({
+          code: "custom",
+          path: ["expiresAt"],
+          message: "Device request lifetime must be between 1ms and 60s",
+        });
+      }
+    });
+}
+
+export const continuityFetchEnvelopeSchema = boundedDeviceEnvelope({
+  afterRevision: z.number().int().nonnegative(),
+});
+
+export const continuityAcknowledgementEnvelopeSchema = boundedDeviceEnvelope({
+  revision: z.number().int().positive(),
+  digest: z.string().regex(/^[a-f0-9]{64}$/),
+});
+
+export type ContinuityBinding = z.infer<typeof continuityBindingSchema>;
+export type EncryptedContinuityRevision = z.infer<
+  typeof encryptedContinuityRevisionSchema
+>;
+export type ContinuityFetchEnvelope = z.infer<
+  typeof continuityFetchEnvelopeSchema
+>;
+export type ContinuityAcknowledgementEnvelope = z.infer<
+  typeof continuityAcknowledgementEnvelopeSchema
+>;
+export type UnsignedContinuityRevision = z.infer<
+  typeof unsignedContinuityRevisionSchema
+>;
+
+function canonicalBytes(values: readonly unknown[]): ArrayBuffer {
+  const bytes = new TextEncoder().encode(JSON.stringify(values));
+  const buffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(buffer).set(bytes);
+  return buffer;
+}
+
+function bindingValues(binding: ContinuityBinding): readonly unknown[] {
+  return [
+    binding.principalId,
+    binding.grantId,
+    binding.sourceDeviceId,
+    binding.destinationDeviceId,
+    binding.sourceBrowserSessionId,
+    binding.destinationBrowserSessionId,
+    binding.site,
+  ];
+}
+
+export function canonicalContinuityRevisionBytes(
+  revision: UnsignedContinuityRevision,
+): ArrayBuffer {
+  return canonicalBytes([
+    ...JSON.parse(
+      new TextDecoder().decode(
+        canonicalContinuityRevisionAssociatedData(revision),
+      ),
+    ),
+    revision.ciphertext,
+    revision.digest,
+  ]);
+}
+
+export function canonicalContinuityRevisionAssociatedData(
+  revision: Omit<UnsignedContinuityRevision, "ciphertext" | "digest">,
+): ArrayBuffer {
+  return canonicalBytes([
+    revision.protocolVersion,
+    ...bindingValues(revision),
+    revision.revision,
+    revision.previousDigest,
+    revision.issuedAt,
+    revision.expiresAt,
+    revision.ephemeralPublicKey,
+    revision.salt,
+    revision.iv,
+  ]);
+}
+
+export function continuityRevisionDigestBytes(
+  associatedData: ArrayBuffer,
+  ciphertext: ArrayBuffer,
+): ArrayBuffer {
+  const bytes = new Uint8Array(
+    associatedData.byteLength + ciphertext.byteLength,
+  );
+  bytes.set(new Uint8Array(associatedData));
+  bytes.set(new Uint8Array(ciphertext), associatedData.byteLength);
+  return bytes.buffer;
+}
+
+export function canonicalContinuityFetchBytes(
+  request: Omit<ContinuityFetchEnvelope, "signature">,
+): ArrayBuffer {
+  return canonicalBytes([
+    request.protocolVersion,
+    ...bindingValues(request),
+    request.sequence,
+    request.afterRevision,
+    request.issuedAt,
+    request.expiresAt,
+  ]);
+}
+
+export function canonicalContinuityAcknowledgementBytes(
+  request: Omit<ContinuityAcknowledgementEnvelope, "signature">,
+): ArrayBuffer {
+  return canonicalBytes([
+    request.protocolVersion,
+    ...bindingValues(request),
+    request.sequence,
+    request.revision,
+    request.digest,
+    request.issuedAt,
+    request.expiresAt,
+  ]);
+}

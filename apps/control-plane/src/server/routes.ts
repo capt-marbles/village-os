@@ -6,6 +6,7 @@ import {
   pairingIdSchema,
   principalIdSchema,
   setupObjectiveSchema,
+  continuityGrantIdSchema,
 } from "@village/contracts";
 import { z } from "zod";
 import type { Environment } from "../env.js";
@@ -35,6 +36,15 @@ import {
 } from "../worker/browser-control/pairing.js";
 import { authenticateRequest } from "./auth.js";
 import {
+  acknowledgeContinuityRevision,
+  createContinuityGrant,
+  deleteContinuityGrant,
+  fetchContinuityRevision,
+  getContinuityGrant,
+  publishContinuityRevision,
+  revokeContinuityGrant,
+} from "../worker/site-session-continuity/grants.js";
+import {
   authorizeBrowserMutation,
   authorizeNonBrowserClient,
   corsHeaders,
@@ -52,11 +62,14 @@ function json(
   });
 }
 
-async function boundedJson(request: Request): Promise<unknown> {
+async function boundedJson(
+  request: Request,
+  maximumBytes = 8_192,
+): Promise<unknown> {
   const declared = Number(request.headers.get("content-length") ?? "0");
-  if (declared > 8_192) throw new Error("BODY_TOO_LARGE");
+  if (declared > maximumBytes) throw new Error("BODY_TOO_LARGE");
   const text = await request.text();
-  if (text.length > 8_192) throw new Error("BODY_TOO_LARGE");
+  if (text.length > maximumBytes) throw new Error("BODY_TOO_LARGE");
   return JSON.parse(text);
 }
 
@@ -89,6 +102,119 @@ export async function routeRequest(
   }
 
   try {
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/site-session-continuity/grants"
+    ) {
+      const csrf = authorizeBrowserMutation(request, environment);
+      if (!csrf.ok) return json(request, environment, csrf, 403);
+      const auth = await authenticateRequest(request, environment);
+      if (!auth.ok) return json(request, environment, auth, 401);
+      const result = await createContinuityGrant(
+        environment,
+        auth.principalId,
+        await boundedJson(request),
+        new Date().toISOString(),
+      );
+      return json(request, environment, result, result.ok ? 201 : 409);
+    }
+
+    const continuityGrant = url.pathname.match(
+      /^\/api\/site-session-continuity\/grants\/([^/]+)$/,
+    );
+    if (continuityGrant) {
+      const grantId = continuityGrantIdSchema.safeParse(continuityGrant[1]);
+      if (!grantId.success) {
+        return json(
+          request,
+          environment,
+          { ok: false, code: "CONTINUITY_GRANT_NOT_FOUND" },
+          404,
+        );
+      }
+      const auth = await authenticateRequest(request, environment);
+      if (!auth.ok) return json(request, environment, auth, 401);
+      if (request.method === "GET") {
+        const result = await getContinuityGrant(
+          environment,
+          auth.principalId,
+          grantId.data,
+        );
+        return json(request, environment, result, result.ok ? 200 : 404);
+      }
+      if (request.method === "DELETE") {
+        const csrf = authorizeBrowserMutation(request, environment);
+        if (!csrf.ok) return json(request, environment, csrf, 403);
+        const result = await deleteContinuityGrant(
+          environment,
+          auth.principalId,
+          grantId.data,
+          new Date().toISOString(),
+        );
+        return json(request, environment, result, result.ok ? 200 : 404);
+      }
+    }
+
+    const continuityRevocation = url.pathname.match(
+      /^\/api\/site-session-continuity\/grants\/([^/]+)\/revoke$/,
+    );
+    if (request.method === "POST" && continuityRevocation) {
+      const csrf = authorizeBrowserMutation(request, environment);
+      if (!csrf.ok) return json(request, environment, csrf, 403);
+      const auth = await authenticateRequest(request, environment);
+      if (!auth.ok) return json(request, environment, auth, 401);
+      const result = await revokeContinuityGrant(
+        environment,
+        auth.principalId,
+        continuityRevocation[1],
+        new Date().toISOString(),
+      );
+      return json(request, environment, result, result.ok ? 200 : 404);
+    }
+
+    const continuityOperation = url.pathname.match(
+      /^\/api\/site-session-continuity\/grants\/([^/]+)\/(revisions|fetch|acknowledgements)$/,
+    );
+    if (request.method === "POST" && continuityOperation) {
+      const origin = authorizeNonBrowserClient(request, environment);
+      if (!origin.ok) return json(request, environment, origin, 403);
+      const body = await boundedJson(request, 196_608);
+      const now = new Date().toISOString();
+      const routeGrantId = continuityOperation[1]!;
+      const result =
+        continuityOperation[2] === "revisions"
+          ? await publishContinuityRevision(
+              environment,
+              routeGrantId,
+              body,
+              now,
+            )
+          : continuityOperation[2] === "fetch"
+            ? await fetchContinuityRevision(
+                environment,
+                routeGrantId,
+                body,
+                now,
+              )
+            : await acknowledgeContinuityRevision(
+                environment,
+                routeGrantId,
+                body,
+                now,
+              );
+      const successStatus = continuityOperation[2] === "revisions" ? 201 : 200;
+      const failureStatus =
+        "code" in result && result.code === "CONTINUITY_GRANT_NOT_FOUND"
+          ? 404
+          : 409;
+      return json(
+        request,
+        environment,
+        result,
+        result.ok ? successStatus : failureStatus,
+      );
+    }
+
     if (url.pathname === "/api/jobs") {
       const auth = await authenticateRequest(request, environment);
       if (!auth.ok) return json(request, environment, auth, 401);
