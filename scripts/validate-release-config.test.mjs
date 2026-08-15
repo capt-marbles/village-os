@@ -46,6 +46,7 @@ test("static release config requires Electron 43, hardened fuses and a separate 
       "!dist/main/internal-fixture-provisioner*",
       "!dist/main/lazy-delegated-workflow*",
       "!dist/main/internal-delegated-proof*",
+      "!dist/main/internal-continuity-proof-entry*",
       "!dist/main/internal-proof-entry*",
       "!dist/main/internal-paired-bootstrap*",
       "!dist/main/paired-proof-coordination*",
