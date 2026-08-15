@@ -2,6 +2,9 @@ import type {
   ApprovedRitualRevision,
   RitualStewardContext,
   RitualStewardResult,
+  RitualTestReceipt,
+  RitualTestRunControllerResult,
+  RitualTestRunRequest,
 } from "@village/contracts";
 import {
   RitualBuilder,
@@ -17,10 +20,14 @@ export interface RitualBuilderBridge {
   initialize(): Promise<{
     identity: RitualBuilderIdentity;
     approved: ApprovedRitualRevision | null;
+    receipt: RitualTestReceipt | null;
   }>;
   createDraftIdentity(): Promise<RitualBuilderIdentity>;
   draft(context: RitualStewardContext): Promise<RitualStewardResult>;
   approve(ritual: ApprovedRitualRevision): Promise<ApprovedRitualRevision>;
+  testRun(
+    request: RitualTestRunRequest,
+  ): Promise<RitualTestRunControllerResult>;
 }
 
 declare global {
@@ -40,6 +47,7 @@ export function RitualBuilderWorkspace({
   );
   const [startupError, setStartupError] = useState<string | null>(null);
   const generation = useRef(0);
+  const testRunInFlight = useRef(false);
 
   useEffect(() => {
     if (!bridge) {
@@ -53,12 +61,18 @@ export function RitualBuilderWorkspace({
         if (!active) return;
         setIdentity(initialized.identity);
         if (initialized.approved) {
-          setState((current) =>
-            reduceRitualBuilder(current, {
+          setState((current) => {
+            const restored = reduceRitualBuilder(current, {
               type: "RESTORE_APPROVED",
               approved: initialized.approved!,
-            }),
-          );
+            });
+            return initialized.receipt
+              ? reduceRitualBuilder(restored, {
+                  type: "RESTORE_RECEIPT",
+                  receipt: initialized.receipt,
+                })
+              : restored;
+          });
         }
       })
       .catch(() => {
@@ -67,6 +81,7 @@ export function RitualBuilderWorkspace({
     return () => {
       active = false;
       generation.current += 1;
+      testRunInFlight.current = false;
     };
   }, [bridge]);
 
@@ -151,12 +166,75 @@ export function RitualBuilderWorkspace({
       }
       return;
     }
+    if (event.type === "SUBMIT_TEST_SAMPLE") {
+      if (testRunInFlight.current) return;
+      const next = reduceRitualBuilder(state, event);
+      setState(next);
+      if (next.phase !== "RUNNING_TEST") return;
+      testRunInFlight.current = true;
+      const requestGeneration = ++generation.current;
+      void bridge
+        .testRun({
+          schemaVersion: 1,
+          ritualId: next.approved.ritualId,
+          ritualRevision: next.approved.ritualRevision,
+          sample: event.sample.trim(),
+        })
+        .then((result) => {
+          if (generation.current !== requestGeneration) return;
+          setState((current) =>
+            result.status === "receipt"
+              ? reduceRitualBuilder(current, {
+                  type: "TEST_RUN_RECEIPT",
+                  receipt: result.receipt,
+                })
+              : reduceRitualBuilder(current, {
+                  type: "TEST_RUN_FAILED",
+                  message: testRunFailureCopy(result.reason),
+                }),
+          );
+        })
+        .catch(() => {
+          if (generation.current !== requestGeneration) return;
+          setState((current) =>
+            reduceRitualBuilder(current, {
+              type: "TEST_RUN_FAILED",
+              message:
+                "The safe test could not finish. Your sample was not saved; try again.",
+            }),
+          );
+        })
+        .finally(() => {
+          testRunInFlight.current = false;
+        });
+      return;
+    }
     setState((current) => reduceRitualBuilder(current, event));
   };
 
   if (startupError) return <p role="alert">{startupError}</p>;
   if (!identity) return <p role="status">Opening the Steward’s workroom…</p>;
   return <RitualBuilder identity={identity} state={state} onEvent={onEvent} />;
+}
+
+function testRunFailureCopy(
+  reason: Extract<
+    RitualTestRunControllerResult,
+    { status: "waiting" }
+  >["reason"],
+): string {
+  switch (reason) {
+    case "AUTHENTICATION_REQUIRED":
+      return "Sign in to ChatGPT in Village, then run the safe test again.";
+    case "TIME_BUDGET_EXHAUSTED":
+      return "The safe test took too long. Your sample was not saved; try again.";
+    case "MALFORMED_PROVIDER_OUTPUT":
+      return "The Steward returned a result Village could not safely validate. Try again.";
+    case "STALE_STEWARD_RESULT":
+      return "Village ignored an outdated test result. Try again.";
+    case "PROVIDER_UNAVAILABLE":
+      return "The local ChatGPT provider became unavailable. Try again.";
+  }
 }
 
 function providerFailureCopy(

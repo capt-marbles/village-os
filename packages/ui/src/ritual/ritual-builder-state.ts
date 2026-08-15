@@ -3,9 +3,12 @@ import {
   RitualApprovalError,
   ritualDraftSchema,
   ritualStewardContextSchema,
+  ritualTestReceiptSchema,
+  ritualTestRunRequestSchema,
   type ApprovedRitualRevision,
   type RitualDraft,
   type RitualStewardProposal,
+  type RitualTestReceipt,
 } from "@village/contracts";
 
 export interface RitualBuilderMessage {
@@ -53,6 +56,19 @@ export type RitualBuilderState =
       phase: "APPROVED";
       draft: RitualDraft;
       approved: ApprovedRitualRevision;
+      receipt: null;
+    })
+  | (RitualBuilderStateBase & {
+      phase: "PREPARING_TEST" | "RUNNING_TEST";
+      draft: RitualDraft;
+      approved: ApprovedRitualRevision;
+      receipt: RitualTestReceipt | null;
+    })
+  | (RitualBuilderStateBase & {
+      phase: "REVIEW_TEST";
+      draft: RitualDraft;
+      approved: ApprovedRitualRevision;
+      receipt: RitualTestReceipt;
     });
 
 export interface RitualBuilderIdentity {
@@ -73,11 +89,16 @@ export type RitualBuilderEvent =
     }
   | { type: "STEWARD_FAILED"; message: string }
   | { type: "RESTORE_APPROVED"; approved: ApprovedRitualRevision }
+  | { type: "RESTORE_RECEIPT"; receipt: RitualTestReceipt }
   | { type: "APPROVAL_SAVED" }
   | { type: "APPROVAL_SAVE_FAILED" }
   | { type: "START_NEW_RITUAL" }
   | { type: "NEW_RITUAL_READY" }
   | { type: "NEW_RITUAL_FAILED" }
+  | { type: "START_TEST" }
+  | { type: "SUBMIT_TEST_SAMPLE"; sample: string }
+  | { type: "TEST_RUN_RECEIPT"; receipt: RitualTestReceipt }
+  | { type: "TEST_RUN_FAILED"; message: string }
   | {
       type: "SELECT_TRIGGER";
       trigger: "ON_DEMAND" | "WEEKDAYS" | "EVENT";
@@ -312,6 +333,7 @@ export function reduceRitualBuilder(
         phase: "APPROVED",
         draft,
         approved,
+        receipt: null,
         messages: message(
           state.messages,
           "SYSTEM",
@@ -319,6 +341,31 @@ export function reduceRitualBuilder(
         ),
         error: null,
         requestRevision: state.requestRevision,
+      };
+    }
+    case "RESTORE_RECEIPT": {
+      if (state.phase !== "APPROVED") return state;
+      const receipt = ritualTestReceiptSchema.safeParse(event.receipt);
+      if (
+        !receipt.success ||
+        receipt.data.ritualId !== state.approved.ritualId ||
+        receipt.data.ritualRevision !== state.approved.ritualRevision
+      ) {
+        return {
+          ...state,
+          error: "The saved Receipt did not match this Ritual.",
+        };
+      }
+      return {
+        ...state,
+        phase: "REVIEW_TEST",
+        receipt: receipt.data,
+        messages: message(
+          state.messages,
+          "SYSTEM",
+          "Restored the latest test Receipt for Review.",
+        ),
+        error: null,
       };
     }
     case "APPROVAL_SAVE_FAILED": {
@@ -342,6 +389,7 @@ export function reduceRitualBuilder(
         phase: "APPROVED",
         draft: state.draft,
         approved: state.pendingApproval,
+        receipt: null,
         messages: message(
           state.messages,
           "SYSTEM",
@@ -352,16 +400,20 @@ export function reduceRitualBuilder(
       };
     }
     case "START_NEW_RITUAL": {
-      if (state.phase !== "APPROVED") return state;
+      if (state.phase !== "APPROVED" && state.phase !== "REVIEW_TEST") {
+        return state;
+      }
       return {
-        ...state,
         phase: "STARTING_NEW_RITUAL",
+        draft: state.draft,
+        approved: state.approved,
         messages: message(
           state.messages,
           "SYSTEM",
           `Preparing a new Ritual. ${state.approved.name} remains saved.`,
         ),
         error: null,
+        requestRevision: state.requestRevision,
       };
     }
     case "NEW_RITUAL_READY": {
@@ -392,8 +444,90 @@ export function reduceRitualBuilder(
       return {
         ...state,
         phase: "APPROVED",
+        receipt: null,
         messages: message(state.messages, "SYSTEM", error),
         error,
+      };
+    }
+    case "START_TEST": {
+      if (state.phase !== "APPROVED" && state.phase !== "REVIEW_TEST") {
+        return state;
+      }
+      return {
+        ...state,
+        phase: "PREPARING_TEST",
+        receipt: state.phase === "REVIEW_TEST" ? state.receipt : null,
+        messages: message(
+          state.messages,
+          "STEWARD",
+          "Give me a representative sample. I’ll test the approved Ritual against only that material, with no external effects.",
+        ),
+        error: null,
+      };
+    }
+    case "SUBMIT_TEST_SAMPLE": {
+      if (state.phase !== "PREPARING_TEST") return state;
+      const sample = event.sample.trim();
+      const request = ritualTestRunRequestSchema.safeParse({
+        schemaVersion: 1,
+        ritualId: state.approved.ritualId,
+        ritualRevision: state.approved.ritualRevision,
+        sample,
+      });
+      if (!request.success) {
+        return {
+          ...state,
+          error: !sample
+            ? "Add a representative sample first."
+            : sample.length < 16
+              ? "Use at least 16 characters so the test has meaningful context."
+              : "Keep the test sample to 4,000 characters or fewer.",
+        };
+      }
+      return {
+        ...state,
+        phase: "RUNNING_TEST",
+        messages: message(
+          state.messages,
+          "STEWARD",
+          "I’m applying the approved Ritual to that sample now.",
+        ),
+        error: null,
+      };
+    }
+    case "TEST_RUN_RECEIPT": {
+      if (state.phase !== "RUNNING_TEST") return state;
+      const receipt = ritualTestReceiptSchema.safeParse(event.receipt);
+      if (
+        !receipt.success ||
+        receipt.data.ritualId !== state.approved.ritualId ||
+        receipt.data.ritualRevision !== state.approved.ritualRevision
+      ) {
+        return {
+          ...state,
+          phase: "PREPARING_TEST",
+          error: "Village rejected a Receipt that did not match this Ritual.",
+        };
+      }
+      return {
+        ...state,
+        phase: "REVIEW_TEST",
+        receipt: receipt.data,
+        messages: message(
+          state.messages,
+          "STEWARD",
+          "The test is complete. Review the result and its evidence in the Receipt.",
+        ),
+        error: null,
+      };
+    }
+    case "TEST_RUN_FAILED": {
+      if (state.phase !== "RUNNING_TEST") return state;
+      return {
+        ...state,
+        phase: "PREPARING_TEST",
+        messages: message(state.messages, "SYSTEM", event.message),
+        error: event.message,
       };
     }
     case "SELECT_TRIGGER": {

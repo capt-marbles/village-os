@@ -8,6 +8,39 @@ const context = {
   ownerPurpose: "Review my sales pipeline and prepare the next follow-ups.",
 };
 
+const testRunContext = {
+  schemaVersion: 1 as const,
+  runId: "rrn_01J00000000000000000000000",
+  ritual: {
+    schemaVersion: 1 as const,
+    ritualId: "rtl_01J00000000000000000000000",
+    ritualRevision: 1 as const,
+    status: "APPROVED" as const,
+    approvedDraftId: context.draftId,
+    approvedDraftRevision: 3,
+    name: "Inbox priorities",
+    purpose: "Review my email and identify the highest-priority response.",
+    trigger: { kind: "ON_DEMAND" as const, summary: "Whenever I ask" },
+    steps: [
+      {
+        stepKey: "rank-responses",
+        title: "Rank the responses",
+        description: "Rank supplied messages by urgency and consequence.",
+        actor: { kind: "STEWARD" as const, role: "Steward" },
+        approval: "NONE" as const,
+      },
+    ],
+    permissions: ["Read only supplied sample material"],
+    completion: "One response priority is explained with evidence.",
+    reviewPolicy: {
+      ownerReview: "EVERY_RUN" as const,
+      learning: "PROPOSE_ONLY" as const,
+    },
+    approvedAt: "2026-08-15T15:01:00.000Z",
+  },
+  sample: "Customer A needs an answer before Friday.",
+};
+
 describe("CodexRitualStewardProvider", () => {
   it("constructs its app-server transport lazily", async () => {
     const factory = vi.fn(() => ({
@@ -247,5 +280,85 @@ describe("CodexRitualStewardProvider", () => {
       status: "proposal",
       steps: [{ stepKey: "review-inbox" }, { stepKey: "review-inbox-2" }],
     });
+  });
+
+  it("runs an approved Ritual only against supplied sample material and binds the result locally", async () => {
+    const turns: Array<{ prompt: unknown; options: unknown }> = [];
+    const transport = {
+      request: async (method: string) => {
+        if (method === "initialize") return {};
+        if (method === "account/read") return { account: { type: "chatgpt" } };
+        return { thread: { id: `thread-${method}` } };
+      },
+      notify: () => undefined,
+      runToolTurn: async (
+        _threadId: string,
+        prompt: unknown,
+        options: unknown,
+      ) => {
+        turns.push({ prompt, options });
+        return {
+          summary: "Customer A is the highest-priority response.",
+          evidence: ["The supplied deadline is Friday."],
+          uncertainties: ["The commercial impact was not supplied."],
+        };
+      },
+      close: async () => undefined,
+    };
+    const provider = new CodexRitualStewardProvider(transport);
+
+    await expect(provider.testRun(testRunContext)).resolves.toMatchObject({
+      status: "result",
+      runId: testRunContext.runId,
+      ritualId: testRunContext.ritual.ritualId,
+      ritualRevision: 1,
+    });
+    expect(turns[0]?.options).toEqual({
+      toolName: "village_ritual_test_result",
+      timeoutMs: 30_000,
+    });
+    const prompt = JSON.stringify(turns[0]?.prompt);
+    expect(prompt).toContain(testRunContext.sample);
+    expect(prompt).toContain(testRunContext.ritual.completion);
+    expect(prompt).not.toContain(testRunContext.runId);
+    expect(prompt).not.toContain(testRunContext.ritual.ritualId);
+    expect(prompt).toContain('"externalEffects":"NONE"');
+  });
+
+  it("uses a fresh ephemeral thread for every independent Test Run", async () => {
+    let threadStarts = 0;
+    const usedThreads: string[] = [];
+    const transport = {
+      request: async (method: string) => {
+        if (method === "initialize") return {};
+        if (method === "account/read") return { account: { type: "chatgpt" } };
+        if (method === "thread/start") {
+          threadStarts += 1;
+          return { thread: { id: `test-thread-${threadStarts}` } };
+        }
+        return {};
+      },
+      notify: () => undefined,
+      runToolTurn: async (threadId: string) => {
+        usedThreads.push(threadId);
+        return {
+          summary: "Customer A is the highest-priority response.",
+          evidence: ["The supplied deadline is Friday."],
+          uncertainties: [],
+        };
+      },
+      close: async () => undefined,
+    };
+    const provider = new CodexRitualStewardProvider(transport);
+
+    await provider.testRun(testRunContext);
+    await provider.testRun({
+      ...testRunContext,
+      runId: "rrn_01J00000000000000000000001",
+      sample: "A different representative sample.",
+    });
+
+    expect(threadStarts).toBe(2);
+    expect(usedThreads).toEqual(["test-thread-1", "test-thread-2"]);
   });
 });

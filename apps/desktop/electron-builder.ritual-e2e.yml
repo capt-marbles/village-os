@@ -1,0 +1,10 @@
+extends: ./electron-builder.yml
+publish: null
+directories:
+  output: dist/ritual-e2e
+extraMetadata:
+  main: dist/main/ritual-builder-entry.js
+mac:
+  target: dir
+  identity: "-"
+  notarize: false

@@ -2,6 +2,7 @@
 
 import {
   cleanup,
+  act,
   fireEvent,
   render,
   screen,
@@ -50,9 +51,30 @@ const approved = {
   approvedAt: "2026-08-15T16:03:00.000Z",
 };
 
+const receipt = {
+  schemaVersion: 1 as const,
+  receiptId: "rcp_01J00000000000000000000000",
+  runId: "rrn_01J00000000000000000000000",
+  ritualId: approved.ritualId,
+  ritualRevision: 1,
+  mode: "TEST" as const,
+  outcome: "NEEDS_REVIEW" as const,
+  summary: "Customer A should receive the first response.",
+  evidence: ["The supplied deadline is Friday."],
+  uncertainties: ["Commercial impact was not supplied."],
+  sampleDigest: "a".repeat(64),
+  sampleCharacterCount: 42,
+  externalEffects: [] as const,
+  recordedAt: "2026-08-15T18:03:00.000Z",
+};
+
 function bridge() {
   return {
-    initialize: vi.fn(async () => ({ identity, approved: null })),
+    initialize: vi.fn(async () => ({
+      identity,
+      approved: null,
+      receipt: null,
+    })),
     createDraftIdentity: vi.fn(async () => nextIdentity),
     draft: vi.fn(async (context) => ({
       status: "proposal" as const,
@@ -74,6 +96,7 @@ function bridge() {
       completion: "A reviewable result is ready.",
     })),
     approve: vi.fn(async (ritual) => ritual),
+    testRun: vi.fn(async () => ({ status: "receipt" as const, receipt })),
   };
 }
 
@@ -90,6 +113,75 @@ describe("RitualBuilderWorkspace", () => {
         new URL("village://app/?mode=ritual-builder-evil"),
       ),
     ).toBe("WORKSPACE");
+  });
+
+  it("turns a supplied sample into a reviewable no-effects Receipt", async () => {
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved,
+      receipt: null,
+    });
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+    await screen.findByText("Ritual approved");
+
+    fireEvent.click(screen.getByRole("button", { name: "Test this Ritual" }));
+    fireEvent.change(screen.getByLabelText("Representative sample"), {
+      target: { value: "Customer A needs an answer before Friday." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run safe test" }));
+
+    await screen.findByText("Test Receipt");
+    expect(activeBridge.testRun).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      ritualId: approved.ritualId,
+      ritualRevision: 1,
+      sample: "Customer A needs an answer before Friday.",
+    });
+    expect(screen.getByText(receipt.summary)).toBeTruthy();
+    expect(screen.getByText("No external effects")).toBeTruthy();
+    expect(screen.getByText(/Commercial impact/u)).toBeTruthy();
+    expect(screen.queryByLabelText("Representative sample")).toBeNull();
+  });
+
+  it("coalesces rapid duplicate submits into one paid Test Run", async () => {
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved,
+      receipt: null,
+    });
+    activeBridge.testRun.mockImplementation(() => new Promise(() => undefined));
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+    await screen.findByText("Ritual approved");
+    fireEvent.click(screen.getByRole("button", { name: "Test this Ritual" }));
+    fireEvent.change(screen.getByLabelText("Representative sample"), {
+      target: { value: "A representative sample." },
+    });
+    const submit = screen.getByRole("button", { name: "Run safe test" });
+
+    act(() => {
+      submit.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      submit.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    await waitFor(() => expect(activeBridge.testRun).toHaveBeenCalledOnce());
+  });
+
+  it("restores the latest Receipt beside its exact approved Ritual", async () => {
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved,
+      receipt,
+    });
+
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+
+    await screen.findByText("Test Receipt");
+    expect(screen.getByText(receipt.summary)).toBeTruthy();
+    expect(screen.getByText("No external effects")).toBeTruthy();
+    expect(activeBridge.testRun).not.toHaveBeenCalled();
   });
 
   it("does not call the Steward when local purpose validation fails", async () => {
@@ -167,7 +259,11 @@ describe("RitualBuilderWorkspace", () => {
 
   it("starts another Ritual with a fresh identity while preserving the approval", async () => {
     const activeBridge = bridge();
-    activeBridge.initialize.mockResolvedValueOnce({ identity, approved });
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved,
+      receipt: null,
+    });
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
     await screen.findByText("Ritual approved");
 
@@ -193,7 +289,11 @@ describe("RitualBuilderWorkspace", () => {
 
   it("keeps the approved Ritual available when fresh identity creation fails", async () => {
     const activeBridge = bridge();
-    activeBridge.initialize.mockResolvedValueOnce({ identity, approved });
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved,
+      receipt: null,
+    });
     activeBridge.createDraftIdentity.mockRejectedValueOnce(
       new Error("IDENTITY_UNAVAILABLE"),
     );

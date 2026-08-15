@@ -27,8 +27,20 @@ export function RitualBuilder({
       purpose: String(data.get("purpose") ?? ""),
     });
   };
+  const submitTestSample = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    onEvent({
+      type: "SUBMIT_TEST_SAMPLE",
+      sample: String(data.get("sample") ?? ""),
+    });
+  };
   const edit = (field: "name" | "purpose" | "completion", value: string) =>
     onEvent({ type: "EDIT_FIELD", field, value, occurredAt: now() });
+  const fieldsEditable =
+    state.phase === "CHOOSE_TRIGGER" ||
+    state.phase === "CHOOSE_REVIEW" ||
+    state.phase === "READY_FOR_APPROVAL";
 
   return (
     <main className="ritual-builder">
@@ -73,6 +85,7 @@ export function RitualBuilder({
               maxLength={320}
               placeholder="For example: Review my pipeline each weekday and prepare the next follow-ups."
               required
+              autoComplete="off"
             />
             <button type="submit">Start the draft</button>
           </form>
@@ -82,6 +95,39 @@ export function RitualBuilder({
           <div className="ritual-drafting" role="status">
             <span aria-hidden="true" />
             <p>The Steward is shaping your first reviewable draft…</p>
+          </div>
+        ) : null}
+
+        {state.phase === "PREPARING_TEST" ? (
+          <form
+            className="ritual-composer ritual-test-composer"
+            onSubmit={submitTestSample}
+          >
+            <label htmlFor="ritual-test-sample">Representative sample</label>
+            <textarea
+              id="ritual-test-sample"
+              name="sample"
+              rows={6}
+              minLength={16}
+              maxLength={4_000}
+              placeholder="Paste a small, representative example for the approved Ritual to review."
+              required
+              autoComplete="off"
+            />
+            <p>
+              Used for this test only. The sample is not attached to the
+              Receipt; only the bounded result and evidence are saved.
+            </p>
+            <button type="submit">Run safe test</button>
+          </form>
+        ) : null}
+
+        {state.phase === "RUNNING_TEST" ? (
+          <div className="ritual-drafting" role="status">
+            <span aria-hidden="true" />
+            <p>
+              The Steward is testing the approved Ritual against your sample…
+            </p>
           </div>
         ) : null}
 
@@ -191,11 +237,7 @@ export function RitualBuilder({
               label="Name"
               value={state.draft.name}
               maxLength={80}
-              disabled={
-                state.phase === "APPROVED" ||
-                state.phase === "SAVING_APPROVAL" ||
-                state.phase === "STARTING_NEW_RITUAL"
-              }
+              disabled={!fieldsEditable}
               onCommit={(value) => edit("name", value)}
             />
 
@@ -205,11 +247,7 @@ export function RitualBuilder({
               value={state.draft.purpose}
               maxLength={320}
               rows={3}
-              disabled={
-                state.phase === "APPROVED" ||
-                state.phase === "SAVING_APPROVAL" ||
-                state.phase === "STARTING_NEW_RITUAL"
-              }
+              disabled={!fieldsEditable}
               onCommit={(value) => edit("purpose", value)}
             />
 
@@ -247,11 +285,7 @@ export function RitualBuilder({
               value={state.draft.completion}
               maxLength={320}
               rows={2}
-              disabled={
-                state.phase === "APPROVED" ||
-                state.phase === "SAVING_APPROVAL" ||
-                state.phase === "STARTING_NEW_RITUAL"
-              }
+              disabled={!fieldsEditable}
               onCommit={(value) => edit("completion", value)}
             />
 
@@ -322,11 +356,83 @@ export function RitualBuilder({
                 </div>
                 <button
                   type="button"
+                  onClick={() => onEvent({ type: "START_TEST" })}
+                >
+                  Test this Ritual
+                </button>
+                <button
+                  type="button"
                   onClick={() => onEvent({ type: "START_NEW_RITUAL" })}
                 >
                   Shape another Ritual
                 </button>
               </div>
+            ) : null}
+
+            {state.phase === "REVIEW_TEST" ? (
+              <section
+                className="ritual-receipt"
+                aria-labelledby="test-receipt-title"
+              >
+                <header>
+                  <div>
+                    <p className="ritual-eyebrow">Proof of work</p>
+                    <h3 id="test-receipt-title">Test Receipt</h3>
+                  </div>
+                  <span>
+                    {state.receipt.outcome === "COMPLETED"
+                      ? "Complete"
+                      : "Needs review"}
+                  </span>
+                </header>
+                <p className="ritual-receipt__summary">
+                  {state.receipt.summary}
+                </p>
+                <div className="ritual-receipt__proof">
+                  <span>Run</span>
+                  <code>{state.receipt.runId.slice(-8)}</code>
+                  <span>Input</span>
+                  <strong>
+                    {state.receipt.sampleCharacterCount} characters
+                  </strong>
+                  <span>Safety</span>
+                  <strong>No external effects</strong>
+                </div>
+                {state.receipt.evidence.length ? (
+                  <div>
+                    <h4>Evidence</h4>
+                    <ul>
+                      {state.receipt.evidence.map((item, index) => (
+                        <li key={`${index}-${item}`}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {state.receipt.uncertainties.length ? (
+                  <div className="ritual-receipt__uncertainty">
+                    <h4>Uncertainty</h4>
+                    <ul>
+                      {state.receipt.uncertainties.map((item, index) => (
+                        <li key={`${index}-${item}`}>{item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                <footer>
+                  <button
+                    type="button"
+                    onClick={() => onEvent({ type: "START_TEST" })}
+                  >
+                    Run another test
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onEvent({ type: "START_NEW_RITUAL" })}
+                  >
+                    Shape another Ritual
+                  </button>
+                </footer>
+              </section>
             ) : null}
           </div>
         ) : (

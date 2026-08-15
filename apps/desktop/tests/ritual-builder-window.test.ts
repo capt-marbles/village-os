@@ -73,9 +73,10 @@ import { createRitualBuilderWindow } from "../src/main/ritual-builder-window.js"
 
 describe("Ritual Builder window", () => {
   const controller = {
-    loadLatest: vi.fn(async () => null),
+    loadLatestState: vi.fn(async () => ({ approved: null, receipt: null })),
     draft: vi.fn(async () => ({ status: "waiting" })),
     approve: vi.fn(async (ritual) => ritual),
+    testRun: vi.fn(async () => ({ status: "waiting" })),
     close: vi.fn(async () => undefined),
   };
 
@@ -138,6 +139,7 @@ describe("Ritual Builder window", () => {
     )!;
     const draft = electron.handlers.get("village:ritual-builder:draft")!;
     const approve = electron.handlers.get("village:ritual-builder:approve")!;
+    const testRun = electron.handlers.get("village:ritual-builder:test-run")!;
 
     const initialized = (await initialize(event)) as {
       identity: { draftId: string; ritualId: string };
@@ -147,13 +149,17 @@ describe("Ritual Builder window", () => {
       ritualId: initialized.identity.ritualId,
       approvedDraftId: initialized.identity.draftId,
     });
-    expect(controller.loadLatest).toHaveBeenCalledOnce();
+    await testRun(event, { ritualId: initialized.identity.ritualId });
+    expect(controller.loadLatestState).toHaveBeenCalledOnce();
     expect(controller.draft).toHaveBeenCalledWith({
       draftId: initialized.identity.draftId,
     });
     expect(controller.approve).toHaveBeenCalledWith({
       ritualId: initialized.identity.ritualId,
       approvedDraftId: initialized.identity.draftId,
+    });
+    expect(controller.testRun).toHaveBeenCalledWith({
+      ritualId: initialized.identity.ritualId,
     });
 
     const nextIdentity = (await createDraftIdentity(event)) as {
@@ -185,5 +191,26 @@ describe("Ritual Builder window", () => {
     await expect(initialize({ sender: {} })).rejects.toThrow(
       "UNTRUSTED_RITUAL_BUILDER_SENDER",
     );
+  });
+
+  it("restores the latest Receipt only for the latest approved Ritual", async () => {
+    const approved = { ritualId: "rtl_01J00000000000000000000000" };
+    const receipt = { receiptId: "rcp_01J00000000000000000000000" };
+    controller.loadLatestState.mockResolvedValueOnce({
+      approved: approved as never,
+      receipt: receipt as never,
+    });
+    await createRitualBuilderWindow({
+      preloadPath: "/app/ritual-builder-bridge.cjs",
+      controller,
+    });
+    const initialize = electron.handlers.get(
+      "village:ritual-builder:initialize",
+    )!;
+
+    await expect(
+      initialize({ sender: electron.views[0]!.webContents }),
+    ).resolves.toMatchObject({ approved, receipt });
+    expect(controller.loadLatestState).toHaveBeenCalledOnce();
   });
 });

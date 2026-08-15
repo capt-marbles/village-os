@@ -59,6 +59,7 @@ body { margin: 0; min-width: 320px; min-height: 100vh; background: radial-gradie
 .ritual-composer label, .ritual-decisions legend { display: block; margin-bottom: .75rem; color: #cbd7c7; font-size: .82rem; font-weight: 750; }
 .ritual-composer textarea { width: 100%; resize: vertical; border: 1px solid #405242; border-radius: 1rem; padding: 1rem 1.1rem; color: #f2f5ed; background: #151c16; font: inherit; line-height: 1.5; }
 .ritual-composer button, .ritual-approval button { min-height: 46px; margin-top: .8rem; border: 0; border-radius: 999px; padding: .7rem 1.15rem; color: #11200f; background: #b8e19f; font: 800 .84rem ui-sans-serif, system-ui; cursor: pointer; }
+.ritual-test-composer p { margin: .55rem 0 0; color: #8fa08e; font-size: .76rem; line-height: 1.45; }
 .ritual-decisions > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; }
 .ritual-decisions button { display: grid; grid-template-columns: 2rem 1fr; gap: .2rem .7rem; min-height: 116px; border: 1px solid #3a4b3c; border-radius: 1rem; padding: .9rem; color: #edf2e9; background: #151c16; text-align: left; cursor: pointer; transition: border-color 160ms ease, transform 160ms ease, background 160ms ease; }
 .ritual-decisions button:hover { border-color: #9cc985; background: #1b261c; transform: translateY(-2px); }
@@ -90,6 +91,19 @@ body { margin: 0; min-width: 320px; min-height: 100vh; background: radial-gradie
 .ritual-approval p { margin: 0; color: #435047; font-size: .83rem; line-height: 1.5; }
 .ritual-approved { margin-top: 1.25rem; border-left: 4px solid #567e4f; padding: .5rem 0 .5rem 1rem; }
 .ritual-approved p { margin: .35rem 0 0; color: #536057; }
+.ritual-approved button, .ritual-receipt button { min-height: 40px; margin: .8rem .45rem 0 0; border: 1px solid #617562; border-radius: 999px; padding: .6rem .9rem; color: #263429; background: transparent; font: 800 .76rem ui-sans-serif, system-ui; cursor: pointer; }
+.ritual-approved button:first-of-type, .ritual-receipt button:first-of-type { border-color: #38523a; color: #f3f7ed; background: #38523a; }
+.ritual-receipt { margin-top: 1.4rem; border: 1px solid #8c9986; border-radius: 1.1rem; padding: 1.15rem; background: #f6f4e7; box-shadow: 0 16px 40px rgba(46, 58, 45, .1); }
+.ritual-receipt > header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; padding-bottom: .9rem; border-bottom: 1px solid #c7ccbd; }
+.ritual-receipt h3 { margin: 0; font: 500 1.75rem "Iowan Old Style", serif; }
+.ritual-receipt > header > span { border-radius: 999px; padding: .35rem .55rem; color: #5d4930; background: #eadbb3; font: 800 .62rem ui-monospace, monospace; text-transform: uppercase; }
+.ritual-receipt__summary { margin: 1rem 0; color: #1f2b22; font: 600 1rem/1.55 ui-sans-serif, system-ui; }
+.ritual-receipt__proof { display: grid; grid-template-columns: auto 1fr; gap: .4rem .8rem; border-block: 1px solid #c7ccbd; padding: .85rem 0; }
+.ritual-receipt__proof span { color: #68746b; font: 800 .62rem ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; }
+.ritual-receipt__proof code, .ritual-receipt__proof strong { justify-self: end; font-size: .75rem; }
+.ritual-receipt h4 { margin: 1rem 0 .4rem; color: #607063; font-size: .65rem; letter-spacing: .1em; text-transform: uppercase; }
+.ritual-receipt ul { margin: 0; padding-left: 1.1rem; color: #37433a; font-size: .82rem; line-height: 1.55; }
+.ritual-receipt__uncertainty { border-left: 3px solid #b38c50; padding-left: .8rem; }
 .ritual-draft__empty { display: grid; place-items: center; min-height: 68vh; color: #637067; text-align: center; }
 .ritual-draft__empty span { display: grid; place-items: center; width: 4.5rem; height: 4.5rem; border: 1px solid #899488; border-radius: 50%; font: 500 2.4rem "Iowan Old Style", serif; }
 .ritual-draft__empty p { max-width: 24rem; line-height: 1.6; }

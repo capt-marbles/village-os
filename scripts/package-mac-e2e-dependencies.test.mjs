@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { parse } from "yaml";
 
 const desktopPackage = JSON.parse(
   await readFile(
@@ -10,6 +11,16 @@ const desktopPackage = JSON.parse(
 );
 const ciWorkflow = await readFile(
   new URL("../.github/workflows/ci.yml", import.meta.url),
+  "utf8",
+);
+const ritualPackageConfig = parse(
+  await readFile(
+    new URL("../apps/desktop/electron-builder.ritual-e2e.yml", import.meta.url),
+    "utf8",
+  ),
+);
+const ritualPackageEntry = await readFile(
+  new URL("../apps/desktop/src/main/ritual-builder-entry.ts", import.meta.url),
   "utf8",
 );
 
@@ -26,4 +37,21 @@ test("CI delegates packaged dependency preparation to the package command", () =
     /pnpm --filter @village\/test-auth-site build/,
   );
   assert.match(ciWorkflow, /pnpm --filter @village\/desktop package:mac:e2e/);
+});
+
+test("the Ritual smoke package opens its isolated surface, never the delegated proof harness", () => {
+  assert.match(
+    desktopPackage.scripts["package:mac:ritual-e2e"],
+    /electron-builder --dir --config electron-builder\.ritual-e2e\.yml --mac/,
+  );
+  assert.equal(
+    ritualPackageConfig.extraMetadata.main,
+    "dist/main/ritual-builder-entry.js",
+  );
+  assert.notEqual(
+    ritualPackageConfig.extraMetadata.main,
+    "dist/main/internal-proof-entry.js",
+  );
+  assert.match(ritualPackageEntry, /runRitualBuilderApplication\(\)/);
+  assert.doesNotMatch(ritualPackageEntry, /runVillageApplication/);
 });

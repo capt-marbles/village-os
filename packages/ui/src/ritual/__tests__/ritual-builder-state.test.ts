@@ -327,6 +327,76 @@ describe("Ritual Builder state", () => {
     expect(state.messages.at(-1)?.text).toContain("No Run has started");
   });
 
+  it("runs an approved Ritual only after sample review and presents a Receipt", () => {
+    let state = applyStewardProposal(createRitualBuilderState());
+    state = reduceRitualBuilder(state, {
+      type: "SELECT_TRIGGER",
+      trigger: "ON_DEMAND",
+      timeZone: "America/Chicago",
+      occurredAt: "2026-08-15T16:01:00.000Z",
+    });
+    state = reduceRitualBuilder(state, {
+      type: "SELECT_REVIEW",
+      ownerReview: "EVERY_RUN",
+      occurredAt: "2026-08-15T16:02:00.000Z",
+    });
+    state = reduceRitualBuilder(state, {
+      type: "APPROVE",
+      ritualId,
+      expectedRevision: 3,
+      occurredAt: "2026-08-15T16:03:00.000Z",
+    });
+    state = reduceRitualBuilder(state, { type: "APPROVAL_SAVED" });
+    state = reduceRitualBuilder(state, { type: "START_TEST" });
+    expect(state.phase).toBe("PREPARING_TEST");
+
+    const unchanged = reduceRitualBuilder(state, {
+      type: "SUBMIT_TEST_SAMPLE",
+      sample: "   ",
+    });
+    expect(unchanged.phase).toBe("PREPARING_TEST");
+    expect(unchanged.error).toContain("sample");
+
+    const tooShort = reduceRitualBuilder(state, {
+      type: "SUBMIT_TEST_SAMPLE",
+      sample: "Too short",
+    });
+    expect(tooShort.phase).toBe("PREPARING_TEST");
+    expect(tooShort.error).toContain("16 characters");
+
+    state = reduceRitualBuilder(state, {
+      type: "SUBMIT_TEST_SAMPLE",
+      sample: "Customer A needs an answer before Friday.",
+    });
+    expect(state.phase).toBe("RUNNING_TEST");
+    state = reduceRitualBuilder(state, {
+      type: "TEST_RUN_RECEIPT",
+      receipt: {
+        schemaVersion: 1,
+        receiptId: "rcp_01J00000000000000000000000",
+        runId: "rrn_01J00000000000000000000000",
+        ritualId,
+        ritualRevision: 1,
+        mode: "TEST",
+        outcome: "NEEDS_REVIEW",
+        summary: "Customer A should receive the first response.",
+        evidence: ["The supplied deadline is Friday."],
+        uncertainties: ["Commercial impact was not supplied."],
+        sampleDigest: "a".repeat(64),
+        sampleCharacterCount: 42,
+        externalEffects: [],
+        recordedAt: "2026-08-15T18:03:00.000Z",
+      },
+    });
+    expect(state).toMatchObject({
+      phase: "REVIEW_TEST",
+      receipt: { outcome: "NEEDS_REVIEW", externalEffects: [] },
+    });
+    expect(JSON.stringify(state)).not.toContain(
+      "Customer A needs an answer before Friday.",
+    );
+  });
+
   it("ignores replayed decisions outside their exact phase", () => {
     let state = applyStewardProposal(createRitualBuilderState());
     state = reduceRitualBuilder(state, {
