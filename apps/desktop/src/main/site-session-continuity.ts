@@ -18,7 +18,7 @@ import {
   type ContinuityBinding,
   type EncryptedContinuityRevision,
 } from "@village/contracts";
-import type { CookiesSetDetails } from "electron";
+import type { Cookie, CookiesGetFilter, CookiesSetDetails } from "electron";
 import { z } from "zod";
 
 const fixtureCookieSchema = z
@@ -66,6 +66,17 @@ const destinationJournalSchema = z.strictObject({
     .regex(/^[a-f0-9]{64}$/)
     .nullable(),
   managedCookies: z.array(managedCookieSchema).max(64),
+});
+
+const sourceJournalSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  ...continuityBindingSchema.shape,
+  publishedRevision: z.number().int().nonnegative(),
+  publishedDigest: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .nullable(),
+  pending: encryptedContinuityRevisionSchema.nullable(),
 });
 
 const continuityAcknowledgementSchema = z.strictObject({
@@ -329,6 +340,121 @@ interface FixtureCookieStore {
   flushStore(): Promise<void>;
 }
 
+interface FixtureCookieSource {
+  get(filter: CookiesGetFilter): Promise<Cookie[]>;
+}
+
+interface FixtureContinuitySourceOptions {
+  binding: ContinuityBinding;
+  journalPath: string;
+  cookieStore: FixtureCookieSource;
+  sourceSigningKey: CryptoKey;
+  destinationEncryptionKey: CryptoKey;
+  publish(
+    revision: EncryptedContinuityRevision,
+  ): Promise<{ stored: boolean }>;
+  now?: () => number;
+}
+
+export class FixtureContinuitySource {
+  private operationTail: Promise<void> = Promise.resolve();
+  private readonly now: () => number;
+
+  constructor(private readonly options: FixtureContinuitySourceOptions) {
+    this.now = options.now ?? Date.now;
+  }
+
+  publishCurrent(): Promise<{
+    revision: number;
+    digest: string;
+    stored: boolean;
+  }> {
+    return this.enqueue(async () => {
+      const journal = await this.readJournal();
+      let pending = journal.pending;
+      if (!pending) {
+        const cookies = fixtureSnapshotSchema.shape.cookies.parse(
+          (await this.options.cookieStore.get({
+            url: "https://fixture.village.test/",
+          })).map(toFixtureCookie),
+        );
+        const issuedAt = this.now();
+        pending = await createEncryptedFixtureRevision({
+          binding: this.options.binding,
+          revision: journal.publishedRevision + 1,
+          previousDigest: journal.publishedDigest,
+          cookies,
+          issuedAt: new Date(issuedAt).toISOString(),
+          expiresAt: new Date(issuedAt + 24 * 60 * 60_000).toISOString(),
+          sourceSigningKey: this.options.sourceSigningKey,
+          destinationEncryptionKey: this.options.destinationEncryptionKey,
+        });
+        await this.writeJournal({ ...journal, pending });
+      }
+      const result = await this.options.publish(pending);
+      await this.writeJournal({
+        schemaVersion: 1,
+        ...this.options.binding,
+        publishedRevision: pending.revision,
+        publishedDigest: pending.digest,
+        pending: null,
+      });
+      return {
+        revision: pending.revision,
+        digest: pending.digest,
+        stored: result.stored,
+      };
+    });
+  }
+
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.operationTail.then(operation, operation);
+    this.operationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  private async readJournal(): Promise<z.infer<typeof sourceJournalSchema>> {
+    try {
+      const parsed = sourceJournalSchema.parse(
+        JSON.parse(await readPrivateFile(this.options.journalPath, 196_608)),
+      );
+      if (!sameBinding(parsed, this.options.binding)) {
+        throw new Error("CONTINUITY_SOURCE_JOURNAL_BINDING_MISMATCH");
+      }
+      return parsed;
+    } catch (error) {
+      if (isMissingFile(error)) {
+        return sourceJournalSchema.parse({
+          schemaVersion: 1,
+          ...this.options.binding,
+          publishedRevision: 0,
+          publishedDigest: null,
+          pending: null,
+        });
+      }
+      if (
+        error instanceof Error &&
+        error.message === "CONTINUITY_SOURCE_JOURNAL_BINDING_MISMATCH"
+      ) {
+        throw error;
+      }
+      throw new Error("CONTINUITY_SOURCE_JOURNAL_CORRUPT");
+    }
+  }
+
+  private writeJournal(
+    journal: z.infer<typeof sourceJournalSchema>,
+  ): Promise<void> {
+    return writePrivateFile(
+      this.options.journalPath,
+      JSON.stringify(sourceJournalSchema.parse(journal)),
+    );
+  }
+}
+
 interface FixtureContinuityDestinationOptions {
   binding: ContinuityBinding;
   journalPath: string;
@@ -405,6 +531,14 @@ export class FixtureContinuityDestination {
     });
   }
 
+  async current(): Promise<{ revision: number; digest: string | null }> {
+    const journal = await this.readJournal();
+    return {
+      revision: journal.appliedRevision,
+      digest: journal.appliedDigest,
+    };
+  }
+
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.operationTail.then(operation, operation);
     this.operationTail = result.then(
@@ -459,22 +593,50 @@ export class FixtureContinuityDestination {
     candidate: z.infer<typeof destinationJournalSchema>,
   ): Promise<void> {
     const journal = destinationJournalSchema.parse(candidate);
-    const directory = dirname(this.options.journalPath);
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-    await chmod(directory, 0o700);
-    const temporary = `${this.options.journalPath}.${crypto.randomUUID()}.tmp`;
-    try {
-      await writeFile(temporary, JSON.stringify(journal), {
-        flag: "wx",
-        mode: 0o600,
-      });
-      await chmod(temporary, 0o600);
-      await rename(temporary, this.options.journalPath);
-      await chmod(this.options.journalPath, 0o600);
-    } catch (error) {
-      await unlink(temporary).catch(() => undefined);
-      throw error;
-    }
+    await writePrivateFile(this.options.journalPath, JSON.stringify(journal));
+  }
+}
+
+function toFixtureCookie(cookie: Cookie): FixtureCookie {
+  return fixtureCookieSchema.parse({
+    name: cookie.name,
+    value: cookie.value,
+    domain: cookie.domain,
+    path: cookie.path,
+    secure: cookie.secure,
+    httpOnly: cookie.httpOnly,
+    sameSite: cookie.sameSite ?? "unspecified",
+    expirationDate: cookie.expirationDate,
+    hostOnly: cookie.hostOnly,
+  });
+}
+
+async function readPrivateFile(path: string, maximumBytes: number) {
+  const metadata = await lstat(path);
+  if (
+    metadata.isSymbolicLink() ||
+    !metadata.isFile() ||
+    metadata.size > maximumBytes ||
+    (process.platform !== "win32" && (metadata.mode & 0o077) !== 0)
+  ) {
+    throw new Error("CONTINUITY_JOURNAL_CORRUPT");
+  }
+  return readFile(path, "utf8");
+}
+
+async function writePrivateFile(path: string, value: string): Promise<void> {
+  const directory = dirname(path);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  await chmod(directory, 0o700);
+  const temporary = `${path}.${crypto.randomUUID()}.tmp`;
+  try {
+    await writeFile(temporary, value, { flag: "wx", mode: 0o600 });
+    await chmod(temporary, 0o600);
+    await rename(temporary, path);
+    await chmod(path, 0o600);
+  } catch (error) {
+    await unlink(temporary).catch(() => undefined);
+    throw error;
   }
 }
 
