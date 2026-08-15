@@ -45,6 +45,11 @@ export type RitualBuilderState =
       pendingApproval: ApprovedRitualRevision;
     })
   | (RitualBuilderStateBase & {
+      phase: "STARTING_NEW_RITUAL";
+      draft: RitualDraft;
+      approved: ApprovedRitualRevision;
+    })
+  | (RitualBuilderStateBase & {
       phase: "APPROVED";
       draft: RitualDraft;
       approved: ApprovedRitualRevision;
@@ -70,6 +75,9 @@ export type RitualBuilderEvent =
   | { type: "RESTORE_APPROVED"; approved: ApprovedRitualRevision }
   | { type: "APPROVAL_SAVED" }
   | { type: "APPROVAL_SAVE_FAILED" }
+  | { type: "START_NEW_RITUAL" }
+  | { type: "NEW_RITUAL_READY" }
+  | { type: "NEW_RITUAL_FAILED" }
   | {
       type: "SELECT_TRIGGER";
       trigger: "ON_DEMAND" | "WEEKDAYS" | "EVENT";
@@ -341,6 +349,51 @@ export function reduceRitualBuilder(
         ),
         error: null,
         requestRevision: state.requestRevision,
+      };
+    }
+    case "START_NEW_RITUAL": {
+      if (state.phase !== "APPROVED") return state;
+      return {
+        ...state,
+        phase: "STARTING_NEW_RITUAL",
+        messages: message(
+          state.messages,
+          "SYSTEM",
+          `Preparing a new Ritual. ${state.approved.name} remains saved.`,
+        ),
+        error: null,
+      };
+    }
+    case "NEW_RITUAL_READY": {
+      if (state.phase !== "STARTING_NEW_RITUAL") return state;
+      return {
+        phase: "DESCRIBE_PURPOSE",
+        draft: null,
+        approved: null,
+        messages: [
+          {
+            id: "message-1",
+            speaker: "SYSTEM",
+            text: `${state.approved.name} remains saved.`,
+          },
+          {
+            id: "message-2",
+            speaker: "STEWARD",
+            text: "What other regular work should I take care of? Start with the outcome you want.",
+          },
+        ],
+        error: null,
+        requestRevision: 0,
+      };
+    }
+    case "NEW_RITUAL_FAILED": {
+      if (state.phase !== "STARTING_NEW_RITUAL") return state;
+      const error = "Village could not prepare another Ritual. Try again.";
+      return {
+        ...state,
+        phase: "APPROVED",
+        messages: message(state.messages, "SYSTEM", error),
+        error,
       };
     }
     case "SELECT_TRIGGER": {

@@ -64,6 +64,25 @@ describe("RitualRepository", () => {
     await expect(repository.list()).rejects.toThrow("RITUAL_STORE_CORRUPT");
   });
 
+  it("preserves earlier Rituals and restores the most recently approved one", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
+    const repository = new RitualRepository(join(directory, "rituals.json"));
+    const second = {
+      ...approved,
+      ritualId: "rtl_01J00000000000000000000001",
+      approvedDraftId: "rtd_01J00000000000000000000001",
+      name: "Inbox priorities",
+      purpose: "Review my inbox and identify the replies that matter most.",
+      approvedAt: "2026-08-15T17:03:00.000Z",
+    };
+
+    await repository.save(approved);
+    await repository.save(second);
+
+    expect(await repository.list()).toEqual([approved, second]);
+    expect(await repository.latest()).toEqual(second);
+  });
+
   it("rejects a distinct 101st Ritual without corrupting the store", async () => {
     const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
     const repository = new RitualRepository(join(directory, "rituals.json"));

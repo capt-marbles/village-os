@@ -44,11 +44,10 @@ export async function createRitualBuilderWindow(options: {
   };
   window.on("resize", layout);
   layout();
-  const identity = {
-    draftId: villageId("rtd"),
-    ritualId: villageId("rtl"),
-  };
+  let identity = createRitualBuilderIdentity();
   const initializeChannel = "village:ritual-builder:initialize";
+  const createDraftIdentityChannel =
+    "village:ritual-builder:create-draft-identity";
   const draftChannel = "village:ritual-builder:draft";
   const approveChannel = "village:ritual-builder:approve";
   const assertSender = (event: IpcMainInvokeEvent) => {
@@ -63,18 +62,30 @@ export async function createRitualBuilderWindow(options: {
     assertSender(event);
     return { identity, approved: await options.controller.loadLatest() };
   });
+  ipcMain.handle(createDraftIdentityChannel, async (event) => {
+    assertSender(event);
+    identity = createRitualBuilderIdentity();
+    return identity;
+  });
   ipcMain.handle(draftChannel, async (event, candidate) => {
     assertSender(event);
+    if (!hasExactIdentity(candidate, identity, "draft")) {
+      throw new Error("STALE_RITUAL_BUILDER_IDENTITY");
+    }
     return options.controller.draft(candidate);
   });
   ipcMain.handle(approveChannel, async (event, candidate) => {
     assertSender(event);
+    if (!hasExactIdentity(candidate, identity, "approval")) {
+      throw new Error("STALE_RITUAL_BUILDER_IDENTITY");
+    }
     return options.controller.approve(candidate);
   });
   const cleanup = () => {
     if (closed) return;
     closed = true;
     ipcMain.removeHandler(initializeChannel);
+    ipcMain.removeHandler(createDraftIdentityChannel);
     ipcMain.removeHandler(draftChannel);
     ipcMain.removeHandler(approveChannel);
     void options.controller.close();
@@ -99,4 +110,24 @@ function villageId(prefix: "rtd" | "rtl"): string {
   return `${prefix}_${[...bytes]
     .map((byte) => villageIdAlphabet[byte & 31])
     .join("")}`;
+}
+
+function createRitualBuilderIdentity() {
+  return {
+    draftId: villageId("rtd"),
+    ritualId: villageId("rtl"),
+  };
+}
+
+function hasExactIdentity(
+  candidate: unknown,
+  identity: ReturnType<typeof createRitualBuilderIdentity>,
+  kind: "draft" | "approval",
+): boolean {
+  if (typeof candidate !== "object" || candidate === null) return false;
+  const record = candidate as Record<string, unknown>;
+  return kind === "draft"
+    ? record.draftId === identity.draftId
+    : record.approvedDraftId === identity.draftId &&
+        record.ritualId === identity.ritualId;
 }
