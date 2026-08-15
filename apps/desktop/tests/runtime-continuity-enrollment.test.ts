@@ -58,4 +58,17 @@ describe("runtime continuity enrollment", () => {
       retriable: false,
     });
   });
+
+  it.each([
+    "CONTINUITY_SOURCE_JOURNAL_CORRUPT",
+    "CONTINUITY_JOURNAL_CORRUPT",
+    "CONTINUITY_JOURNAL_BINDING_MISMATCH",
+    "MULTIPLE_CONTINUITY_GRANTS_OWNER_RECOVERY_REQUIRED",
+  ])("classifies %s as continuity state recovery", (code) => {
+    expect(classifyContinuityEnrollmentError(new Error(code))).toEqual({
+      component: "CONTINUITY",
+      code: "SESSION_CONTINUITY_OWNER_RECOVERY_REQUIRED",
+      retriable: false,
+    });
+  });
 });
