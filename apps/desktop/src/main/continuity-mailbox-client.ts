@@ -61,7 +61,8 @@ export class ContinuityMailboxClient {
     const parsed = encryptedContinuityRevisionSchema.parse(revision);
     const response = await this.post(parsed.grantId, "revisions", parsed);
     const body = publishResponseSchema.safeParse(response);
-    if (!body.success) throw responseError(response, "INVALID_CONTINUITY_PUBLISH_RESPONSE");
+    if (!body.success)
+      throw responseError(response, "INVALID_CONTINUITY_PUBLISH_RESPONSE");
     return { stored: body.data.stored };
   }
 
@@ -93,7 +94,8 @@ export class ContinuityMailboxClient {
     });
     const response = await this.post(binding.grantId, "fetch", envelope);
     const body = fetchResponseSchema.safeParse(response);
-    if (!body.success) throw responseError(response, "INVALID_CONTINUITY_FETCH_RESPONSE");
+    if (!body.success)
+      throw responseError(response, "INVALID_CONTINUITY_FETCH_RESPONSE");
     return body.data.revision;
   }
 
@@ -131,7 +133,10 @@ export class ContinuityMailboxClient {
     );
     const body = acknowledgementResponseSchema.safeParse(response);
     if (!body.success) {
-      throw responseError(response, "INVALID_CONTINUITY_ACKNOWLEDGEMENT_RESPONSE");
+      throw responseError(
+        response,
+        "INVALID_CONTINUITY_ACKNOWLEDGEMENT_RESPONSE",
+      );
     }
     return { acknowledged: body.data.acknowledged };
   }
@@ -177,13 +182,11 @@ export class ContinuityMailboxClient {
       } catch {
         throw new Error("INVALID_CONTINUITY_CONTROL_PLANE_RESPONSE");
       }
-      if (!response.ok) throw responseError(candidate, "CONTINUITY_CONTROL_PLANE_REJECTED");
+      if (!response.ok)
+        throw responseError(candidate, "CONTINUITY_CONTROL_PLANE_REJECTED");
       return candidate;
     } catch (error) {
-      if (
-        timedOut ||
-        (error instanceof Error && error.name === "AbortError")
-      ) {
+      if (timedOut || (error instanceof Error && error.name === "AbortError")) {
         throw new Error("CONTINUITY_CONTROL_PLANE_TIMEOUT");
       }
       throw error;
