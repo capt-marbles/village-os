@@ -34,13 +34,15 @@
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:workers && pnpm audit:provenance && pnpm audit:licenses && pnpm audit:assets && pnpm audit:boundaries && pnpm audit:secret-sinks && pnpm audit:telemetry-egress && pnpm audit:release-config && pnpm build"
   },
   "devDependencies": {
-    "@electron/fuses": "1.8.0",
     "@cloudflare/vitest-pool-workers": "^0.21.2",
     "@cloudflare/workers-types": "5.20260812.1",
+    "@electron/fuses": "1.8.0",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "24.10.13",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.1",
+    "happy-dom": "^20.11.2",
     "oxlint": "1.78.0",
     "prettier": "3.9.6",
     "typescript": "5.9.3",

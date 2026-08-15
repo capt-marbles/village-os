@@ -34,6 +34,10 @@ import {
   type RuntimeModelProviderComposition,
 } from "./runtime-model-provider.js";
 import { createRuntimeControlPlaneAutomationFence } from "./runtime-control-plane.js";
+import {
+  createRitualBuilderWindow,
+  type RitualBuilderWindow,
+} from "./ritual-builder-window.js";
 
 registerVillageScheme(protocol);
 installGlobalSecurityPolicy(app);
@@ -169,4 +173,14 @@ export async function runVillageApplication(
   for (const argument of process.argv) pairingInbox.accept(argument);
   app.on("window-all-closed", () => app.quit());
   return startVillageRuntime(pairedIdentitySource, internalComposition);
+}
+
+export async function runRitualBuilderApplication(): Promise<RitualBuilderWindow> {
+  await app.whenReady();
+  installVillageProtocol(
+    protocol,
+    fileURLToPath(new URL("../renderer", import.meta.url)),
+  );
+  app.on("window-all-closed", () => app.quit());
+  return createRitualBuilderWindow();
 }
