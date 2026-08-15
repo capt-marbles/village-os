@@ -85,6 +85,35 @@ describe("Site Session continuity routes", () => {
       deviceId: destinationDeviceId,
       browserSessionId: destinationBrowserSessionId,
     });
+    const setup = await SELF.fetch(
+      new Request("https://village.test/api/site-session-continuity/setup", {
+        headers: ownerHeaders,
+      }),
+    );
+    expect(setup.status).toBe(200);
+    const setupBody = await setup.json();
+    expect(setupBody).toEqual({
+      ok: true,
+      sessions: [
+        {
+          deviceId: destinationDeviceId,
+          browserSessionId: destinationBrowserSessionId,
+          deviceName: "Destination Mac",
+          connection: "ONLINE",
+          recipientKeyState: "READY",
+        },
+        {
+          deviceId: sourceDeviceId,
+          browserSessionId: sourceBrowserSessionId,
+          deviceName: "Source Mac",
+          connection: "ONLINE",
+          recipientKeyState: "MISSING",
+        },
+      ],
+      grants: [],
+    });
+    expect(JSON.stringify(setupBody)).not.toContain("publicKey");
+    expect(JSON.stringify(setupBody)).not.toContain("a".repeat(43));
     await expect((await enrollDestinationKey()).json()).resolves.toMatchObject({
       ok: true,
       enrolled: false,
@@ -451,6 +480,37 @@ async function seedEligiblePair() {
       destinationDeviceId,
       JSON.stringify(destinationPublicKey),
       now,
+    ),
+    ...(
+      [
+        ["par_01J00000000000000000000001", sourceDeviceId, "Source Mac"],
+        [
+          "par_01J00000000000000000000002",
+          destinationDeviceId,
+          "Destination Mac",
+        ],
+      ] as const
+    ).map(([pairingId, deviceId, deviceName]) =>
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO pairing_challenges
+         (principal_id, pairing_id, device_id, device_display_name,
+          public_key_json, protection, secret_hash, fingerprint,
+          attempts_remaining, state, created_at, expires_at, confirmed_at,
+          consumed_at)
+         VALUES (?, ?, ?, ?, '{}', 'OS_PROTECTED_FALLBACK', ?, ?, 10,
+                 'CONSUMED', ?, ?, ?, ?)`,
+      ).bind(
+        principalId,
+        pairingId,
+        deviceId,
+        deviceName,
+        "s".repeat(43),
+        "A1B2C3D4E5F60708",
+        now,
+        "2026-08-16T18:00:00.000Z",
+        now,
+        now,
+      ),
     ),
     ...(
       [
