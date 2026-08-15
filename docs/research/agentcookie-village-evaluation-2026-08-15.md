@@ -5,9 +5,15 @@ Upstream audited: `mvanhorn/agentcookie` v1.0.0, commit `e498e93bcaac867386dfba1
 
 ## Verdict
 
-AgentCookie is a strong reference implementation for future Mac-to-Mac session continuity, but it is not a drop-in session layer for Village. It should not block Village PR #16. Prototype a narrow, owner-approved, LinkedIn-only adapter later.
+AgentCookie is a strong reference implementation for future Mac-to-Mac session continuity, but it is not a drop-in session layer for Village. It did not block Village PR #16. The first isolated spike now proves a narrow, owner-approved, LinkedIn-only destination adapter.
 
 Village should not expose a production CDP port or write AgentCookie data directly into Chromium SQLite. The safer seam is an authenticated AgentCookie-compatible receiver that maps an explicitly allowlisted cookie batch into the exact Village Electron `Session` through `session.cookies.set()`.
+
+## Current spike boundary
+
+The current spike validates a signed-envelope shape, exact destination binding, a one-minute lifetime, owner authorization, replay rejection, a strict LinkedIn cookie allowlist, direct Electron cookie insertion, persistent-store flushing, and secret-free results and errors. Its verifier and replay store are injected seams, and the importer is not wired into the production desktop runtime.
+
+It does not yet extract Chrome cookies, pair two Macs, encrypt or transport an envelope, persist replay state across restart, expose an owner ceremony, propagate logout, or prove that LinkedIn accepts the transferred Site Session. Those are separate go/no-go work, not implied capabilities.
 
 ## Verified upstream behavior
 
@@ -52,7 +58,7 @@ LinkedIn also restricts third-party automation. Session portability and automate
 ## Recommended spike
 
 1. Keep PR #16 unchanged and merge it independently.
-2. Build a later, isolated Mac-to-Mac continuity spike.
+2. Extend the isolated destination spike into a Mac-to-Mac continuity experiment only after its residual security seams are implemented.
 3. Use an explicit owner ceremony: “Make this LinkedIn session available on Mac X.”
 4. Pair enrolled Village devices with revocable, device-bound credentials.
 5. Export only an allowlisted cookie subset from an authorized local source.
