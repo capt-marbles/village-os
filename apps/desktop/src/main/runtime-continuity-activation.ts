@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type {
   ContinuityActivation,
+  ContinuityActivationIdentity,
   ContinuityBinding,
   EncryptedContinuityRevision,
 } from "@village/contracts";
@@ -9,13 +10,6 @@ import {
   FixtureContinuityDestination,
   FixtureContinuitySource,
 } from "./site-session-continuity.js";
-
-type ActivationIdentity = {
-  principalId: string;
-  deviceId: string;
-  browserSessionId: string;
-  site: "OWNED_FIXTURE";
-};
 
 type ActivationCookieStore = {
   get(filter: CookiesGetFilter): Promise<Cookie[]>;
@@ -26,7 +20,7 @@ type ActivationCookieStore = {
 
 type ActivationMailbox = {
   loadActivations(
-    identity: ActivationIdentity,
+    identity: ContinuityActivationIdentity,
   ): Promise<ContinuityActivation[]>;
   publish(revision: EncryptedContinuityRevision): Promise<{ stored: boolean }>;
   fetchAfter(
@@ -40,7 +34,7 @@ type ActivationMailbox = {
 };
 
 interface RuntimeContinuityActivationOptions {
-  identity: ActivationIdentity;
+  identity: ContinuityActivationIdentity;
   journalRoot: string;
   devicePrivateKey: CryptoKey;
   recipientPrivateKey: CryptoKey;
@@ -165,7 +159,7 @@ export class RuntimeContinuityActivation {
 
 function assertActivationIdentity(
   activation: ContinuityActivation,
-  identity: ActivationIdentity,
+  identity: ContinuityActivationIdentity,
 ): void {
   const binding = activation.binding;
   const matches =

@@ -13,6 +13,7 @@ import {
   deviceIdSchema,
   type ContinuityBinding,
   type ContinuityActivation,
+  type ContinuityActivationIdentity,
   type EncryptedContinuityRevision,
 } from "@village/contracts";
 import { z } from "zod";
@@ -69,12 +70,9 @@ export class ContinuityMailboxClient {
     this.timeoutMs = options.timeoutMs ?? 30_000;
   }
 
-  async loadActivations(identity: {
-    principalId: string;
-    deviceId: string;
-    browserSessionId: string;
-    site: "OWNED_FIXTURE";
-  }): Promise<ContinuityActivation[]> {
+  async loadActivations(
+    identity: ContinuityActivationIdentity,
+  ): Promise<ContinuityActivation[]> {
     const sequence = await this.options.sequences.reserveNext(
       identity.deviceId,
       identity.browserSessionId,

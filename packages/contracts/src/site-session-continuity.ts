@@ -203,13 +203,17 @@ export const continuityRecipientKeyEnrollmentSchema =
     signature: z.string().regex(/^[A-Za-z0-9_-]{86}$/),
   });
 
+export const continuityActivationIdentitySchema = z.strictObject({
+  principalId: principalIdSchema,
+  deviceId: deviceIdSchema,
+  browserSessionId: browserSessionIdSchema,
+  site: z.literal("OWNED_FIXTURE"),
+});
+
 const unsignedContinuityActivationRequestSchema = z
   .strictObject({
     protocolVersion: z.literal(1),
-    principalId: principalIdSchema,
-    deviceId: deviceIdSchema,
-    browserSessionId: browserSessionIdSchema,
-    site: z.literal("OWNED_FIXTURE"),
+    ...continuityActivationIdentitySchema.shape,
     sequence: z.number().int().positive(),
     issuedAt: instantSchema,
     expiresAt: instantSchema,
@@ -270,6 +274,9 @@ export type ContinuityRecipientKeyEnrollment = z.infer<
   typeof continuityRecipientKeyEnrollmentSchema
 >;
 export type ContinuityActivation = z.infer<typeof continuityActivationSchema>;
+export type ContinuityActivationIdentity = z.infer<
+  typeof continuityActivationIdentitySchema
+>;
 
 function canonicalBytes(values: readonly unknown[]): ArrayBuffer {
   const bytes = new TextEncoder().encode(JSON.stringify(values));
