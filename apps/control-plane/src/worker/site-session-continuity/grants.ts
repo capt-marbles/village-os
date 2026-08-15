@@ -3,12 +3,15 @@ import {
   continuityFetchEnvelopeSchema,
   continuityGrantIdSchema,
   continuityGrantRequestSchema,
+  continuityRecipientKeyEnrollmentSchema,
+  continuityRecipientKeyRevocationSchema,
   deviceCredentialSchema,
   encryptedContinuityRevisionSchema,
   principalIdSchema,
   type ContinuityBinding,
 } from "@village/contracts";
 import type { Environment } from "../../env.js";
+import { verifyContinuityRecipientKeyEnrollment } from "../browser-control/device-credentials.js";
 
 type GrantRow = {
   principal_id: string;
@@ -32,6 +35,7 @@ type EligibleSessionRow = {
   profile_state: string;
   public_key: string;
   credential_status: string;
+  protocol_version: number;
 };
 
 export async function createContinuityGrant(
@@ -93,8 +97,36 @@ export async function createContinuityGrant(
     destinationBrowserSessionId: request.data.destinationBrowserSessionId,
     site: request.data.site,
   };
+  const enrolledRecipientKey = await environment.VILLAGE_DB.prepare(
+    `SELECT encryption_public_key, device_signing_public_key
+     FROM continuity_recipient_keys
+     WHERE principal_id = ? AND device_id = ? AND browser_session_id = ?
+       AND site = ?`,
+  )
+    .bind(
+      principal.data,
+      request.data.destinationDeviceId,
+      request.data.destinationBrowserSessionId,
+      request.data.site,
+    )
+    .first<{
+      encryption_public_key: string;
+      device_signing_public_key: string;
+    }>();
+  if (!enrolledRecipientKey) {
+    return {
+      ok: false as const,
+      code: "CONTINUITY_RECIPIENT_KEY_NOT_ENROLLED",
+    };
+  }
+  if (
+    enrolledRecipientKey.device_signing_public_key !==
+    JSON.stringify(destinationKey)
+  ) {
+    return { ok: false as const, code: "CONTINUITY_RECIPIENT_KEY_STALE" };
+  }
   const keyStrings = {
-    encryption: JSON.stringify(request.data.destinationEncryptionPublicKey),
+    encryption: enrolledRecipientKey.encryption_public_key,
     source: JSON.stringify(sourceKey),
     destination: JSON.stringify(destinationKey),
   };
@@ -198,6 +230,152 @@ export async function createContinuityGrant(
     grant: publicGrant(active!),
     created,
   };
+}
+
+export async function enrollContinuityRecipientKey(
+  environment: Environment,
+  candidate: unknown,
+  now: string,
+) {
+  const enrollment =
+    continuityRecipientKeyEnrollmentSchema.safeParse(candidate);
+  if (!enrollment.success) {
+    return { ok: false as const, code: "INVALID_CONTINUITY_RECIPIENT_KEY" };
+  }
+  if (
+    Date.parse(enrollment.data.issuedAt) > Date.parse(now) + 5_000 ||
+    Date.parse(enrollment.data.expiresAt) <= Date.parse(now)
+  ) {
+    return { ok: false as const, code: "CONTINUITY_RECIPIENT_KEY_EXPIRED" };
+  }
+  const session = await eligibleSession(
+    environment.VILLAGE_DB,
+    enrollment.data.principalId,
+    enrollment.data.browserSessionId,
+  );
+  if (
+    !session ||
+    session.device_id !== enrollment.data.deviceId ||
+    session.site !== enrollment.data.site ||
+    session.profile_state !== "PRESENT" ||
+    session.credential_status !== "ACTIVE"
+  ) {
+    return { ok: false as const, code: "CONTINUITY_RECIPIENT_NOT_ELIGIBLE" };
+  }
+  if (session.protocol_version !== 1) {
+    return { ok: false as const, code: "PROTOCOL_DOWNGRADE_REJECTED" };
+  }
+  const signingKey = parseSigningKey(session.public_key);
+  if (
+    !signingKey ||
+    !(await verifyContinuityRecipientKeyEnrollment(enrollment.data, signingKey))
+  ) {
+    return { ok: false as const, code: "INVALID_DEVICE_SIGNATURE" };
+  }
+  const encodedKey = JSON.stringify(enrollment.data.encryptionPublicKey);
+  const inserted = await environment.VILLAGE_DB.prepare(
+    `INSERT INTO continuity_recipient_keys
+     (principal_id, device_id, browser_session_id, site, encryption_public_key,
+      device_signing_public_key, last_accepted_sequence, enrolled_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(principal_id, device_id, browser_session_id, site) DO UPDATE SET
+       encryption_public_key = excluded.encryption_public_key,
+       last_accepted_sequence = excluded.last_accepted_sequence,
+       enrolled_at = excluded.enrolled_at
+     WHERE excluded.last_accepted_sequence > continuity_recipient_keys.last_accepted_sequence
+       AND excluded.encryption_public_key = continuity_recipient_keys.encryption_public_key`,
+  )
+    .bind(
+      enrollment.data.principalId,
+      enrollment.data.deviceId,
+      enrollment.data.browserSessionId,
+      enrollment.data.site,
+      encodedKey,
+      JSON.stringify(signingKey),
+      enrollment.data.sequence,
+      now,
+    )
+    .run();
+  if (inserted.meta.changes !== 1) {
+    const current = await environment.VILLAGE_DB.prepare(
+      `SELECT encryption_public_key, last_accepted_sequence
+       FROM continuity_recipient_keys
+       WHERE principal_id = ? AND device_id = ? AND browser_session_id = ?
+         AND site = ?`,
+    )
+      .bind(
+        enrollment.data.principalId,
+        enrollment.data.deviceId,
+        enrollment.data.browserSessionId,
+        enrollment.data.site,
+      )
+      .first<{
+        encryption_public_key: string;
+        last_accepted_sequence: number;
+      }>();
+    if (
+      current?.last_accepted_sequence === enrollment.data.sequence &&
+      current.encryption_public_key === encodedKey
+    ) {
+      return {
+        ok: true as const,
+        enrolled: false,
+        deviceId: enrollment.data.deviceId,
+        browserSessionId: enrollment.data.browserSessionId,
+      };
+    }
+    return { ok: false as const, code: "CONTINUITY_RECIPIENT_KEY_CONFLICT" };
+  }
+  return {
+    ok: true as const,
+    enrolled: true,
+    deviceId: enrollment.data.deviceId,
+    browserSessionId: enrollment.data.browserSessionId,
+  };
+}
+
+export async function revokeContinuityRecipientKey(
+  environment: Environment,
+  principalIdCandidate: unknown,
+  candidate: unknown,
+) {
+  const principalId = principalIdSchema.safeParse(principalIdCandidate);
+  const target = continuityRecipientKeyRevocationSchema.safeParse(candidate);
+  if (!principalId.success || !target.success) {
+    return {
+      ok: false as const,
+      code: "INVALID_CONTINUITY_RECIPIENT_KEY_REVOCATION",
+    };
+  }
+  const activeGrant = await environment.VILLAGE_DB.prepare(
+    `SELECT 1 AS present FROM continuity_grants
+     WHERE principal_id = ? AND destination_device_id = ?
+       AND destination_browser_session_id = ? AND site = ?
+       AND state IN ('PENDING', 'ACTIVE') LIMIT 1`,
+  )
+    .bind(
+      principalId.data,
+      target.data.deviceId,
+      target.data.browserSessionId,
+      target.data.site,
+    )
+    .first<{ present: number }>();
+  if (activeGrant) {
+    return { ok: false as const, code: "ACTIVE_CONTINUITY_GRANT_EXISTS" };
+  }
+  const deleted = await environment.VILLAGE_DB.prepare(
+    `DELETE FROM continuity_recipient_keys
+     WHERE principal_id = ? AND device_id = ? AND browser_session_id = ?
+       AND site = ?`,
+  )
+    .bind(
+      principalId.data,
+      target.data.deviceId,
+      target.data.browserSessionId,
+      target.data.site,
+    )
+    .run();
+  return { ok: true as const, revoked: deleted.meta.changes === 1 };
 }
 
 export async function getContinuityGrant(
@@ -415,7 +593,8 @@ async function eligibleSession(
 ) {
   return db
     .prepare(
-      `SELECT s.device_id, s.site, s.profile_state, d.public_key, d.credential_status
+      `SELECT s.device_id, s.site, s.profile_state, d.public_key,
+              d.credential_status, d.protocol_version
        FROM browser_sessions s JOIN devices d
          ON d.principal_id = s.principal_id AND d.device_id = s.device_id
        WHERE s.principal_id = ? AND s.browser_session_id = ?`,

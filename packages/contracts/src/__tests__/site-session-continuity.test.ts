@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalContinuityAcknowledgementBytes,
   canonicalContinuityFetchBytes,
+  canonicalContinuityRecipientKeyEnrollmentBytes,
   canonicalContinuityRevisionBytes,
   continuityAcknowledgementEnvelopeSchema,
   continuityFetchEnvelopeSchema,
   continuityGrantRequestSchema,
+  continuityRecipientKeyEnrollmentSchema,
+  continuityRecipientKeyRevocationSchema,
   encryptedContinuityRevisionSchema,
 } from "../index.js";
 
@@ -112,11 +115,6 @@ describe("Site Session continuity wire contracts", () => {
       sourceBrowserSessionId: binding.sourceBrowserSessionId,
       destinationBrowserSessionId: binding.destinationBrowserSessionId,
       site: binding.site,
-      destinationEncryptionPublicKey: {
-        kty: "OKP",
-        crv: "X25519",
-        x: "h".repeat(43),
-      },
       expiresAt: "2026-08-16T19:00:00.000Z",
     });
 
@@ -130,7 +128,82 @@ describe("Site Session continuity wire contracts", () => {
     expect(
       continuityGrantRequestSchema.safeParse({
         ...grant,
+        destinationEncryptionPublicKey: {
+          kty: "OKP",
+          crv: "X25519",
+          x: "h".repeat(43),
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      continuityGrantRequestSchema.safeParse({
+        ...grant,
         site: "LINKEDIN",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("binds recipient-key enrollment to the paired destination session", () => {
+    const enrollment = continuityRecipientKeyEnrollmentSchema.parse({
+      protocolVersion: 1,
+      principalId: binding.principalId,
+      deviceId: binding.destinationDeviceId,
+      browserSessionId: binding.destinationBrowserSessionId,
+      site: binding.site,
+      sequence: 1,
+      issuedAt: "2026-08-15T19:00:00.000Z",
+      expiresAt: "2026-08-15T19:00:30.000Z",
+      encryptionPublicKey: {
+        kty: "OKP",
+        crv: "X25519",
+        x: "h".repeat(43),
+      },
+      signature: "i".repeat(86),
+    });
+
+    const { signature: _signature, ...unsignedEnrollment } = enrollment;
+    const canonical = Buffer.from(
+      canonicalContinuityRecipientKeyEnrollmentBytes(unsignedEnrollment),
+    );
+    const changedSession = Buffer.from(
+      canonicalContinuityRecipientKeyEnrollmentBytes({
+        ...unsignedEnrollment,
+        browserSessionId: binding.sourceBrowserSessionId,
+      }),
+    );
+    expect(canonical.equals(changedSession)).toBe(false);
+    expect(
+      continuityRecipientKeyEnrollmentSchema.safeParse({
+        ...enrollment,
+        site: "LINKEDIN",
+      }).success,
+    ).toBe(false);
+    expect(
+      continuityRecipientKeyEnrollmentSchema.safeParse({
+        ...enrollment,
+        privateKey: "must-never-cross-the-wire",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("defines an exact owner recipient-key revocation target", () => {
+    expect(
+      continuityRecipientKeyRevocationSchema.parse({
+        deviceId: binding.destinationDeviceId,
+        browserSessionId: binding.destinationBrowserSessionId,
+        site: binding.site,
+      }),
+    ).toEqual({
+      deviceId: binding.destinationDeviceId,
+      browserSessionId: binding.destinationBrowserSessionId,
+      site: "OWNED_FIXTURE",
+    });
+    expect(
+      continuityRecipientKeyRevocationSchema.safeParse({
+        deviceId: binding.destinationDeviceId,
+        browserSessionId: binding.destinationBrowserSessionId,
+        site: binding.site,
+        allDevices: true,
       }).success,
     ).toBe(false);
   });

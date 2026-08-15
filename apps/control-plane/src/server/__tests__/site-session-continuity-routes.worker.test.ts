@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   canonicalContinuityAcknowledgementBytes,
   canonicalContinuityFetchBytes,
+  canonicalContinuityRecipientKeyEnrollmentBytes,
   canonicalContinuityRevisionAssociatedData,
   canonicalContinuityRevisionBytes,
   continuityRevisionDigestBytes,
@@ -69,6 +70,39 @@ beforeEach(async () => {
 
 describe("Site Session continuity routes", () => {
   it("moves only signed ciphertext between an owner's paired Macs and keeps a deletion tombstone", async () => {
+    const beforeEnrollment = await createGrant();
+    expect(beforeEnrollment.status).toBe(409);
+    await expect(beforeEnrollment.json()).resolves.toMatchObject({
+      ok: false,
+      code: "CONTINUITY_RECIPIENT_KEY_NOT_ENROLLED",
+    });
+    expect((await enrollDestinationKey("z".repeat(86))).status).toBe(409);
+    const enrolled = await enrollDestinationKey();
+    expect(enrolled.status).toBe(201);
+    await expect(enrolled.json()).resolves.toMatchObject({
+      ok: true,
+      enrolled: true,
+      deviceId: destinationDeviceId,
+      browserSessionId: destinationBrowserSessionId,
+    });
+    await expect((await enrollDestinationKey()).json()).resolves.toMatchObject({
+      ok: true,
+      enrolled: false,
+    });
+    const rotatedRecipientKey = await enrollDestinationKey(undefined, {
+      sequence: 2,
+      encryptionPublicKey: {
+        kty: "OKP",
+        crv: "X25519",
+        x: "q".repeat(43),
+      },
+    });
+    expect(rotatedRecipientKey.status).toBe(409);
+    await expect(rotatedRecipientKey.json()).resolves.toMatchObject({
+      ok: false,
+      code: "CONTINUITY_RECIPIENT_KEY_CONFLICT",
+    });
+
     const [created, concurrentReplay] = await Promise.all([
       createGrant(),
       createGrant(),
@@ -86,6 +120,25 @@ describe("Site Session continuity routes", () => {
       ok: true,
       created: false,
       grant: { grantId, state: "ACTIVE" },
+    });
+    const protectedRecipientKey = await SELF.fetch(
+      new Request(
+        "https://village.test/api/site-session-continuity/recipient-keys/revoke",
+        {
+          method: "POST",
+          headers: ownerHeaders,
+          body: JSON.stringify({
+            deviceId: destinationDeviceId,
+            browserSessionId: destinationBrowserSessionId,
+            site: "OWNED_FIXTURE",
+          }),
+        },
+      ),
+    );
+    expect(protectedRecipientKey.status).toBe(409);
+    await expect(protectedRecipientKey.json()).resolves.toMatchObject({
+      ok: false,
+      code: "ACTIVE_CONTINUITY_GRANT_EXISTS",
     });
 
     const revision = await signedRevision();
@@ -196,6 +249,7 @@ describe("Site Session continuity routes", () => {
 
   it("revokes a mailbox when either pinned device credential changes", async () => {
     const rotatedGrantId = "cgr_01J00000000000000000000003";
+    expect((await enrollDestinationKey()).status).toBe(201);
     expect((await createGrant(rotatedGrantId)).status).toBe(201);
     expect(
       (
@@ -234,6 +288,78 @@ describe("Site Session continuity routes", () => {
         .first(),
     ).resolves.toEqual({ state: "REVOKED" });
   });
+
+  it("rejects a recipient key enrolled before device credential rotation", async () => {
+    expect((await enrollDestinationKey()).status).toBe(201);
+    const replacement = await crypto.subtle.generateKey("Ed25519", true, [
+      "sign",
+      "verify",
+    ]);
+    await env.VILLAGE_DB.prepare(
+      "UPDATE devices SET public_key = ? WHERE principal_id = ? AND device_id = ?",
+    )
+      .bind(
+        JSON.stringify(await publicJwk(replacement.publicKey)),
+        principalId,
+        destinationDeviceId,
+      )
+      .run();
+
+    const response = await createGrant();
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      code: "CONTINUITY_RECIPIENT_KEY_STALE",
+    });
+
+    const revoked = await SELF.fetch(
+      new Request(
+        "https://village.test/api/site-session-continuity/recipient-keys/revoke",
+        {
+          method: "POST",
+          headers: ownerHeaders,
+          body: JSON.stringify({
+            deviceId: destinationDeviceId,
+            browserSessionId: destinationBrowserSessionId,
+            site: "OWNED_FIXTURE",
+          }),
+        },
+      ),
+    );
+    expect(revoked.status).toBe(200);
+    await expect(revoked.json()).resolves.toEqual({
+      ok: true,
+      revoked: true,
+    });
+    destinationKeys = replacement;
+    expect(
+      (
+        await enrollDestinationKey(undefined, {
+          sequence: 2,
+          encryptionPublicKey: {
+            kty: "OKP",
+            crv: "X25519",
+            x: "r".repeat(43),
+          },
+        })
+      ).status,
+    ).toBe(201);
+  });
+
+  it("rejects recipient enrollment through a downgraded device protocol", async () => {
+    await env.VILLAGE_DB.prepare(
+      "UPDATE devices SET protocol_version = 0 WHERE principal_id = ? AND device_id = ?",
+    )
+      .bind(principalId, destinationDeviceId)
+      .run();
+
+    const response = await enrollDestinationKey();
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      code: "PROTOCOL_DOWNGRADE_REJECTED",
+    });
+  });
 });
 
 function createGrant(requestedGrantId = grantId) {
@@ -248,14 +374,56 @@ function createGrant(requestedGrantId = grantId) {
         sourceBrowserSessionId,
         destinationBrowserSessionId,
         site: "OWNED_FIXTURE",
-        destinationEncryptionPublicKey: {
-          kty: "OKP",
-          crv: "X25519",
-          x: "a".repeat(43),
-        },
         expiresAt: grantExpiresAt,
       }),
     }),
+  );
+}
+
+async function enrollDestinationKey(
+  signatureOverride?: string,
+  overrides: {
+    sequence?: number;
+    encryptionPublicKey?: {
+      kty: "OKP";
+      crv: "X25519";
+      x: string;
+    };
+  } = {},
+) {
+  const unsigned = {
+    protocolVersion: 1 as const,
+    principalId,
+    deviceId: destinationDeviceId,
+    browserSessionId: destinationBrowserSessionId,
+    site: "OWNED_FIXTURE" as const,
+    sequence: overrides.sequence ?? 1,
+    issuedAt,
+    expiresAt: requestExpiresAt,
+    encryptionPublicKey: overrides.encryptionPublicKey ?? {
+      kty: "OKP" as const,
+      crv: "X25519" as const,
+      x: "a".repeat(43),
+    },
+  };
+  const signature =
+    signatureOverride ??
+    Buffer.from(
+      await crypto.subtle.sign(
+        "Ed25519",
+        destinationKeys.privateKey,
+        canonicalContinuityRecipientKeyEnrollmentBytes(unsigned),
+      ),
+    ).toString("base64url");
+  return SELF.fetch(
+    new Request(
+      "https://village.test/api/site-session-continuity/recipient-keys",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...unsigned, signature }),
+      },
+    ),
   );
 }
 

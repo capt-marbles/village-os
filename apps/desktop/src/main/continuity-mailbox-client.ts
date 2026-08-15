@@ -1,9 +1,13 @@
 import {
+  browserSessionIdSchema,
   canonicalContinuityAcknowledgementBytes,
   canonicalContinuityFetchBytes,
+  canonicalContinuityRecipientKeyEnrollmentBytes,
   continuityAcknowledgementEnvelopeSchema,
   continuityFetchEnvelopeSchema,
+  continuityRecipientKeyEnrollmentSchema,
   encryptedContinuityRevisionSchema,
+  deviceIdSchema,
   type ContinuityBinding,
   type EncryptedContinuityRevision,
 } from "@village/contracts";
@@ -34,6 +38,12 @@ const acknowledgementResponseSchema = z.strictObject({
   ok: z.literal(true),
   acknowledged: z.boolean(),
 });
+const recipientKeyEnrollmentResponseSchema = z.strictObject({
+  ok: z.literal(true),
+  enrolled: z.boolean(),
+  deviceId: deviceIdSchema,
+  browserSessionId: browserSessionIdSchema,
+});
 
 export class ContinuityMailboxClient {
   private readonly request: typeof fetch;
@@ -53,6 +63,55 @@ export class ContinuityMailboxClient {
     this.request = options.request ?? fetch;
     this.now = options.now ?? Date.now;
     this.timeoutMs = options.timeoutMs ?? 30_000;
+  }
+
+  async enrollRecipientKey(
+    identity: {
+      principalId: string;
+      deviceId: string;
+      browserSessionId: string;
+      site: "OWNED_FIXTURE";
+    },
+    encryptionPublicKey: { kty: "OKP"; crv: "X25519"; x: string },
+  ): Promise<{ enrolled: boolean }> {
+    const sequence = await this.options.sequences.reserveNext(
+      identity.deviceId,
+      identity.browserSessionId,
+    );
+    const issuedAt = this.now();
+    const unsigned = {
+      protocolVersion: 1 as const,
+      ...identity,
+      sequence,
+      issuedAt: new Date(issuedAt).toISOString(),
+      expiresAt: new Date(issuedAt + 30_000).toISOString(),
+      encryptionPublicKey,
+    };
+    const signature = await crypto.subtle.sign(
+      "Ed25519",
+      this.options.privateKey,
+      canonicalContinuityRecipientKeyEnrollmentBytes(unsigned),
+    );
+    const enrollment = continuityRecipientKeyEnrollmentSchema.parse({
+      ...unsigned,
+      signature: Buffer.from(signature).toString("base64url"),
+    });
+    const response = await this.postPath(
+      "/api/site-session-continuity/recipient-keys",
+      enrollment,
+    );
+    const body = recipientKeyEnrollmentResponseSchema.safeParse(response);
+    if (
+      !body.success ||
+      body.data.deviceId !== identity.deviceId ||
+      body.data.browserSessionId !== identity.browserSessionId
+    ) {
+      throw responseError(
+        response,
+        "INVALID_CONTINUITY_RECIPIENT_KEY_RESPONSE",
+      );
+    }
+    return { enrolled: body.data.enrolled };
   }
 
   async publish(
@@ -146,6 +205,13 @@ export class ContinuityMailboxClient {
     operation: "revisions" | "fetch" | "acknowledgements",
     body: unknown,
   ): Promise<unknown> {
+    return this.postPath(
+      `/api/site-session-continuity/grants/${grantId}/${operation}`,
+      body,
+    );
+  }
+
+  private async postPath(path: string, body: unknown): Promise<unknown> {
     const controller = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let timedOut = false;
@@ -158,18 +224,12 @@ export class ContinuityMailboxClient {
         }, this.timeoutMs);
       });
       const response = await Promise.race([
-        this.request(
-          new URL(
-            `/api/site-session-continuity/grants/${grantId}/${operation}`,
-            this.options.baseUrl,
-          ),
-          {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(body),
-            signal: controller.signal,
-          },
-        ),
+        this.request(new URL(path, this.options.baseUrl), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        }),
         deadline,
       ]);
       const text = await response.text();

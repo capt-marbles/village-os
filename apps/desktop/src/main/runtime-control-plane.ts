@@ -14,9 +14,15 @@ import {
 import { join } from "node:path";
 import type { CoordinatorSnapshot } from "./delegated-workflow-controller.js";
 import { ContinuityMailboxClient } from "./continuity-mailbox-client.js";
+import type { ContinuityRecipientKey } from "./continuity-recipient-key-vault.js";
 
 interface DeviceIdentitySource {
   load(): Promise<DeviceIdentity>;
+}
+
+interface ContinuityRecipientKeySource {
+  load(): Promise<ContinuityRecipientKey>;
+  create(): Promise<ContinuityRecipientKey>;
 }
 
 const villageIdAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -65,6 +71,41 @@ export async function createRuntimeContinuityMailboxClient(
     ),
     ...(options.request ? { request: options.request } : {}),
   });
+}
+
+export async function createRuntimeContinuityRecipient(
+  options: RuntimeControlPlaneOptions & {
+    recipientKeySource: ContinuityRecipientKeySource;
+  },
+): Promise<{
+  enrolled: boolean;
+  recipientKey: ContinuityRecipientKey;
+  mailboxClient: ContinuityMailboxClient;
+}> {
+  let recipientKey: ContinuityRecipientKey;
+  try {
+    recipientKey = await options.recipientKeySource.load();
+  } catch (error) {
+    if (!(
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "ENOENT"
+    )) {
+      throw error;
+    }
+    recipientKey = await options.recipientKeySource.create();
+  }
+  const mailboxClient = await createRuntimeContinuityMailboxClient(options);
+  const enrollment = await mailboxClient.enrollRecipientKey(
+    {
+      principalId: options.identity.principalId,
+      deviceId: options.identity.deviceId,
+      browserSessionId: options.identity.browserSessionId,
+      site: "OWNED_FIXTURE",
+    },
+    recipientKey.publicJwk,
+  );
+  return { ...enrollment, recipientKey, mailboxClient };
 }
 
 export async function createRuntimeControlPlaneComposition(
