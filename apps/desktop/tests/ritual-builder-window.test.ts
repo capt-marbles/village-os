@@ -77,6 +77,8 @@ describe("Ritual Builder window", () => {
     draft: vi.fn(async () => ({ status: "waiting" })),
     approve: vi.fn(async (ritual) => ritual),
     testRun: vi.fn(async () => ({ status: "waiting" })),
+    proposeLearning: vi.fn(async () => ({ status: "waiting" })),
+    approveLearning: vi.fn(async (ritual) => ritual),
     close: vi.fn(async () => undefined),
   };
 
@@ -140,6 +142,12 @@ describe("Ritual Builder window", () => {
     const draft = electron.handlers.get("village:ritual-builder:draft")!;
     const approve = electron.handlers.get("village:ritual-builder:approve")!;
     const testRun = electron.handlers.get("village:ritual-builder:test-run")!;
+    const proposeLearning = electron.handlers.get(
+      "village:ritual-builder:propose-learning",
+    )!;
+    const approveLearning = electron.handlers.get(
+      "village:ritual-builder:approve-learning",
+    )!;
 
     const initialized = (await initialize(event)) as {
       identity: { draftId: string; ritualId: string };
@@ -150,6 +158,8 @@ describe("Ritual Builder window", () => {
       approvedDraftId: initialized.identity.draftId,
     });
     await testRun(event, { ritualId: initialized.identity.ritualId });
+    await proposeLearning(event, { ritualId: initialized.identity.ritualId });
+    await approveLearning(event, { ritualId: initialized.identity.ritualId });
     expect(controller.loadLatestState).toHaveBeenCalledOnce();
     expect(controller.draft).toHaveBeenCalledWith({
       draftId: initialized.identity.draftId,
@@ -159,6 +169,12 @@ describe("Ritual Builder window", () => {
       approvedDraftId: initialized.identity.draftId,
     });
     expect(controller.testRun).toHaveBeenCalledWith({
+      ritualId: initialized.identity.ritualId,
+    });
+    expect(controller.proposeLearning).toHaveBeenCalledWith({
+      ritualId: initialized.identity.ritualId,
+    });
+    expect(controller.approveLearning).toHaveBeenCalledWith({
       ritualId: initialized.identity.ritualId,
     });
 

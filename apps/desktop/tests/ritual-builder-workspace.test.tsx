@@ -68,6 +68,26 @@ const receipt = {
   recordedAt: "2026-08-15T18:03:00.000Z",
 };
 
+const learningProposal = {
+  status: "proposal" as const,
+  proposalId: "rlp_01J00000000000000000000000",
+  ritualId: approved.ritualId,
+  fromRevision: 1,
+  receiptId: receipt.receiptId,
+  ownerFeedback: "Put existing customers first in the next result.",
+  stewardMessage: "I’ve proposed one focused improvement for Review.",
+  rationale: "This reflects the priority rule in your feedback.",
+  proposedDefinition: {
+    name: approved.name,
+    purpose: "Prioritize existing customers in my pipeline review.",
+    trigger: approved.trigger,
+    steps: approved.steps,
+    permissions: approved.permissions,
+    completion: "A prioritized reviewable result is ready.",
+    reviewPolicy: approved.reviewPolicy,
+  },
+};
+
 function bridge() {
   return {
     initialize: vi.fn(async () => ({
@@ -97,6 +117,15 @@ function bridge() {
     })),
     approve: vi.fn(async (ritual) => ritual),
     testRun: vi.fn(async () => ({ status: "receipt" as const, receipt })),
+    proposeLearning: vi.fn(async () => learningProposal),
+    approveLearning: vi.fn(async () => ({
+      ...approved,
+      ritualRevision: 2,
+      learningProposalId: learningProposal.proposalId,
+      basedOnReceiptId: receipt.receiptId,
+      purpose: learningProposal.proposedDefinition.purpose,
+      completion: learningProposal.proposedDefinition.completion,
+    })),
   };
 }
 
@@ -182,6 +211,50 @@ describe("RitualBuilderWorkspace", () => {
     expect(screen.getByText(receipt.summary)).toBeTruthy();
     expect(screen.getByText("No external effects")).toBeTruthy();
     expect(activeBridge.testRun).not.toHaveBeenCalled();
+  });
+
+  it("turns Receipt feedback into an explicit revision approval", async () => {
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved,
+      receipt,
+    });
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+    await screen.findByText("Test Receipt");
+
+    fireEvent.click(screen.getByRole("button", { name: "Give feedback" }));
+    fireEvent.change(
+      screen.getByLabelText("What should the Steward keep or change?"),
+      { target: { value: learningProposal.ownerFeedback } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Propose an improvement" }),
+    );
+
+    await screen.findByText("Review revision 2");
+    expect(activeBridge.proposeLearning).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      ritualId: approved.ritualId,
+      ritualRevision: 1,
+      receiptId: receipt.receiptId,
+      feedback: learningProposal.ownerFeedback,
+    });
+    expect(
+      screen.getByLabelText("Current and proposed Ritual comparison"),
+    ).toBeTruthy();
+    expect(screen.getByText("No change yet")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve revision 2" }));
+    await screen.findByText("Ritual approved");
+    expect(activeBridge.approveLearning).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proposalId: learningProposal.proposalId,
+        ritualId: approved.ritualId,
+        expectedFromRevision: 1,
+      }),
+    );
+    expect(screen.getByText("Approved · Revision 2")).toBeTruthy();
   });
 
   it("does not call the Steward when local purpose validation fails", async () => {

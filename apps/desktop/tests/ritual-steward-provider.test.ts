@@ -41,6 +41,29 @@ const testRunContext = {
   sample: "Customer A needs an answer before Friday.",
 };
 
+const learningContext = {
+  schemaVersion: 1 as const,
+  proposalId: "rlp_01J00000000000000000000000",
+  ritual: testRunContext.ritual,
+  receipt: {
+    schemaVersion: 1 as const,
+    receiptId: "rcp_01J00000000000000000000000",
+    runId: testRunContext.runId,
+    ritualId: testRunContext.ritual.ritualId,
+    ritualRevision: 1,
+    mode: "TEST" as const,
+    outcome: "NEEDS_REVIEW" as const,
+    summary: "The result was useful but too long.",
+    evidence: ["The correct item was ranked first."],
+    uncertainties: ["The preferred output length was unknown."],
+    sampleDigest: "a".repeat(64),
+    sampleCharacterCount: 42,
+    externalEffects: [] as const,
+    recordedAt: "2026-08-15T18:03:00.000Z",
+  },
+  ownerFeedback: "Keep future results to three concise bullets.",
+};
+
 describe("CodexRitualStewardProvider", () => {
   it("constructs its app-server transport lazily", async () => {
     const factory = vi.fn(() => ({
@@ -360,5 +383,57 @@ describe("CodexRitualStewardProvider", () => {
 
     expect(threadStarts).toBe(2);
     expect(usedThreads).toEqual(["test-thread-1", "test-thread-2"]);
+  });
+
+  it("proposes learning from bounded evidence without exposing lineage ids", async () => {
+    const turns: Array<{ prompt: unknown; options: unknown }> = [];
+    const transport = {
+      request: async (method: string) => {
+        if (method === "initialize") return {};
+        if (method === "account/read") return { account: { type: "chatgpt" } };
+        return { thread: { id: "learning-thread-1" } };
+      },
+      notify: () => undefined,
+      runToolTurn: async (
+        _threadId: string,
+        prompt: unknown,
+        options: unknown,
+      ) => {
+        turns.push({ prompt, options });
+        return {
+          stewardMessage: "I propose a more concise result.",
+          rationale: "The owner asked for a shorter review.",
+          proposedDefinition: {
+            name: learningContext.ritual.name,
+            purpose: learningContext.ritual.purpose,
+            trigger: learningContext.ritual.trigger,
+            steps: learningContext.ritual.steps,
+            permissions: learningContext.ritual.permissions,
+            completion: "Three concise bullets are ready for review.",
+            reviewPolicy: learningContext.ritual.reviewPolicy,
+          },
+        };
+      },
+      close: async () => undefined,
+    };
+    const provider = new CodexRitualStewardProvider(transport);
+
+    await expect(provider.learn(learningContext)).resolves.toMatchObject({
+      status: "proposal",
+      proposalId: learningContext.proposalId,
+      receiptId: learningContext.receipt.receiptId,
+      fromRevision: 1,
+    });
+    expect(turns[0]?.options).toEqual({
+      toolName: "village_ritual_learning_proposal",
+      timeoutMs: 30_000,
+    });
+    const prompt = JSON.stringify(turns[0]?.prompt);
+    expect(prompt).toContain(learningContext.ownerFeedback);
+    expect(prompt).toContain(learningContext.receipt.summary);
+    expect(prompt).not.toContain(learningContext.proposalId);
+    expect(prompt).not.toContain(learningContext.ritual.ritualId);
+    expect(prompt).not.toContain(learningContext.receipt.receiptId);
+    expect(prompt).not.toContain(learningContext.receipt.sampleDigest);
   });
 });

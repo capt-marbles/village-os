@@ -1,13 +1,17 @@
 import {
   approveRitualDraft,
+  approveRitualLearningProposal,
   RitualApprovalError,
   ritualDraftSchema,
+  ritualLearningFeedbackRequestSchema,
+  ritualLearningProposalSchema,
   ritualStewardContextSchema,
   ritualTestReceiptSchema,
   ritualTestRunRequestSchema,
   type ApprovedRitualRevision,
   type RitualDraft,
   type RitualStewardProposal,
+  type RitualLearningProposal,
   type RitualTestReceipt,
 } from "@village/contracts";
 
@@ -69,6 +73,34 @@ export type RitualBuilderState =
       draft: RitualDraft;
       approved: ApprovedRitualRevision;
       receipt: RitualTestReceipt;
+    })
+  | (RitualBuilderStateBase & {
+      phase: "GIVE_FEEDBACK";
+      draft: RitualDraft;
+      approved: ApprovedRitualRevision;
+      receipt: RitualTestReceipt;
+    })
+  | (RitualBuilderStateBase & {
+      phase: "SHAPING_LEARNING";
+      draft: RitualDraft;
+      approved: ApprovedRitualRevision;
+      receipt: RitualTestReceipt;
+      pendingFeedback: string;
+    })
+  | (RitualBuilderStateBase & {
+      phase: "REVIEW_LEARNING";
+      draft: RitualDraft;
+      approved: ApprovedRitualRevision;
+      receipt: RitualTestReceipt;
+      proposal: RitualLearningProposal;
+    })
+  | (RitualBuilderStateBase & {
+      phase: "SAVING_LEARNING";
+      draft: RitualDraft;
+      approved: ApprovedRitualRevision;
+      receipt: RitualTestReceipt;
+      proposal: RitualLearningProposal;
+      pendingRevision: ApprovedRitualRevision;
     });
 
 export interface RitualBuilderIdentity {
@@ -99,6 +131,15 @@ export type RitualBuilderEvent =
   | { type: "SUBMIT_TEST_SAMPLE"; sample: string }
   | { type: "TEST_RUN_RECEIPT"; receipt: RitualTestReceipt }
   | { type: "TEST_RUN_FAILED"; message: string }
+  | { type: "START_FEEDBACK" }
+  | { type: "SUBMIT_FEEDBACK"; feedback: string }
+  | { type: "LEARNING_PROPOSED"; proposal: RitualLearningProposal }
+  | { type: "LEARNING_FAILED"; message: string }
+  | { type: "APPROVE_LEARNING"; occurredAt: string }
+  | { type: "LEARNING_SAVED" }
+  | { type: "LEARNING_SAVE_FAILED" }
+  | { type: "REVISE_LEARNING" }
+  | { type: "REJECT_LEARNING" }
   | {
       type: "SELECT_TRIGGER";
       trigger: "ON_DEMAND" | "WEEKDAYS" | "EVENT";
@@ -530,6 +571,180 @@ export function reduceRitualBuilder(
         error: event.message,
       };
     }
+    case "START_FEEDBACK": {
+      if (state.phase !== "REVIEW_TEST") return state;
+      return {
+        ...state,
+        phase: "GIVE_FEEDBACK",
+        messages: message(
+          state.messages,
+          "STEWARD",
+          "What should I keep or change for the next Run? I’ll propose a revision for you to review.",
+        ),
+        error: null,
+      };
+    }
+    case "SUBMIT_FEEDBACK": {
+      if (state.phase !== "GIVE_FEEDBACK") return state;
+      const parsed = ritualLearningFeedbackRequestSchema.safeParse({
+        schemaVersion: 1,
+        ritualId: state.approved.ritualId,
+        ritualRevision: state.approved.ritualRevision,
+        receiptId: state.receipt.receiptId,
+        feedback: event.feedback,
+      });
+      if (!parsed.success) {
+        return {
+          ...state,
+          error: event.feedback.trim()
+            ? "Use 8 to 1,000 characters for feedback."
+            : "Tell the Steward what to keep or change.",
+        };
+      }
+      let messages = message(state.messages, "OWNER", parsed.data.feedback);
+      messages = message(
+        messages,
+        "STEWARD",
+        "I’m shaping that feedback into a reviewable revision. Nothing changes until you approve it.",
+      );
+      return {
+        ...state,
+        phase: "SHAPING_LEARNING",
+        pendingFeedback: parsed.data.feedback,
+        messages,
+        error: null,
+      };
+    }
+    case "LEARNING_PROPOSED": {
+      if (state.phase !== "SHAPING_LEARNING") return state;
+      const parsed = ritualLearningProposalSchema.safeParse(event.proposal);
+      if (
+        !parsed.success ||
+        parsed.data.ritualId !== state.approved.ritualId ||
+        parsed.data.fromRevision !== state.approved.ritualRevision ||
+        parsed.data.receiptId !== state.receipt.receiptId ||
+        parsed.data.ownerFeedback !== state.pendingFeedback
+      ) {
+        return {
+          ...state,
+          phase: "GIVE_FEEDBACK",
+          error:
+            "Village rejected a learning proposal that did not match this Review.",
+        };
+      }
+      return {
+        ...state,
+        phase: "REVIEW_LEARNING",
+        proposal: parsed.data,
+        messages: message(
+          state.messages,
+          "STEWARD",
+          parsed.data.stewardMessage,
+        ),
+        error: null,
+      };
+    }
+    case "LEARNING_FAILED": {
+      if (state.phase !== "SHAPING_LEARNING") return state;
+      return {
+        ...state,
+        phase: "GIVE_FEEDBACK",
+        messages: message(state.messages, "SYSTEM", event.message),
+        error: event.message,
+      };
+    }
+    case "APPROVE_LEARNING": {
+      if (state.phase !== "REVIEW_LEARNING") return state;
+      try {
+        const pendingRevision = approveRitualLearningProposal(
+          state.approved,
+          state.proposal,
+          {
+            schemaVersion: 1,
+            proposalId: state.proposal.proposalId,
+            ritualId: state.approved.ritualId,
+            expectedFromRevision: state.approved.ritualRevision,
+            approvedAt: event.occurredAt,
+          },
+        );
+        return {
+          ...state,
+          phase: "SAVING_LEARNING",
+          pendingRevision,
+          messages: message(
+            state.messages,
+            "SYSTEM",
+            "Approval received. I’m saving the new Ritual revision; no Run has started.",
+          ),
+          error: null,
+        };
+      } catch {
+        return {
+          ...state,
+          error:
+            "The Ritual changed after this proposal opened. Review fresh evidence before approving.",
+        };
+      }
+    }
+    case "LEARNING_SAVED": {
+      if (state.phase !== "SAVING_LEARNING") return state;
+      const approved = state.pendingRevision;
+      return {
+        phase: "APPROVED",
+        draft: draftFromApproved(approved),
+        approved,
+        receipt: null,
+        messages: message(
+          state.messages,
+          "SYSTEM",
+          `Ritual revision ${approved.ritualRevision} is approved. The prior revision remains in the audit history.`,
+        ),
+        error: null,
+        requestRevision: state.requestRevision,
+      };
+    }
+    case "LEARNING_SAVE_FAILED": {
+      if (state.phase !== "SAVING_LEARNING") return state;
+      return {
+        ...state,
+        phase: "REVIEW_LEARNING",
+        messages: message(
+          state.messages,
+          "SYSTEM",
+          "The revised Ritual could not be saved. Nothing changed; review and try again.",
+        ),
+        error: null,
+      };
+    }
+    case "REVISE_LEARNING": {
+      if (state.phase !== "REVIEW_LEARNING") return state;
+      return {
+        ...state,
+        phase: "GIVE_FEEDBACK",
+        messages: message(
+          state.messages,
+          "STEWARD",
+          "Tell me what to adjust. I’ll replace this proposal with a new one for Review.",
+        ),
+        error: null,
+      };
+    }
+    case "REJECT_LEARNING": {
+      if (state.phase !== "REVIEW_LEARNING") return state;
+      return {
+        phase: "REVIEW_TEST",
+        draft: state.draft,
+        approved: state.approved,
+        receipt: state.receipt,
+        messages: message(
+          state.messages,
+          "SYSTEM",
+          "Learning proposal rejected. The approved Ritual is unchanged.",
+        ),
+        error: null,
+        requestRevision: state.requestRevision,
+      };
+    }
     case "SELECT_TRIGGER": {
       if (state.phase !== "CHOOSE_TRIGGER") return state;
       const selected = triggerCopy[event.trigger];
@@ -669,4 +884,21 @@ export function reduceRitualBuilder(
       }
     }
   }
+}
+
+function draftFromApproved(approved: ApprovedRitualRevision): RitualDraft {
+  return ritualDraftSchema.parse({
+    schemaVersion: 1,
+    draftId: approved.approvedDraftId,
+    revision: approved.approvedDraftRevision,
+    status: "DRAFT",
+    name: approved.name,
+    purpose: approved.purpose,
+    trigger: approved.trigger,
+    steps: approved.steps,
+    permissions: approved.permissions,
+    completion: approved.completion,
+    reviewPolicy: approved.reviewPolicy,
+    updatedAt: approved.approvedAt,
+  });
 }

@@ -52,6 +52,8 @@ export async function createRitualBuilderWindow(options: {
   const draftChannel = "village:ritual-builder:draft";
   const approveChannel = "village:ritual-builder:approve";
   const testRunChannel = "village:ritual-builder:test-run";
+  const proposeLearningChannel = "village:ritual-builder:propose-learning";
+  const approveLearningChannel = "village:ritual-builder:approve-learning";
   const assertSender = (event: IpcMainInvokeEvent) => {
     if (
       event.sender !== appView.webContents ||
@@ -87,6 +89,14 @@ export async function createRitualBuilderWindow(options: {
     assertSender(event);
     return options.controller.testRun(candidate);
   });
+  ipcMain.handle(proposeLearningChannel, async (event, candidate) => {
+    assertSender(event);
+    return options.controller.proposeLearning(candidate);
+  });
+  ipcMain.handle(approveLearningChannel, async (event, candidate) => {
+    assertSender(event);
+    return options.controller.approveLearning(candidate);
+  });
   const cleanup = () => {
     if (closed) return;
     closed = true;
@@ -95,6 +105,8 @@ export async function createRitualBuilderWindow(options: {
     ipcMain.removeHandler(draftChannel);
     ipcMain.removeHandler(approveChannel);
     ipcMain.removeHandler(testRunChannel);
+    ipcMain.removeHandler(proposeLearningChannel);
+    ipcMain.removeHandler(approveLearningChannel);
     void options.controller.close();
     disposeView();
   };

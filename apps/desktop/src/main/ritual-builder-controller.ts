@@ -1,15 +1,21 @@
 import { createHash } from "node:crypto";
 import {
   approvedRitualRevisionSchema,
+  approveRitualLearningProposal,
   createRitualTestReceipt,
   ritualTestRunControllerResultSchema,
   ritualTestRunRequestSchema,
+  ritualLearningApprovalRequestSchema,
+  ritualLearningFeedbackRequestSchema,
   validateRitualTestRunResult,
+  validateRitualLearningResult,
   ritualStewardContextSchema,
   validateRitualStewardResult,
   type ApprovedRitualRevision,
   type RitualTestReceipt,
   type RitualTestRunControllerResult,
+  type RitualLearningProposal,
+  type RitualLearningResult,
   type RitualStewardResult,
 } from "@village/contracts";
 import type { RitualStewardProvider } from "../model-provider/ritual-steward.js";
@@ -21,12 +27,17 @@ export interface RitualPersistence {
     receipt: RitualTestReceipt | null;
   }>;
   find(ritualId: string): Promise<ApprovedRitualRevision | null>;
+  findReceipt(receiptId: string): Promise<RitualTestReceipt | null>;
+  findLearningProposal(
+    proposalId: string,
+  ): Promise<RitualLearningProposal | null>;
   save(ritual: ApprovedRitualRevision): Promise<void>;
   saveReceipt(receipt: RitualTestReceipt): Promise<void>;
+  saveLearningProposal(proposal: RitualLearningProposal): Promise<void>;
 }
 
 interface RitualControllerDependencies {
-  createId(prefix: "rrn" | "rcp"): string;
+  createId(prefix: "rrn" | "rcp" | "rlp"): string;
   now(): string;
 }
 
@@ -93,6 +104,52 @@ export class RitualBuilderController {
       status: "receipt",
       receipt,
     });
+  }
+
+  async proposeLearning(candidate: unknown): Promise<RitualLearningResult> {
+    const request = ritualLearningFeedbackRequestSchema.parse(candidate);
+    const [ritual, receipt] = await Promise.all([
+      this.repository.find(request.ritualId),
+      this.repository.findReceipt(request.receiptId),
+    ]);
+    if (
+      !ritual ||
+      !receipt ||
+      ritual.ritualRevision !== request.ritualRevision ||
+      receipt.ritualId !== ritual.ritualId ||
+      receipt.ritualRevision !== ritual.ritualRevision
+    ) {
+      throw new Error("STALE_RITUAL_LEARNING_PROPOSAL");
+    }
+    const context = {
+      schemaVersion: 1 as const,
+      proposalId: this.dependencies.createId("rlp"),
+      ritual,
+      receipt,
+      ownerFeedback: request.feedback,
+    };
+    const result = validateRitualLearningResult(
+      context,
+      await this.provider.learn(context),
+    );
+    if (result.status === "proposal") {
+      await this.repository.saveLearningProposal(result);
+    }
+    return result;
+  }
+
+  async approveLearning(candidate: unknown): Promise<ApprovedRitualRevision> {
+    const request = ritualLearningApprovalRequestSchema.parse(candidate);
+    const [ritual, proposal] = await Promise.all([
+      this.repository.find(request.ritualId),
+      this.repository.findLearningProposal(request.proposalId),
+    ]);
+    if (!ritual || !proposal) {
+      throw new Error("STALE_RITUAL_LEARNING_PROPOSAL");
+    }
+    const revision = approveRitualLearningProposal(ritual, proposal, request);
+    await this.repository.save(revision);
+    return revision;
   }
 
   close(): Promise<void> {

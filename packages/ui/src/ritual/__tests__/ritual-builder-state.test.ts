@@ -395,6 +395,64 @@ describe("Ritual Builder state", () => {
     expect(JSON.stringify(state)).not.toContain(
       "Customer A needs an answer before Friday.",
     );
+
+    state = reduceRitualBuilder(state, { type: "START_FEEDBACK" });
+    expect(state.phase).toBe("GIVE_FEEDBACK");
+    state = reduceRitualBuilder(state, {
+      type: "SUBMIT_FEEDBACK",
+      feedback: "Keep future results to three concise bullets.",
+    });
+    expect(state).toMatchObject({
+      phase: "SHAPING_LEARNING",
+      pendingFeedback: "Keep future results to three concise bullets.",
+    });
+    if (state.phase !== "SHAPING_LEARNING") {
+      throw new Error("expected learning phase");
+    }
+    const proposal = {
+      status: "proposal" as const,
+      proposalId: "rlp_01J00000000000000000000000",
+      ritualId,
+      fromRevision: 1,
+      receiptId: state.receipt.receiptId,
+      ownerFeedback: state.pendingFeedback,
+      stewardMessage: "I propose a shorter expected result.",
+      rationale: "The owner asked for a more concise review.",
+      proposedDefinition: {
+        name: state.approved.name,
+        purpose: state.approved.purpose,
+        trigger: state.approved.trigger,
+        steps: state.approved.steps,
+        permissions: state.approved.permissions,
+        completion: "Three concise follow-up bullets are ready for review.",
+        reviewPolicy: state.approved.reviewPolicy,
+      },
+    };
+    state = reduceRitualBuilder(state, {
+      type: "LEARNING_PROPOSED",
+      proposal,
+    });
+    expect(state).toMatchObject({
+      phase: "REVIEW_LEARNING",
+      proposal: { fromRevision: 1 },
+    });
+    state = reduceRitualBuilder(state, {
+      type: "APPROVE_LEARNING",
+      occurredAt: "2026-08-15T18:04:00.000Z",
+    });
+    expect(state).toMatchObject({
+      phase: "SAVING_LEARNING",
+      pendingRevision: {
+        ritualRevision: 2,
+        learningProposalId: proposal.proposalId,
+      },
+    });
+    state = reduceRitualBuilder(state, { type: "LEARNING_SAVED" });
+    expect(state).toMatchObject({
+      phase: "APPROVED",
+      approved: { ritualRevision: 2 },
+      receipt: null,
+    });
   });
 
   it("ignores replayed decisions outside their exact phase", () => {

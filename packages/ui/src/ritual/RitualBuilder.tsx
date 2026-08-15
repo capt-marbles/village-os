@@ -35,6 +35,14 @@ export function RitualBuilder({
       sample: String(data.get("sample") ?? ""),
     });
   };
+  const submitFeedback = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    onEvent({
+      type: "SUBMIT_FEEDBACK",
+      feedback: String(data.get("feedback") ?? ""),
+    });
+  };
   const edit = (field: "name" | "purpose" | "completion", value: string) =>
     onEvent({ type: "EDIT_FIELD", field, value, occurredAt: now() });
   const fieldsEditable =
@@ -131,6 +139,43 @@ export function RitualBuilder({
           </div>
         ) : null}
 
+        {state.phase === "GIVE_FEEDBACK" ? (
+          <form className="ritual-composer" onSubmit={submitFeedback}>
+            <label htmlFor="ritual-feedback">
+              What should the Steward keep or change?
+            </label>
+            <textarea
+              id="ritual-feedback"
+              name="feedback"
+              rows={5}
+              minLength={8}
+              maxLength={1_000}
+              placeholder="For example: Keep the priority explanation, but put messages from existing customers first."
+              required
+              autoComplete="off"
+            />
+            <p>
+              Your feedback becomes a proposal. The approved Ritual does not
+              change until you approve a revision.
+            </p>
+            <button type="submit">Propose an improvement</button>
+          </form>
+        ) : null}
+
+        {state.phase === "SHAPING_LEARNING" ? (
+          <div className="ritual-drafting" role="status">
+            <span aria-hidden="true" />
+            <p>The Steward is shaping a reviewable improvement…</p>
+          </div>
+        ) : null}
+
+        {state.phase === "SAVING_LEARNING" ? (
+          <div className="ritual-drafting" role="status">
+            <span aria-hidden="true" />
+            <p>Saving the approved revision. No Run has started…</p>
+          </div>
+        ) : null}
+
         {state.phase === "STARTING_NEW_RITUAL" ? (
           <div className="ritual-drafting" role="status">
             <span aria-hidden="true" />
@@ -223,7 +268,7 @@ export function RitualBuilder({
           </div>
           <span className="ritual-revision">
             {state.approved
-              ? `Approved · Revision ${state.approved.approvedDraftRevision}`
+              ? `Approved · Revision ${state.approved.ritualRevision}`
               : state.draft
                 ? `Draft · Revision ${state.draft.revision}`
                 : "Not started"}
@@ -421,6 +466,12 @@ export function RitualBuilder({
                 <footer>
                   <button
                     type="button"
+                    onClick={() => onEvent({ type: "START_FEEDBACK" })}
+                  >
+                    Give feedback
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => onEvent({ type: "START_TEST" })}
                   >
                     Run another test
@@ -433,6 +484,25 @@ export function RitualBuilder({
                   </button>
                 </footer>
               </section>
+            ) : null}
+
+            {state.phase === "GIVE_FEEDBACK" ||
+            state.phase === "SHAPING_LEARNING" ? (
+              <section className="ritual-learning-pending" role="status">
+                <p className="ritual-eyebrow">Learning Review</p>
+                <strong>
+                  Revision {state.approved.ritualRevision} remains active
+                </strong>
+                <p>
+                  Feedback can shape a proposal, but it cannot change this
+                  Ritual or start a Run.
+                </p>
+              </section>
+            ) : null}
+
+            {state.phase === "REVIEW_LEARNING" ||
+            state.phase === "SAVING_LEARNING" ? (
+              <LearningProposalReview state={state} onEvent={onEvent} />
             ) : null}
           </div>
         ) : (
@@ -447,6 +517,142 @@ export function RitualBuilder({
       </aside>
     </main>
   );
+}
+
+function LearningProposalReview({
+  state,
+  onEvent,
+}: {
+  state: Extract<
+    RitualBuilderState,
+    { phase: "REVIEW_LEARNING" | "SAVING_LEARNING" }
+  >;
+  onEvent(event: RitualBuilderEvent): void;
+}) {
+  const proposed = state.proposal.proposedDefinition;
+  const current = state.approved;
+  const saving = state.phase === "SAVING_LEARNING";
+  return (
+    <section className="ritual-learning" aria-labelledby="learning-title">
+      <header>
+        <div>
+          <p className="ritual-eyebrow">Learning proposal</p>
+          <h3 id="learning-title">
+            Review revision {current.ritualRevision + 1}
+          </h3>
+        </div>
+        <span>No change yet</span>
+      </header>
+      <p className="ritual-learning__rationale">{state.proposal.rationale}</p>
+      <blockquote>{state.proposal.ownerFeedback}</blockquote>
+      <div
+        className="ritual-learning__comparison"
+        aria-label="Current and proposed Ritual comparison"
+      >
+        <ComparisonColumn
+          label={`Current · Revision ${current.ritualRevision}`}
+          name={current.name}
+          purpose={current.purpose}
+          trigger={current.trigger.summary}
+          completion={current.completion}
+          steps={current.steps.map((step) => step.title)}
+          permissions={current.permissions}
+          review={reviewLabel(current.reviewPolicy.ownerReview)}
+        />
+        <ComparisonColumn
+          label={`Proposed · Revision ${current.ritualRevision + 1}`}
+          name={proposed.name}
+          purpose={proposed.purpose}
+          trigger={proposed.trigger.summary}
+          completion={proposed.completion}
+          steps={proposed.steps.map((step) => step.title)}
+          permissions={proposed.permissions}
+          review={reviewLabel(proposed.reviewPolicy.ownerReview)}
+        />
+      </div>
+      <p className="ritual-learning__guardrail">
+        Permissions remain within the current Ritual. Nothing changes until
+        approval, and approval does not start a Run.
+      </p>
+      <footer>
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() =>
+            onEvent({ type: "APPROVE_LEARNING", occurredAt: now() })
+          }
+        >
+          {saving
+            ? "Saving revision…"
+            : `Approve revision ${current.ritualRevision + 1}`}
+        </button>
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => onEvent({ type: "REVISE_LEARNING" })}
+        >
+          Ask for changes
+        </button>
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => onEvent({ type: "REJECT_LEARNING" })}
+        >
+          Reject
+        </button>
+      </footer>
+    </section>
+  );
+}
+
+function ComparisonColumn({
+  label,
+  name,
+  purpose,
+  trigger,
+  completion,
+  steps,
+  permissions,
+  review,
+}: {
+  label: string;
+  name: string;
+  purpose: string;
+  trigger: string;
+  completion: string;
+  steps: readonly string[];
+  permissions: readonly string[];
+  review: string;
+}) {
+  return (
+    <article>
+      <h4>{label}</h4>
+      <strong>{name}</strong>
+      <p>{purpose}</p>
+      <small>Begins</small>
+      <p>{trigger}</p>
+      <small>Work</small>
+      <ol>
+        {steps.map((step) => (
+          <li key={step}>{step}</li>
+        ))}
+      </ol>
+      <small>Done when</small>
+      <p>{completion}</p>
+      <small>Permissions</small>
+      <ul>
+        {permissions.map((permission) => (
+          <li key={permission}>{permission}</li>
+        ))}
+      </ul>
+      <small>Review</small>
+      <p>{review}</p>
+    </article>
+  );
+}
+
+function reviewLabel(review: "EVERY_RUN" | "EXCEPTIONS_ONLY"): string {
+  return review === "EVERY_RUN" ? "Review every Run" : "Review exceptions";
 }
 
 function EditableRitualField({

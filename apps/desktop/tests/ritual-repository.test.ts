@@ -1,6 +1,7 @@
 import { chmod, lstat, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { approveRitualLearningProposal } from "@village/contracts";
 import { describe, expect, it } from "vitest";
 import { RitualRepository } from "../src/main/ritual-repository.js";
 
@@ -49,6 +50,26 @@ const receipt = {
   recordedAt: "2026-08-15T18:03:00.000Z",
 };
 
+const learningProposal = {
+  status: "proposal" as const,
+  proposalId: "rlp_01J00000000000000000000000",
+  ritualId: approved.ritualId,
+  fromRevision: 1,
+  receiptId: receipt.receiptId,
+  ownerFeedback: "Keep future results to three concise bullets.",
+  stewardMessage: "I propose a more concise expected result.",
+  rationale: "The owner asked for a shorter review.",
+  proposedDefinition: {
+    name: approved.name,
+    purpose: approved.purpose,
+    trigger: approved.trigger,
+    steps: approved.steps,
+    permissions: approved.permissions,
+    completion: "Three concise follow-up bullets are ready for review.",
+    reviewPolicy: approved.reviewPolicy,
+  },
+};
+
 describe("RitualRepository", () => {
   it("atomically saves and restores an approved Ritual with private permissions", async () => {
     const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
@@ -59,9 +80,10 @@ describe("RitualRepository", () => {
 
     expect(await repository.list()).toEqual([approved]);
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       rituals: [approved],
       receipts: [],
+      learningProposals: [],
     });
     if (process.platform !== "win32") {
       expect((await lstat(path)).mode & 0o077).toBe(0);
@@ -84,9 +106,10 @@ describe("RitualRepository", () => {
     expect(await repository.latestSnapshot()).toEqual({ approved, receipt });
     const stored = await readFile(path, "utf8");
     expect(JSON.parse(stored)).toEqual({
-      schemaVersion: 2,
+      schemaVersion: 3,
       rituals: [approved],
       receipts: [receipt],
+      learningProposals: [],
     });
     expect(stored).not.toContain("Customer A needs an answer before Friday");
   });
@@ -135,6 +158,34 @@ describe("RitualRepository", () => {
     await expect(
       repository.saveReceipt({ ...receipt, summary: "Conflicting result" }),
     ).rejects.toThrow("RITUAL_RECEIPT_CONFLICT");
+  });
+
+  it("preserves revision history and restores a Receipt-bound learning proposal", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
+    const repository = new RitualRepository(join(directory, "rituals.json"));
+    await repository.save(approved);
+    await repository.saveReceipt(receipt);
+    await repository.saveLearningProposal(learningProposal);
+
+    expect(
+      await repository.findLearningProposal(learningProposal.proposalId),
+    ).toEqual(learningProposal);
+
+    const revision = approveRitualLearningProposal(approved, learningProposal, {
+      schemaVersion: 1,
+      proposalId: learningProposal.proposalId,
+      ritualId: approved.ritualId,
+      expectedFromRevision: 1,
+      approvedAt: "2026-08-15T18:04:00.000Z",
+    });
+    await repository.save(revision);
+
+    expect(await repository.list()).toEqual([approved, revision]);
+    expect(await repository.find(approved.ritualId)).toEqual(revision);
+    expect(await repository.latestSnapshot()).toEqual({
+      approved: revision,
+      receipt: null,
+    });
   });
 
   it("preserves earlier Rituals and restores the most recently approved one", async () => {

@@ -1,15 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
   approveRitualDraft,
+  approveRitualLearningProposal,
   RitualApprovalError,
   ritualApprovalRequestSchema,
   ritualDraftSchema,
+  ritualLearningApprovalRequestSchema,
+  ritualLearningContextSchema,
+  ritualLearningProposalSchema,
   ritualStewardContextSchema,
   ritualStewardProposalSchema,
   ritualTestRunRequestSchema,
   ritualTestRunResultSchema,
   createRitualTestReceipt,
   validateRitualStewardResult,
+  validateRitualLearningResult,
   validateRitualTestRunResult,
 } from "../index.js";
 
@@ -245,5 +250,103 @@ describe("Ritual contracts", () => {
       status: "waiting",
       reason: "MALFORMED_PROVIDER_OUTPUT",
     });
+  });
+
+  it("turns owner feedback into an exact, reviewable Ritual revision", () => {
+    const approved = approveRitualDraft(draft, {
+      schemaVersion: 1,
+      draftId: draft.draftId,
+      expectedRevision: draft.revision,
+      ritualId: "rtl_01J00000000000000000000000",
+      approvedAt: "2026-08-15T15:01:00.000Z",
+    });
+    const receipt = {
+      schemaVersion: 1 as const,
+      receiptId: "rcp_01J00000000000000000000000",
+      runId: "rrn_01J00000000000000000000000",
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      mode: "TEST" as const,
+      outcome: "NEEDS_REVIEW" as const,
+      summary: "The deadline was identified, but the explanation was too long.",
+      evidence: ["The supplied deadline determined the priority."],
+      uncertainties: ["The desired response length was not specified."],
+      sampleDigest: "a".repeat(64),
+      sampleCharacterCount: 42,
+      externalEffects: [] as const,
+      recordedAt: "2026-08-15T15:02:00.000Z",
+    };
+    const context = ritualLearningContextSchema.parse({
+      schemaVersion: 1,
+      proposalId: "rlp_01J00000000000000000000000",
+      ritual: approved,
+      receipt,
+      ownerFeedback: "Keep the result to three concise bullets next time.",
+    });
+    const proposal = ritualLearningProposalSchema.parse({
+      status: "proposal",
+      proposalId: context.proposalId,
+      ritualId: approved.ritualId,
+      fromRevision: 1,
+      receiptId: receipt.receiptId,
+      ownerFeedback: context.ownerFeedback,
+      stewardMessage: "I propose tightening the expected result.",
+      rationale: "The owner asked for a shorter, more scannable result.",
+      proposedDefinition: {
+        name: approved.name,
+        purpose: approved.purpose,
+        trigger: approved.trigger,
+        steps: approved.steps,
+        permissions: approved.permissions,
+        completion: "Three concise priority bullets are ready for review.",
+        reviewPolicy: approved.reviewPolicy,
+      },
+    });
+
+    expect(validateRitualLearningResult(context, proposal)).toEqual(proposal);
+    expect(
+      validateRitualLearningResult(context, {
+        ...proposal,
+        receiptId: "rcp_01J00000000000000000000001",
+      }),
+    ).toMatchObject({ status: "waiting", reason: "STALE_STEWARD_RESULT" });
+    expect(
+      validateRitualLearningResult(context, {
+        ...proposal,
+        proposedDefinition: {
+          ...proposal.proposedDefinition,
+          permissions: [
+            ...proposal.proposedDefinition.permissions,
+            "Send email without another approval",
+          ],
+        },
+      }),
+    ).toMatchObject({
+      status: "waiting",
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    });
+
+    const approval = ritualLearningApprovalRequestSchema.parse({
+      schemaVersion: 1,
+      proposalId: proposal.proposalId,
+      ritualId: approved.ritualId,
+      expectedFromRevision: 1,
+      approvedAt: "2026-08-15T15:03:00.000Z",
+    });
+    expect(
+      approveRitualLearningProposal(approved, proposal, approval),
+    ).toMatchObject({
+      ritualId: approved.ritualId,
+      ritualRevision: 2,
+      completion: proposal.proposedDefinition.completion,
+      learningProposalId: proposal.proposalId,
+      basedOnReceiptId: receipt.receiptId,
+    });
+    expect(() =>
+      approveRitualLearningProposal(approved, proposal, {
+        ...approval,
+        expectedFromRevision: 2,
+      }),
+    ).toThrow("STALE_RITUAL_LEARNING_PROPOSAL");
   });
 });
