@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { automationSyncRequestSchema } from "@village/contracts";
+import {
+  automationSyncRequestSchema,
+  signedCommandEnvelopeSchema,
+} from "@village/contracts";
 import { generateDeviceSigningKey } from "../src/main/device-identity.js";
 import { exportPublicDeviceJwk } from "../src/main/device-identity.js";
 import { deviceIdForPublicKey } from "../src/main/pairing-bootstrap.js";
@@ -196,36 +199,56 @@ describe("packaged runtime control-plane composition", () => {
       principalId: "prn_01J00000000000000000000000",
       deviceId: await deviceIdForPublicKey(publicJwk),
       browserSessionId: "brs_01J00000000000000000000009",
+      controlPlaneOrigin: "https://village.test",
     };
-    const request = vi.fn<typeof fetch>().mockResolvedValue(
-      Response.json({
-        ok: true,
-        cursor: 7,
-        jobId: "job_01J00000000000000000000009",
-        controller: "AGENT",
-        connection: "ONLINE",
-        leaseEpoch: 3,
-        automationBlocked: false,
-        canceled: false,
-        workflow: {
-          objective: {
-            kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
-            version: 1,
-          },
-          jobRevision: 2,
-          logicalStep: "SELECT_ROLE",
-          effectId: "efx_01J00000000000000000000009",
-          completedEffects: [
-            {
-              logicalStep: "SET_DISPLAY_NAME",
-              effectId: "efx_01J00000000000000000000008",
-            },
-          ],
-          actionPhase: "ACCEPTED",
-          outstandingAction: null,
+    const workflow = {
+      objective: {
+        kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1" as const,
+        version: 1 as const,
+      },
+      jobRevision: 2,
+      logicalStep: "SELECT_ROLE" as const,
+      effectId: "efx_01J00000000000000000000009",
+      completedEffects: [
+        {
+          logicalStep: "SET_DISPLAY_NAME" as const,
+          effectId: "efx_01J00000000000000000000008",
         },
-      }),
-    );
+      ],
+      actionPhase: "ACCEPTED" as const,
+      outstandingAction: null,
+    };
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({
+          ok: true,
+          cursor: 2,
+          jobId: "job_01J00000000000000000000009",
+          controller: "NONE",
+          connection: "ONLINE",
+          leaseEpoch: 0,
+          automationBlocked: true,
+          canceled: false,
+          workflow,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({ ok: true, leaseEpoch: 1, eventSequence: 3 }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          ok: true,
+          cursor: 3,
+          jobId: "job_01J00000000000000000000009",
+          controller: "AGENT",
+          connection: "ONLINE",
+          leaseEpoch: 1,
+          automationBlocked: false,
+          canceled: false,
+          workflow,
+        }),
+      );
 
     const composition = await createPairedWorkflowRuntimeComposition({
       controlPlaneUrl: new URL("https://village.test"),
@@ -245,7 +268,7 @@ describe("packaged runtime control-plane composition", () => {
 
     expect(composition.initialSnapshot).toEqual({
       authenticated: true,
-      cursor: 7,
+      cursor: 3,
       principalId: identity.principalId,
       deviceId: identity.deviceId,
       jobId: "job_01J00000000000000000000009",
@@ -257,7 +280,7 @@ describe("packaged runtime control-plane composition", () => {
       jobRevision: 2,
       logicalStep: "SELECT_ROLE",
       effectId: "efx_01J00000000000000000000009",
-      leaseEpoch: 3,
+      leaseEpoch: 1,
       connection: "ONLINE",
       controller: "AGENT",
       automationBlocked: false,
@@ -270,6 +293,22 @@ describe("packaged runtime control-plane composition", () => {
       ],
       actionPhase: "ACCEPTED",
       outstandingAction: null,
+    });
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(String(request.mock.calls[1]![0])).toBe(
+      `https://village.test/api/browser-sessions/${identity.browserSessionId}/connect`,
+    );
+    expect(
+      signedCommandEnvelopeSchema.parse(
+        JSON.parse((request.mock.calls[1]![1] as RequestInit).body as string),
+      ),
+    ).toMatchObject({
+      principalId: identity.principalId,
+      deviceId: identity.deviceId,
+      browserSessionId: identity.browserSessionId,
+      jobId: "job_01J00000000000000000000009",
+      leaseEpoch: 1,
+      command: { capability: "SESSION_OPEN", site: "OWNED_FIXTURE" },
     });
   });
 });

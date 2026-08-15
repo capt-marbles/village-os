@@ -63,6 +63,7 @@ Run only on the owner's Mac with an existing managed ChatGPT account session:
 ```sh
 pnpm --filter @village/test-auth-site build
 pnpm --filter @village/desktop package:mac:e2e
+export VILLAGE_CONTROL_PLANE_URL=<paired-https-or-loopback-origin>
 node scripts/verify-delegated-workflow.mjs --genuine \
   --profile <absolute-path-to-paired-village-profile> \
   --fixture-session <owned-fixture-browser-session-id>
@@ -72,8 +73,11 @@ The genuine gate uses the paired production coordinator, signed device
 operations, and a separately provisioned `OWNED_FIXTURE` Browser Session for
 the same principal and device. The fixture session must not be the personal
 LinkedIn Browser Session. The explicit profile must already contain the paired
-runtime identity and device key. Deterministic CI continues to use the local
-proof coordinator and needs neither a control plane nor provider credentials.
+runtime identity and device key. The paired control plane must be running with
+all migrations applied. `VILLAGE_CONTROL_PLANE_URL` is a compatibility fallback
+for profiles created before Village persisted the origin; a stored origin stays
+authoritative. Deterministic CI continues to use the local proof coordinator
+and needs neither a control plane nor provider credentials.
 
 The result must report `CHATGPT_ACCOUNT`, `RECEIPTED_SUCCESS`, one finalization effect, and a visible fixture surface. Authentication failure, timeout, a Human Gate, or a second finalization blocks the milestone.
 

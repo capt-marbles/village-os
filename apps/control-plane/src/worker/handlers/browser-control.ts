@@ -293,9 +293,23 @@ export async function dispatchAuthenticatedSessionOpen(
   if (session.site !== envelope.command.site) {
     return { ok: false as const, code: "DESTINATION_SITE_MISMATCH" };
   }
-  const claimed = await environment.BROWSER_SESSION_COORDINATOR.getByName(
+  const coordinator = environment.BROWSER_SESSION_COORDINATOR.getByName(
     envelope.browserSessionId,
-  ).claimAgentLease({
+  );
+  const beforeClaim = await coordinator.snapshot(envelope.principalId);
+  if (
+    beforeClaim.ok &&
+    beforeClaim.control.connection === "OFFLINE" &&
+    beforeClaim.control.controller === "NONE"
+  ) {
+    const reconnected = await coordinator.hostReconnected(
+      envelope.principalId,
+      envelope.deviceId,
+      now,
+    );
+    if (!reconnected.ok) return reconnected;
+  }
+  const claimed = await coordinator.claimAgentLease({
     principalId: envelope.principalId,
     deviceId: envelope.deviceId,
     connectionId,
@@ -454,6 +468,23 @@ export async function dispatchAuthenticatedAutomationSync(
     snapshot.control.browserSessionId !== envelope.browserSessionId
   ) {
     return { ok: false as const, code: "SESSION_NOT_OWNED" };
+  }
+  if (
+    snapshot.control.controller === "AGENT" &&
+    snapshot.control.connection === "ONLINE" &&
+    !snapshot.control.automationBlocked
+  ) {
+    const renewed = await environment.BROWSER_SESSION_COORDINATOR.getByName(
+      envelope.browserSessionId,
+    ).renewAgentLease({
+      principalId: envelope.principalId,
+      deviceId: envelope.deviceId,
+      connectionId,
+      leaseEpoch: snapshot.control.leaseEpoch,
+      now,
+      expiresAt: new Date(Date.parse(now) + 60_000).toISOString(),
+    });
+    if (!renewed.ok) return renewed;
   }
   const workflowSnapshot =
     await environment.BROWSER_SESSION_COORDINATOR.getByName(

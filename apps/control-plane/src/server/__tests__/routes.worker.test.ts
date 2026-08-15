@@ -549,6 +549,49 @@ describe("authenticated pairing routes", () => {
       ok: true,
       leaseEpoch: 1,
     });
+    const syncUnsigned = {
+      protocolVersion: 1 as const,
+      principalId,
+      deviceId,
+      browserSessionId,
+      connectionId: "connector-route",
+      sequence: 1,
+      cursor: 0,
+      issuedAt,
+      expiresAt,
+    };
+    const syncSignature = await crypto.subtle.sign(
+      "Ed25519",
+      keys.privateKey,
+      canonicalAutomationSyncRequestBytes(syncUnsigned),
+    );
+    const synchronized = await SELF.fetch(
+      new Request(
+        `https://village.test/api/browser-sessions/${browserSessionId}/automation-sync`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-village-connection-id": "connector-route",
+          },
+          body: JSON.stringify(
+            automationSyncRequestSchema.parse({
+              ...syncUnsigned,
+              signature: Buffer.from(syncSignature).toString("base64url"),
+            }),
+          ),
+        },
+      ),
+    );
+    expect(synchronized.status, await synchronized.clone().text()).toBe(200);
+    const renewed =
+      await env.BROWSER_SESSION_COORDINATOR.getByName(
+        browserSessionId,
+      ).snapshot(principalId);
+    expect(renewed).toMatchObject({ ok: true });
+    expect(
+      Date.parse(renewed.ok ? renewed.control.leaseExpiresAt! : ""),
+    ).toBeGreaterThan(Date.parse(expiresAt));
     const replayed = await SELF.fetch(connectRequest());
     expect(replayed.status).toBe(409);
 
@@ -575,6 +618,53 @@ describe("authenticated pairing routes", () => {
       ),
     );
     expect(foreignEvents.status).toBe(400);
+
+    const coordinator =
+      env.BROWSER_SESSION_COORDINATOR.getByName(browserSessionId);
+    expect(
+      await coordinator.hostDisconnected({
+        principalId,
+        deviceId,
+        connectionId: "connector-route",
+        leaseEpoch: 1,
+        now: new Date().toISOString(),
+      }),
+    ).toEqual({ ok: true });
+    const recoveryUnsigned: UnsignedCommandEnvelope = {
+      ...unsigned,
+      actionId: "act_01J00000000000000000000003",
+      sequence: 2,
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 30_000).toISOString(),
+    };
+    const recoverySignature = await crypto.subtle.sign(
+      "Ed25519",
+      keys.privateKey,
+      canonicalCommandEnvelopeBytes(recoveryUnsigned),
+    );
+    const recovered = await SELF.fetch(
+      new Request(
+        `https://village.test/api/browser-sessions/${browserSessionId}/connect`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-village-connection-id": "connector-recovered",
+          },
+          body: JSON.stringify(
+            signedCommandEnvelopeSchema.parse({
+              ...recoveryUnsigned,
+              signature: Buffer.from(recoverySignature).toString("base64url"),
+            }),
+          ),
+        },
+      ),
+    );
+    expect(recovered.status, await recovered.clone().text()).toBe(200);
+    await expect(recovered.json()).resolves.toMatchObject({
+      ok: true,
+      leaseEpoch: 2,
+    });
   });
 
   it("returns authoritative automation fencing to a signed paired desktop", async () => {
