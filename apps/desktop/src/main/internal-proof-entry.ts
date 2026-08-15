@@ -21,6 +21,7 @@ import { DeviceIdentityVault } from "./device-identity-vault.js";
 import { ElectronSafeStorageProtector } from "./electron-safe-storage.js";
 import { SecretVault } from "../secrets/secret-vault.js";
 import { SecretRuntimeIdentityStore } from "./runtime-identity-store.js";
+import { provisionInternalOwnedFixture } from "./internal-fixture-provisioner.js";
 import {
   resolveRuntimeIdentity,
   type PairedRuntimeIdentitySource,
@@ -233,9 +234,6 @@ async function run(): Promise<void> {
     | undefined;
   let fixtureBrowserSessionId: string | undefined;
   if (coordinationMode === "paired") {
-    fixtureBrowserSessionId = browserSessionIdSchema.parse(
-      argument("--village-proof-fixture-session"),
-    );
     const protector = new ElectronSafeStorageProtector();
     const identityDirectory = join(app.getPath("userData"), "identity");
     const runtimeIdentityStore = new SecretRuntimeIdentityStore(
@@ -245,15 +243,27 @@ async function run(): Promise<void> {
       isPackaged: true,
       pairedIdentitySource: runtimeIdentityStore,
     });
+    const controlPlaneUrl = resolveRuntimeControlPlaneUrl(
+      pairedIdentity.controlPlaneOrigin,
+    );
+    const providedFixtureSessionId = argument(
+      "--village-proof-fixture-session",
+    );
+    fixtureBrowserSessionId = providedFixtureSessionId
+      ? browserSessionIdSchema.parse(providedFixtureSessionId)
+      : (
+          await provisionInternalOwnedFixture({
+            controlPlaneUrl,
+            identity: pairedIdentity,
+          })
+        ).browserSessionId;
     assertDistinctBrowserSessionIdentity(
       pairedIdentity.browserSessionId,
       fixtureBrowserSessionId,
     );
     applicationIdentitySource = { load: async () => pairedIdentity };
     coordination = await createPairedWorkflowRuntimeComposition({
-      controlPlaneUrl: resolveRuntimeControlPlaneUrl(
-        pairedIdentity.controlPlaneOrigin,
-      ),
+      controlPlaneUrl,
       userDataPath: app.getPath("userData"),
       identity: {
         ...pairedIdentity,

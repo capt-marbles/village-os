@@ -37,7 +37,11 @@ export function assertPackagedDelegatedWorkflowRun(
     provider === "CHATGPT_ACCOUNT" &&
     (report.coordinator !== "PAIRED" ||
       !/^job_[0-9A-HJKMNP-TV-Z]{26}$/.test(report.coordinatorJobId ?? "") ||
-      report.fixtureBrowserSessionId !== expectedFixtureBrowserSessionId)
+      !/^brs_[0-9A-HJKMNP-TV-Z]{26}$/.test(
+        report.fixtureBrowserSessionId ?? "",
+      ) ||
+      (expectedFixtureBrowserSessionId !== undefined &&
+        report.fixtureBrowserSessionId !== expectedFixtureBrowserSessionId))
   ) {
     throw new Error("PACKAGED_DELEGATED_WORKFLOW_COORDINATOR_EVIDENCE_MISSING");
   }
@@ -188,17 +192,18 @@ export function packagedDelegatedWorkflowArguments({
   ];
   if (coordinator === "PAIRED") {
     if (
-      typeof fixtureBrowserSessionId !== "string" ||
+      fixtureBrowserSessionId !== undefined &&
       !/^brs_[0-9A-HJKMNP-TV-Z]{26}$/.test(fixtureBrowserSessionId)
     ) {
       throw new Error("PACKAGED_DELEGATED_WORKFLOW_FIXTURE_SESSION_REQUIRED");
     }
-    arguments_.push(
-      "--village-proof-coordinator",
-      "paired",
-      "--village-proof-fixture-session",
-      fixtureBrowserSessionId,
-    );
+    arguments_.push("--village-proof-coordinator", "paired");
+    if (fixtureBrowserSessionId !== undefined) {
+      arguments_.push(
+        "--village-proof-fixture-session",
+        fixtureBrowserSessionId,
+      );
+    }
   } else if (coordinator !== "LOCAL_PROOF" || fixtureBrowserSessionId) {
     throw new Error("PACKAGED_DELEGATED_WORKFLOW_COORDINATOR_INVALID");
   }
@@ -687,9 +692,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       if (provider === "CHATGPT_ACCOUNT" && profileIndex === -1) {
         throw new Error("PACKAGED_DELEGATED_WORKFLOW_PAIRED_PROFILE_REQUIRED");
       }
-      if (provider === "CHATGPT_ACCOUNT" && fixtureSessionIndex === -1) {
-        throw new Error("PACKAGED_DELEGATED_WORKFLOW_FIXTURE_SESSION_REQUIRED");
-      }
       const profilePath =
         profileIndex === -1
           ? repeat === 1
@@ -712,8 +714,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
             ...(provider === "CHATGPT_ACCOUNT"
               ? {
                   coordinator: "PAIRED",
-                  fixtureBrowserSessionId:
-                    process.argv[fixtureSessionIndex + 1],
+                  ...(fixtureSessionIndex === -1
+                    ? {}
+                    : {
+                        fixtureBrowserSessionId:
+                          process.argv[fixtureSessionIndex + 1],
+                      }),
                 }
               : {}),
           }),

@@ -443,16 +443,15 @@ export async function dispatchAuthenticatedAutomationSync(
     .first<{ owned: number }>();
   if (!session) return { ok: false as const, code: "SESSION_NOT_OWNED" };
   const accepted = await environment.VILLAGE_DB.prepare(
-    `UPDATE devices SET last_automation_sync_sequence = ?
-     WHERE principal_id = ? AND device_id = ? AND credential_status = 'ACTIVE'
-       AND protocol_version = ?
+    `UPDATE browser_sessions SET last_automation_sync_sequence = ?
+     WHERE principal_id = ? AND device_id = ? AND browser_session_id = ?
        AND last_automation_sync_sequence < ?`,
   )
     .bind(
       envelope.sequence,
       envelope.principalId,
       envelope.deviceId,
-      envelope.protocolVersion,
+      envelope.browserSessionId,
       envelope.sequence,
     )
     .run();
@@ -593,15 +592,16 @@ export async function dispatchAuthenticatedWorkflowOperation(
     .first<{ owned: number }>();
   if (!session) return { ok: false as const, code: "SESSION_NOT_OWNED" };
   const accepted = await environment.VILLAGE_DB.prepare(
-    `UPDATE devices SET last_workflow_operation_sequence = ?
-     WHERE principal_id = ? AND device_id = ? AND credential_status = 'ACTIVE'
-       AND protocol_version = ? AND last_workflow_operation_sequence < ?`,
+    `UPDATE browser_sessions SET last_workflow_operation_sequence = ?
+     WHERE principal_id = ? AND device_id = ? AND job_id = ?
+       AND browser_session_id = ? AND last_workflow_operation_sequence < ?`,
   )
     .bind(
       envelope.sequence,
       envelope.principalId,
       envelope.deviceId,
-      envelope.protocolVersion,
+      envelope.jobId,
+      envelope.browserSessionId,
       envelope.sequence,
     )
     .run();

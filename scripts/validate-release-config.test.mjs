@@ -38,6 +38,18 @@ test("static release config requires Electron 43, hardened fuses and a separate 
       onlyLoadAppFromAsar: true,
       grantFileProtocolExtraPrivileges: false,
     },
+    files: [
+      "dist/**",
+      "!dist/main/browser-host-manager*",
+      "!dist/main/desktop-delegated-workflow*",
+      "!dist/main/fixture-session-handler*",
+      "!dist/main/internal-fixture-provisioner*",
+      "!dist/main/internal-delegated-proof*",
+      "!dist/main/internal-proof-entry*",
+      "!dist/main/paired-proof-coordination*",
+      "!dist/main/proof-projection*",
+      "package.json",
+    ],
     mac: { hardenedRuntime: true, notarize: true },
     publish: null,
   };
@@ -73,5 +85,19 @@ test("static release config requires Electron 43, hardened fuses and a separate 
       },
       e2eConfig,
     }).some((error) => error.includes("electronFuses.runAsNode")),
+  );
+  assert.ok(
+    validateReleaseFiles({
+      desktopPackage: { devDependencies: { electron: "43.2.0" } },
+      releaseConfig: {
+        ...releaseConfig,
+        files: releaseConfig.files.filter(
+          (entry) => entry !== "!dist/main/internal-fixture-provisioner*",
+        ),
+      },
+      e2eConfig,
+    }).includes(
+      "Release config must exclude !dist/main/internal-fixture-provisioner*",
+    ),
   );
 });

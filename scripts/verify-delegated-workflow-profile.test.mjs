@@ -56,6 +56,36 @@ test("the genuine proof selects the paired coordinator and a distinct fixture se
   ]);
 });
 
+test("the genuine proof can provision its fixture session inside the paired app", () => {
+  const arguments_ = packagedDelegatedWorkflowArguments({
+    reportPath: "/tmp/village-proof-report.json",
+    profilePath: "/tmp/village-paired-profile",
+    provider: "CHATGPT_ACCOUNT",
+    coordinator: "PAIRED",
+  });
+
+  assert.deepEqual(arguments_.slice(-2), [
+    "--village-proof-coordinator",
+    "paired",
+  ]);
+  assert.doesNotThrow(() =>
+    assertPackagedDelegatedWorkflowRun(
+      {
+        status: "PASS",
+        provider: "CHATGPT_ACCOUNT",
+        coordinator: "PAIRED",
+        coordinatorJobId: "job_01J00000000000000000000009",
+        fixtureBrowserSessionId: "brs_01J00000000000000000000009",
+        readyLabel: "Ready for delegated setup",
+        terminal: { state: "RECEIPTED_SUCCESS" },
+        finalizationEffects: 1,
+        fixtureSurfaceVisible: true,
+      },
+      "CHATGPT_ACCOUNT",
+    ),
+  );
+});
+
 test("the genuine report must prove the paired coordinator and fixture session", () => {
   const fixtureBrowserSessionId = "brs_01J00000000000000000000009";
   const report = {

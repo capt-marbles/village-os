@@ -89,6 +89,22 @@ export function validateReleaseFiles({
     if (actual !== expected)
       errors.push(`Release config has invalid ${field}: expected ${expected}`);
   }
+  const requiredInternalExclusions = [
+    "!dist/main/browser-host-manager*",
+    "!dist/main/desktop-delegated-workflow*",
+    "!dist/main/fixture-session-handler*",
+    "!dist/main/internal-fixture-provisioner*",
+    "!dist/main/internal-delegated-proof*",
+    "!dist/main/internal-proof-entry*",
+    "!dist/main/paired-proof-coordination*",
+    "!dist/main/proof-projection*",
+  ];
+  const releaseFiles = new Set(releaseConfig.files ?? []);
+  for (const exclusion of requiredInternalExclusions) {
+    if (!releaseFiles.has(exclusion)) {
+      errors.push(`Release config must exclude ${exclusion}`);
+    }
+  }
   if (releaseConfig.mac?.identity === "-") {
     errors.push("Release config cannot use an ad-hoc signing identity");
   }

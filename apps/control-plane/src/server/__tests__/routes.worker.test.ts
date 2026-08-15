@@ -829,6 +829,77 @@ describe("authenticated pairing routes", () => {
       automationBlocked: true,
       canceled: true,
     });
+
+    const nextJobId = "job_01J00000000000000000000018" as const;
+    const nextBrowserSessionId = "brs_01J00000000000000000000018" as const;
+    await env.VILLAGE_DB.batch([
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO jobs
+         (principal_id, job_id, state, version, last_event_sequence, created_at, updated_at)
+         VALUES (?, ?, 'WAITING_FOR_BROWSER', 1, 1, ?, ?)`,
+      ).bind(principalId, nextJobId, now, now),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO browser_sessions
+         (principal_id, browser_session_id, job_id, device_id, host_id, site,
+          controller, connection_state, lease_epoch, last_accepted_sequence,
+          automation_blocked, takeover_state, profile_state, updated_at)
+         VALUES (?, ?, ?, ?, 'hst_01J00000000000000000000018', 'OWNED_FIXTURE',
+                 'NONE', 'ONLINE', 0, 0, 1, 'NONE', 'PRESENT', ?)`,
+      ).bind(principalId, nextBrowserSessionId, nextJobId, deviceId, now),
+    ]);
+    await env.BROWSER_SESSION_COORDINATOR.getByName(
+      nextBrowserSessionId,
+    ).initialize({
+      principalId,
+      browserSessionId: nextBrowserSessionId,
+      site: "OWNED_FIXTURE",
+      initializedAt: now,
+      control: {
+        principalId,
+        deviceId,
+        jobId: nextJobId,
+        browserSessionId: nextBrowserSessionId,
+        controller: "NONE",
+        connection: "ONLINE",
+        leaseEpoch: 0,
+        leaseExpiresAt: null,
+        lastAcceptedSequence: 0,
+        automationBlocked: true,
+        takeover: "NONE",
+        profile: "PRESENT",
+      },
+    });
+    const nextUnsigned = {
+      ...unsigned,
+      browserSessionId: nextBrowserSessionId,
+      connectionId: "connector-next-session",
+      sequence: 1,
+      cursor: 0,
+    };
+    const nextSignature = await crypto.subtle.sign(
+      "Ed25519",
+      keys.privateKey,
+      canonicalAutomationSyncRequestBytes(nextUnsigned),
+    );
+    const nextSession = await SELF.fetch(
+      new Request(
+        `https://village.test/api/browser-sessions/${nextBrowserSessionId}/automation-sync`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-village-connection-id": "connector-next-session",
+          },
+          body: JSON.stringify(
+            automationSyncRequestSchema.parse({
+              ...nextUnsigned,
+              signature: Buffer.from(nextSignature).toString("base64url"),
+            }),
+          ),
+        },
+      ),
+    );
+    expect(nextSession.status, await nextSession.clone().text()).toBe(200);
   });
 
   it("records a device-signed receipt and advances the durable logical step", async () => {

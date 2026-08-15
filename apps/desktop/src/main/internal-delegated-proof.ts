@@ -448,7 +448,8 @@ export async function createInternalDelegatedProof(options: {
     createFinalizationId: () => "local-finalization-packaged-proof",
     stateFilePath: join(
       options.userDataPath,
-      "internal-proof/fixture-state.json",
+      "internal-proof/fixtures",
+      `${workflowIdentity.browserSessionId}.json`,
     ),
   })) as FixtureService;
   const authorizedEffects = new Set(

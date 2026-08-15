@@ -65,14 +65,16 @@ pnpm --filter @village/test-auth-site build
 pnpm --filter @village/desktop package:mac:e2e
 export VILLAGE_CONTROL_PLANE_URL=<paired-https-or-loopback-origin>
 node scripts/verify-delegated-workflow.mjs --genuine \
-  --profile <absolute-path-to-paired-village-profile> \
-  --fixture-session <owned-fixture-browser-session-id>
+  --profile <absolute-path-to-paired-village-profile>
 ```
 
 The genuine gate uses the paired production coordinator, signed device
 operations, and a separately provisioned `OWNED_FIXTURE` Browser Session for
-the same principal and device. The fixture session must not be the personal
-LinkedIn Browser Session. The explicit profile must already contain the paired
+the same principal and device. By default, the internal packaged app provisions
+that fixed job and a distinct fixture session through the paired loopback
+control plane before showing the start surface. `--fixture-session` remains an
+optional recovery/debug override and must never name the personal LinkedIn
+Browser Session. The explicit profile must already contain the paired
 runtime identity and device key. The paired control plane must be running with
 all migrations applied. `VILLAGE_CONTROL_PLANE_URL` is a compatibility fallback
 for profiles created before Village persisted the origin; a stored origin stays
