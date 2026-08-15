@@ -30,6 +30,7 @@ import {
 import { LazyDelegatedWorkflow } from "./lazy-delegated-workflow.js";
 import { InternalPairedBootstrap } from "./internal-paired-bootstrap.js";
 import type { InternalDelegatedWorkflowOperations } from "./app-window.js";
+import { exitWithoutContinuation } from "./abrupt-exit-barrier.js";
 
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -350,7 +351,10 @@ async function run(): Promise<void> {
         interruptAfterEffectBeforeReceipt:
           interruption === "post-effect-before-receipt",
         ...(interruption === "crash-after-effect-before-observation"
-          ? { abruptlyExitAfterFinalEffect: () => app.exit(86) }
+          ? {
+              abruptlyExitAfterFinalEffect: () =>
+                exitWithoutContinuation((code) => process.exit(code), 86),
+            }
           : {}),
         ...(ownerCheckpoint === "owner-handback-restart" ||
         ownerCheckpoint === "observer-cancel-restart"

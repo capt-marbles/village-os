@@ -381,7 +381,7 @@ export async function createInternalDelegatedProof(options: {
   modelProvider?: BoundedSetupModelProvider;
   variantId?: string;
   interruptAfterEffectBeforeReceipt?: boolean;
-  abruptlyExitAfterFinalEffect?: () => void;
+  abruptlyExitAfterFinalEffect?: () => never;
   delayProviderAfterFirstStepMs?: number;
   coordination?: {
     initialSnapshot: CoordinatorSnapshot;
@@ -526,7 +526,6 @@ export async function createInternalDelegatedProof(options: {
           options.abruptlyExitAfterFinalEffect
         ) {
           options.abruptlyExitAfterFinalEffect();
-          throw new Error("ABRUPT_PROOF_EXIT_DID_NOT_TERMINATE");
         }
         return { postcondition };
       },
