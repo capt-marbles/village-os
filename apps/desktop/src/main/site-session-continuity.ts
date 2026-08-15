@@ -350,9 +350,7 @@ interface FixtureContinuitySourceOptions {
   cookieStore: FixtureCookieSource;
   sourceSigningKey: CryptoKey;
   destinationEncryptionKey: CryptoKey;
-  publish(
-    revision: EncryptedContinuityRevision,
-  ): Promise<{ stored: boolean }>;
+  publish(revision: EncryptedContinuityRevision): Promise<{ stored: boolean }>;
   now?: () => number;
 }
 
@@ -374,9 +372,11 @@ export class FixtureContinuitySource {
       let pending = journal.pending;
       if (!pending) {
         const cookies = fixtureSnapshotSchema.shape.cookies.parse(
-          (await this.options.cookieStore.get({
-            url: "https://fixture.village.test/",
-          })).map(toFixtureCookie),
+          (
+            await this.options.cookieStore.get({
+              url: "https://fixture.village.test/",
+            })
+          ).map(toFixtureCookie),
         );
         const issuedAt = this.now();
         pending = await createEncryptedFixtureRevision({
@@ -531,12 +531,14 @@ export class FixtureContinuityDestination {
     });
   }
 
-  async current(): Promise<{ revision: number; digest: string | null }> {
-    const journal = await this.readJournal();
-    return {
-      revision: journal.appliedRevision,
-      digest: journal.appliedDigest,
-    };
+  current(): Promise<{ revision: number; digest: string | null }> {
+    return this.enqueue(async () => {
+      const journal = await this.readJournal();
+      return {
+        revision: journal.appliedRevision,
+        digest: journal.appliedDigest,
+      };
+    });
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -552,17 +554,8 @@ export class FixtureContinuityDestination {
     z.infer<typeof destinationJournalSchema>
   > {
     try {
-      const metadata = await lstat(this.options.journalPath);
-      if (
-        metadata.isSymbolicLink() ||
-        !metadata.isFile() ||
-        metadata.size > 65_536 ||
-        (process.platform !== "win32" && (metadata.mode & 0o077) !== 0)
-      ) {
-        throw new Error("CONTINUITY_JOURNAL_CORRUPT");
-      }
       const parsed = destinationJournalSchema.parse(
-        JSON.parse(await readFile(this.options.journalPath, "utf8")),
+        JSON.parse(await readPrivateFile(this.options.journalPath, 65_536)),
       );
       if (!sameBinding(parsed, this.options.binding)) {
         throw new Error("CONTINUITY_JOURNAL_BINDING_MISMATCH");
@@ -627,6 +620,10 @@ async function readPrivateFile(path: string, maximumBytes: number) {
 async function writePrivateFile(path: string, value: string): Promise<void> {
   const directory = dirname(path);
   await mkdir(directory, { recursive: true, mode: 0o700 });
+  const directoryMetadata = await lstat(directory);
+  if (directoryMetadata.isSymbolicLink() || !directoryMetadata.isDirectory()) {
+    throw new Error("CONTINUITY_JOURNAL_UNSAFE_PATH");
+  }
   await chmod(directory, 0o700);
   const temporary = `${path}.${crypto.randomUUID()}.tmp`;
   try {

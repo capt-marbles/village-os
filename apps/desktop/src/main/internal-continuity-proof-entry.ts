@@ -205,15 +205,15 @@ async function destinationMode(
   }
 
   let applied = 0;
-  while ((await destination.current()).revision < target) {
-    const current = await destination.current();
+  let current = await destination.current();
+  while (current.revision < target) {
     const revision = await client().fetchAfter(binding, current.revision);
     if (!revision) throw new Error("PACKAGED_CONTINUITY_REVISION_MISSING");
     const acknowledgement = await destination.apply(revision);
     await client().acknowledge(binding, acknowledgement);
     applied += 1;
+    current = await destination.current();
   }
-  const current = await destination.current();
   const authenticated =
     (
       await browserSession.cookies.get({

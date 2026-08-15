@@ -46,6 +46,15 @@ export function assertPackagedSiteSessionContinuity(report) {
   if (report.keychainMode !== "MOCK_TEST_ONLY") {
     throw new Error("PACKAGED_CONTINUITY_KEYCHAIN_MODE_UNDECLARED");
   }
+  if (report.responseLossesObserved !== 1) {
+    throw new Error("PACKAGED_CONTINUITY_RESPONSE_LOSS_NOT_PROVEN");
+  }
+  if (
+    report.acknowledgedRevision !== 21 ||
+    report.restartNoNewRevision !== true
+  ) {
+    throw new Error("PACKAGED_CONTINUITY_ACK_OR_RESTART_EVIDENCE_MISSING");
+  }
   return report;
 }
 
@@ -92,6 +101,7 @@ function createMailboxServer() {
   let acknowledgedRevision = 0;
   let revoked = false;
   let loseFirstPublishResponse = true;
+  let responseLossesObserved = 0;
   let plaintextMailboxOccurrences = 0;
   const server = createServer(async (request, response) => {
     const chunks = [];
@@ -111,8 +121,11 @@ function createMailboxServer() {
     }
     if (operation === "revisions") {
       const current = revisions.at(-1);
-      if (!current) revisions.push(body);
-      else if (
+      let stored = false;
+      if (!current) {
+        revisions.push(body);
+        stored = true;
+      } else if (
         current.revision === body.revision &&
         current.digest === body.digest
       ) {
@@ -120,9 +133,10 @@ function createMailboxServer() {
       } else if (
         body.revision === current.revision + 1 &&
         body.previousDigest === current.digest
-      )
+      ) {
         revisions.push(body);
-      else {
+        stored = true;
+      } else {
         response.writeHead(409, { "content-type": "application/json" });
         response.end(
           JSON.stringify({
@@ -134,11 +148,12 @@ function createMailboxServer() {
       }
       if (loseFirstPublishResponse) {
         loseFirstPublishResponse = false;
+        responseLossesObserved += 1;
         request.socket.destroy();
         return;
       }
       response.writeHead(201, { "content-type": "application/json" });
-      response.end(JSON.stringify({ ok: true, stored: current !== body }));
+      response.end(JSON.stringify({ ok: true, stored }));
       return;
     }
     if (operation === "fetch") {
@@ -179,6 +194,7 @@ function createMailboxServer() {
       revisions,
       acknowledgedRevision,
       plaintextMailboxOccurrences,
+      responseLossesObserved,
     }),
   };
 }
@@ -361,6 +377,9 @@ export async function runPackagedSiteSessionContinuity({
         restart.keychainMode === "MOCK_TEST_ONLY"
           ? "MOCK_TEST_ONLY"
           : "UNKNOWN",
+      responseLossesObserved: evidence.responseLossesObserved,
+      acknowledgedRevision: evidence.acknowledgedRevision,
+      restartNoNewRevision: restart.noNewRevision,
     });
   } finally {
     await new Promise((resolve) => mailbox.server.close(resolve));
