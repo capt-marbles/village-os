@@ -18,6 +18,7 @@ export interface VillagePairingBridge {
 export type PairingViewState =
   | "WAITING_FOR_CONFIRMATION"
   | "WAITING_FOR_SESSION"
+  | "SESSION_REJECTED"
   | "REJECTED"
   | "EXPIRED"
   | "PAIRED";
@@ -112,6 +113,7 @@ export function PairingBootstrap({
 const pairingStateLabel: Record<PairingViewState, string> = {
   WAITING_FOR_CONFIRMATION: "Waiting for your confirmation",
   WAITING_FOR_SESSION: "Desktop paired",
+  SESSION_REJECTED: "Browser assignment was not accepted",
   REJECTED: "Pairing was rejected",
   EXPIRED: "Pairing expired",
   PAIRED: "Ready",
@@ -122,6 +124,8 @@ const pairingStateExplanation: Record<PairingViewState, string> = {
     "Complete the short-lived request in the authenticated Village web app.",
   WAITING_FOR_SESSION:
     "Choose or create a browser job in Village. This Mac will open it when assigned.",
+  SESSION_REJECTED:
+    "This Mac remains paired. Return to Village on the web and open the assigned browser again.",
   REJECTED: "Start a new request in Village and confirm this Mac again.",
   EXPIRED: "The one-time request expired. Start a new request in Village.",
   PAIRED: "The assigned browser session is opening on this Mac.",

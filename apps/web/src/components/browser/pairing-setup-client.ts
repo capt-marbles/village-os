@@ -5,6 +5,7 @@ import {
   jobIdSchema,
   pairingIdSchema,
   principalIdSchema,
+  type Site,
 } from "@village/contracts";
 
 export interface PublicPairingRequest {
@@ -27,6 +28,19 @@ export interface PairedBrowserSession {
   jobId: string;
   browserSessionId: string;
   hostId: string;
+  fixtureBrowserSessionId: string;
+}
+
+interface ProvisionedSiteSession {
+  jobId: string;
+  browserSessionId: string;
+  hostId: string;
+}
+
+interface SessionProvisioningState {
+  personal?: ProvisionedSiteSession;
+  fixture?: ProvisionedSiteSession;
+  inFlight?: Promise<PairedBrowserSession>;
 }
 
 export type PairingStatus =
@@ -131,6 +145,10 @@ export function createVillageId(
 
 export class PairingSetupClient {
   private readonly baseUrl: URL;
+  private readonly sessionProvisioning = new Map<
+    string,
+    SessionProvisioningState
+  >();
 
   constructor(
     baseUrl: string | URL,
@@ -218,6 +236,32 @@ export class PairingSetupClient {
 
   async createSession(deviceId: string): Promise<PairedBrowserSession> {
     const parsedDeviceId = deviceIdSchema.parse(deviceId);
+    const state = this.sessionProvisioning.get(parsedDeviceId) ?? {};
+    this.sessionProvisioning.set(parsedDeviceId, state);
+    if (state.inFlight) return state.inFlight;
+
+    state.inFlight = (async () => {
+      state.personal ??= await this.createSiteSession(
+        parsedDeviceId,
+        "LINKEDIN",
+      );
+      state.fixture ??= await this.createSiteSession(
+        parsedDeviceId,
+        "OWNED_FIXTURE",
+      );
+      return {
+        ...state.personal,
+        fixtureBrowserSessionId: state.fixture.browserSessionId,
+      };
+    })();
+    try {
+      return await state.inFlight;
+    } finally {
+      delete state.inFlight;
+    }
+  }
+
+  private async createSiteSession(deviceId: string, site: Site) {
     const jobBody = await this.json("/api/jobs", { method: "POST" }, true);
     const jobId = jobIdSchema.parse(jobBody.jobId);
     const browserSessionId = browserSessionIdSchema.parse(
@@ -229,10 +273,10 @@ export class PairingSetupClient {
       {
         method: "POST",
         body: JSON.stringify({
-          deviceId: parsedDeviceId,
+          deviceId,
           browserSessionId,
           hostId,
-          site: "LINKEDIN",
+          site,
         }),
       },
       true,
@@ -252,6 +296,27 @@ export function pairingCompletionUrl(challenge: PairingChallenge): string {
 }
 
 export function pairingSessionUrl(
+  challenge: PairingChallenge,
+  session: PairedBrowserSession,
+): string {
+  const url = new URL("village-pair://session");
+  url.searchParams.set(
+    "principalId",
+    principalIdSchema.parse(challenge.principalId),
+  );
+  url.searchParams.set("deviceId", deviceIdSchema.parse(challenge.deviceId));
+  url.searchParams.set(
+    "browserSessionId",
+    browserSessionIdSchema.parse(session.browserSessionId),
+  );
+  url.searchParams.set(
+    "fixtureBrowserSessionId",
+    browserSessionIdSchema.parse(session.fixtureBrowserSessionId),
+  );
+  return url.toString();
+}
+
+export function pairingLegacySessionUrl(
   challenge: PairingChallenge,
   session: PairedBrowserSession,
 ): string {

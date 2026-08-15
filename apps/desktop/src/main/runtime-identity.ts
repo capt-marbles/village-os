@@ -8,6 +8,7 @@ export interface RuntimeIdentity {
   principalId: string;
   deviceId: string;
   browserSessionId: string;
+  fixtureBrowserSessionId?: string;
   controlPlaneOrigin?: string;
 }
 
@@ -26,7 +27,7 @@ export const LOCAL_DEVELOPMENT_FIXTURE_IDENTITY = Object.freeze({
   browserSessionId: "brs_01J00000000000000000000000",
 });
 
-function parsePairedRuntimeIdentity(value: unknown): RuntimeIdentity {
+export function parsePairedRuntimeIdentity(value: unknown): RuntimeIdentity {
   if (!value || typeof value !== "object") {
     throw new Error("PAIRED_RUNTIME_IDENTITY_REQUIRED");
   }
@@ -36,6 +37,10 @@ function parsePairedRuntimeIdentity(value: unknown): RuntimeIdentity {
   const browserSessionId = browserSessionIdSchema.safeParse(
     candidate.browserSessionId,
   );
+  const fixtureBrowserSessionId =
+    candidate.fixtureBrowserSessionId === undefined
+      ? undefined
+      : browserSessionIdSchema.safeParse(candidate.fixtureBrowserSessionId);
   const controlPlaneOrigin = parseControlPlaneOrigin(
     candidate.controlPlaneOrigin,
   );
@@ -43,6 +48,9 @@ function parsePairedRuntimeIdentity(value: unknown): RuntimeIdentity {
     !principalId.success ||
     !deviceId.success ||
     !browserSessionId.success ||
+    (fixtureBrowserSessionId !== undefined &&
+      (!fixtureBrowserSessionId.success ||
+        fixtureBrowserSessionId.data === browserSessionId.data)) ||
     controlPlaneOrigin === null
   ) {
     throw new Error("PAIRED_RUNTIME_IDENTITY_REQUIRED");
@@ -51,6 +59,9 @@ function parsePairedRuntimeIdentity(value: unknown): RuntimeIdentity {
     principalId: principalId.data,
     deviceId: deviceId.data,
     browserSessionId: browserSessionId.data,
+    ...(fixtureBrowserSessionId?.success
+      ? { fixtureBrowserSessionId: fixtureBrowserSessionId.data }
+      : {}),
     ...(controlPlaneOrigin ? { controlPlaneOrigin } : {}),
   };
 }

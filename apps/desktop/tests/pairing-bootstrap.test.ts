@@ -47,6 +47,7 @@ describe("pairing bootstrap", () => {
     const identity = await service.attachSession({
       ...paired,
       browserSessionId: "brs_01J00000000000000000000000",
+      fixtureBrowserSessionId: "brs_01J00000000000000000000001",
     });
     expect(pairingClient.consume).toHaveBeenCalledWith({
       principalId: identity.principalId,
@@ -56,7 +57,70 @@ describe("pairing bootstrap", () => {
     expect(runtimeStore.store).toHaveBeenCalledWith(identity);
     expect(identity).toMatchObject({
       controlPlaneOrigin: "https://village.example",
+      fixtureBrowserSessionId: "brs_01J00000000000000000000001",
     });
+  });
+
+  it("rejects one Browser Session reused for personal and fixture scope", async () => {
+    const service = new PairingBootstrapService(
+      {
+        load: vi.fn().mockResolvedValue({
+          publicJwk,
+          protectionBackend: "keychain",
+        }),
+        create: vi.fn(),
+      },
+      {
+        consume: vi.fn().mockResolvedValue({
+          deviceId: "dev_01J00000000000000000000000",
+        }),
+      },
+      { store: vi.fn() },
+      () => "dev_01J00000000000000000000000",
+    );
+    const paired = await service.complete({
+      principalId: "prn_01J00000000000000000000000",
+      pairingId: "par_01J00000000000000000000000",
+    });
+    await expect(
+      service.attachSession({
+        ...paired,
+        browserSessionId: "brs_01J00000000000000000000000",
+        fixtureBrowserSessionId: "brs_01J00000000000000000000000",
+      }),
+    ).rejects.toThrow("PAIRING_SESSION_INVALID");
+  });
+
+  it("accepts a legacy attachment without configuring continuity", async () => {
+    const runtimeStore = { store: vi.fn() };
+    const service = new PairingBootstrapService(
+      {
+        load: vi.fn().mockResolvedValue({
+          publicJwk,
+          protectionBackend: "keychain",
+        }),
+        create: vi.fn(),
+      },
+      {
+        consume: vi.fn().mockResolvedValue({
+          deviceId: "dev_01J00000000000000000000000",
+        }),
+      },
+      runtimeStore,
+      () => "dev_01J00000000000000000000000",
+    );
+    const paired = await service.complete({
+      principalId: "prn_01J00000000000000000000000",
+      pairingId: "par_01J00000000000000000000000",
+    });
+
+    const identity = await service.attachSession({
+      ...paired,
+      browserSessionId: "brs_01J00000000000000000000000",
+    });
+
+    expect(identity.fixtureBrowserSessionId).toBeUndefined();
+    expect(runtimeStore.store).toHaveBeenCalledWith(identity);
   });
 
   it("rejects a challenge registered for another device", async () => {

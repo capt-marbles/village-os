@@ -9,6 +9,7 @@ const pairedIdentity = {
   principalId: "prn_01J00000000000000000000000",
   deviceId: "dev_01J00000000000000000000000",
   browserSessionId: "brs_01J00000000000000000000000",
+  fixtureBrowserSessionId: "brs_01J00000000000000000000001",
 };
 
 function source(value: unknown): PairedRuntimeIdentitySource {
@@ -47,5 +48,17 @@ describe("runtime identity resolution", () => {
         pairedIdentitySource: source(pairedIdentity),
       }),
     ).resolves.toEqual(pairedIdentity);
+  });
+
+  it("rejects a fixture Browser Session that aliases the personal session", async () => {
+    await expect(
+      resolveRuntimeIdentity({
+        isPackaged: true,
+        pairedIdentitySource: source({
+          ...pairedIdentity,
+          fixtureBrowserSessionId: pairedIdentity.browserSessionId,
+        }),
+      }),
+    ).rejects.toThrow("PAIRED_RUNTIME_IDENTITY_REQUIRED");
   });
 });

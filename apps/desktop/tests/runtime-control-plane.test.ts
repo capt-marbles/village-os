@@ -14,6 +14,7 @@ import {
   createPairedWorkflowRuntimeComposition,
   createRuntimeContinuityMailboxClient,
   createRuntimeContinuityRecipient,
+  createRuntimeFixtureContinuityRecipient,
   createRuntimeControlPlaneAutomationFence,
   createRuntimeControlPlaneComposition,
 } from "../src/main/runtime-control-plane.js";
@@ -242,6 +243,92 @@ describe("packaged runtime control-plane composition", () => {
     expect(result.enrolled).toBe(true);
     expect(result.recipientKey.publicJwk.x).toBe(exportedRecipient.x);
     expect(recipientKeySource.create).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("does not provision continuity for an older pairing without a fixture session", async () => {
+    const recipientKeySource = {
+      load: vi.fn(),
+      create: vi.fn(),
+    };
+    await expect(
+      createRuntimeFixtureContinuityRecipient({
+        controlPlaneUrl: new URL("https://village.test"),
+        userDataPath: "/unused",
+        identity: {
+          principalId: "prn_01J00000000000000000000000",
+          deviceId: "dev_01J00000000000000000000000",
+          browserSessionId: "brs_01J00000000000000000000000",
+        },
+        deviceIdentitySource: { load: vi.fn() },
+        recipientKeySource,
+      }),
+    ).resolves.toEqual({ state: "NOT_CONFIGURED" });
+    expect(recipientKeySource.load).not.toHaveBeenCalled();
+    expect(recipientKeySource.create).not.toHaveBeenCalled();
+  });
+
+  it("enrolls the fixture session without exposing the personal session", async () => {
+    const userDataPath = await mkdtemp(join(tmpdir(), "village-runtime-cp-"));
+    temporaryDirectories.push(userDataPath);
+    const signingKeys = await generateDeviceSigningKey();
+    const publicJwk = await exportPublicDeviceJwk(signingKeys.publicKey);
+    const deviceId = await deviceIdForPublicKey(publicJwk);
+    const recipientKeys = (await crypto.subtle.generateKey("X25519", true, [
+      "deriveBits",
+    ])) as CryptoKeyPair;
+    const exportedRecipient = await crypto.subtle.exportKey(
+      "jwk",
+      recipientKeys.publicKey,
+    );
+    const personalBrowserSessionId = "brs_01J00000000000000000000003";
+    const fixtureBrowserSessionId = "brs_01J00000000000000000000004";
+    const request = vi.fn<typeof fetch>(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(body.browserSessionId).toBe(fixtureBrowserSessionId);
+      expect(JSON.stringify(body)).not.toContain(personalBrowserSessionId);
+      return Response.json({
+        ok: true,
+        enrolled: true,
+        deviceId,
+        browserSessionId: fixtureBrowserSessionId,
+      });
+    });
+
+    const result = await createRuntimeFixtureContinuityRecipient({
+      controlPlaneUrl: new URL("https://village.test"),
+      userDataPath,
+      identity: {
+        principalId: "prn_01J00000000000000000000000",
+        deviceId,
+        browserSessionId: personalBrowserSessionId,
+        fixtureBrowserSessionId,
+      },
+      deviceIdentitySource: {
+        load: async () => ({
+          privateKey: signingKeys.privateKey,
+          publicKey: signingKeys.publicKey,
+          publicJwk,
+          protectionBackend: "keychain",
+        }),
+      },
+      recipientKeySource: {
+        load: async () => ({
+          privateKey: recipientKeys.privateKey,
+          publicKey: recipientKeys.publicKey,
+          publicJwk: {
+            kty: "OKP",
+            crv: "X25519",
+            x: exportedRecipient.x!,
+          },
+          protectionBackend: "keychain",
+        }),
+        create: vi.fn(),
+      },
+      request,
+    });
+
+    expect(result).toMatchObject({ state: "ENROLLED", enrolled: true });
     expect(request).toHaveBeenCalledOnce();
   });
 

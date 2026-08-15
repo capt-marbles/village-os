@@ -33,7 +33,12 @@ import {
   createRuntimeModelProviderComposition,
   type RuntimeModelProviderComposition,
 } from "./runtime-model-provider.js";
-import { createRuntimeControlPlaneAutomationFence } from "./runtime-control-plane.js";
+import {
+  createRuntimeControlPlaneAutomationFence,
+  createRuntimeFixtureContinuityRecipient,
+} from "./runtime-control-plane.js";
+import { ContinuityRecipientKeyVault } from "./continuity-recipient-key-vault.js";
+import { startNonBlockingContinuityEnrollment } from "./runtime-continuity-enrollment.js";
 import {
   createRitualBuilderWindow,
   type RitualBuilderWindow,
@@ -76,6 +81,11 @@ export async function startVillageRuntime(
     fileURLToPath(new URL("../renderer", import.meta.url)),
   );
   const preloadPath = defaultPreloadPath(app.getAppPath());
+  const userDataPath = app.getPath("userData");
+  const identityDirectory = join(userDataPath, "identity");
+  const packagedProtector = app.isPackaged
+    ? new ElectronSafeStorageProtector()
+    : undefined;
   let identity;
   if (!app.isPackaged) {
     identity = await resolveRuntimeIdentity({ isPackaged: false });
@@ -85,10 +95,11 @@ export async function startVillageRuntime(
       pairedIdentitySource,
     });
   } else {
-    const protector = new ElectronSafeStorageProtector();
-    const identityDirectory = join(app.getPath("userData"), "identity");
     const runtimeStore = new SecretRuntimeIdentityStore(
-      new SecretVault(join(identityDirectory, "runtime-vault.json"), protector),
+      new SecretVault(
+        join(identityDirectory, "runtime-vault.json"),
+        packagedProtector!,
+      ),
     );
     try {
       identity = await resolveRuntimeIdentity({
@@ -111,7 +122,7 @@ export async function startVillageRuntime(
       const pairingService = new PairingBootstrapService(
         new DeviceIdentityVault(
           join(identityDirectory, "device.json"),
-          protector,
+          packagedProtector!,
         ),
         new PairingClient(pairingUrl.origin),
         runtimeStore,
@@ -130,25 +141,40 @@ export async function startVillageRuntime(
   const modelProviders =
     internalComposition?.modelProviders ??
     createRuntimeModelProviderComposition((url) => shell.openExternal(url));
-  const automationFence =
-    app.isPackaged && !internalComposition
-      ? await createRuntimeControlPlaneAutomationFence({
-          controlPlaneUrl: resolveRuntimeControlPlaneUrl(
-            identity.controlPlaneOrigin,
-          ),
-          userDataPath: app.getPath("userData"),
-          identity,
-          deviceIdentitySource: new DeviceIdentityVault(
-            join(app.getPath("userData"), "identity/device.json"),
-            new ElectronSafeStorageProtector(),
-          ),
-        })
-      : undefined;
-  return createVillageAppWindow({
+  let automationFence;
+  let enrollContinuityRecipient: (() => Promise<unknown>) | undefined;
+  if (app.isPackaged && !internalComposition) {
+    const controlPlaneUrl = resolveRuntimeControlPlaneUrl(
+      identity.controlPlaneOrigin,
+    );
+    const deviceIdentity = await new DeviceIdentityVault(
+      join(identityDirectory, "device.json"),
+      packagedProtector!,
+    ).load();
+    const deviceIdentitySource = { load: async () => deviceIdentity };
+    automationFence = await createRuntimeControlPlaneAutomationFence({
+      controlPlaneUrl,
+      userDataPath,
+      identity,
+      deviceIdentitySource,
+    });
+    enrollContinuityRecipient = () =>
+      createRuntimeFixtureContinuityRecipient({
+        controlPlaneUrl,
+        userDataPath,
+        identity,
+        deviceIdentitySource,
+        recipientKeySource: new ContinuityRecipientKeyVault(
+          join(identityDirectory, "continuity-recipient.json"),
+          packagedProtector!,
+        ),
+      });
+  }
+  const villageWindow = await createVillageAppWindow({
     ...identity,
     site: "LINKEDIN",
     initialUrl: "https://www.linkedin.com/login",
-    userDataPath: app.getPath("userData"),
+    userDataPath,
     preloadPath,
     modelProviderAccount: modelProviders.modelProviderAccount,
     personalAgentTask: modelProviders.personalAgentTask,
@@ -167,6 +193,10 @@ export async function startVillageRuntime(
       }
     },
   });
+  return startNonBlockingContinuityEnrollment(
+    villageWindow,
+    enrollContinuityRecipient,
+  );
 }
 
 export async function runVillageApplication(

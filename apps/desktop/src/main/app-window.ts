@@ -28,7 +28,7 @@ import { DesktopBrowserUiState } from "./desktop-browser-ui-state.js";
 import { ControlTransferGate } from "./control-transfer-gate.js";
 import { BrowserControlTransfer } from "./browser-control-transfer.js";
 import { isTrustedVillageSender, trustedWebPreferences } from "./security.js";
-import { CrashReporter } from "./crash-reporting.js";
+import { CrashReporter, type LocalDiagnostic } from "./crash-reporting.js";
 import type { ModelProviderAccountOperations } from "./model-provider-account.js";
 import {
   personalAgentTaskActivitySchema,
@@ -91,6 +91,8 @@ export interface VillageAppWindow {
   automationFence?: AuthenticatedAutomationFence;
   /** Control-plane revocation seam; it fences all future trusted IPC work. */
   revokeDevice(): void;
+  /** Sends a redacted, local-only diagnostic to the visible Village pane. */
+  reportLocalDiagnostic(diagnostic: LocalDiagnostic): void;
 }
 
 function browserViewAdapter(
@@ -262,6 +264,15 @@ export async function createVillageAppWindow(
   const erasureGate = new ControlTransferGate();
   const uiState = new DesktopBrowserUiState();
   const diagnostics = new CrashReporter();
+  const reportLocalDiagnostic = (diagnostic: LocalDiagnostic) => {
+    diagnostics.capture(diagnostic);
+    if (!appView.webContents.isDestroyed()) {
+      appView.webContents.send(
+        "village:browser-diagnostics",
+        diagnostics.snapshot(),
+      );
+    }
+  };
   const controlTransfer = new BrowserControlTransfer(
     uiState,
     viewport,
@@ -636,15 +647,11 @@ export async function createVillageAppWindow(
         }
         uiState.failErasure();
         if (result.status === "PARTIAL_FAILURE") {
-          diagnostics.capture({
+          reportLocalDiagnostic({
             component: "SESSION_ERASURE",
             code: `FAILED_${result.failedStep.toUpperCase()}`,
             retriable: true,
           });
-          appView.webContents.send(
-            "village:browser-diagnostics",
-            diagnostics.snapshot(),
-          );
         }
         return result.status === "PARTIAL_FAILURE"
           ? ("PARTIAL_FAILURE" as const)
@@ -728,6 +735,7 @@ export async function createVillageAppWindow(
       ? { automationFence: options.automationFence }
       : {}),
     revokeDevice,
+    reportLocalDiagnostic,
   };
 }
 
