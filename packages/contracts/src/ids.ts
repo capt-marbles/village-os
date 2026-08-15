@@ -23,6 +23,8 @@ export const checkpointIdSchema = villageId("chk");
 export const browserStepIdSchema = villageId("bsp");
 export const receiptIdSchema = villageId("rcp");
 export const effectIdSchema = villageId("efx");
+export const ritualDraftIdSchema = villageId("rtd");
+export const ritualIdSchema = villageId("rtl");
 
 export const setupWorkflowKindSchema = z.literal(
   "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
