@@ -8,6 +8,8 @@ import { RitualBuilder } from "../RitualBuilder.js";
 import {
   createRitualBuilderState,
   reduceRitualBuilder,
+  type RitualBuilderEvent,
+  type RitualBuilderState,
 } from "../ritual-builder-state.js";
 
 const identity = {
@@ -23,7 +25,48 @@ function Harness() {
     undefined,
     createRitualBuilderState,
   );
-  return <RitualBuilder identity={identity} state={state} onEvent={dispatch} />;
+  const onEvent = (event: RitualBuilderEvent) => {
+    dispatch(event);
+    if (event.type === "SUBMIT_PURPOSE") {
+      dispatch(stewardProposal(event.purpose));
+    }
+  };
+  return <RitualBuilder identity={identity} state={state} onEvent={onEvent} />;
+}
+
+function stewardProposal(purpose: string): RitualBuilderEvent {
+  return {
+    type: "STEWARD_PROPOSED",
+    occurredAt: "2026-08-15T16:00:10.000Z",
+    proposal: {
+      status: "proposal",
+      draftId: identity.draftId,
+      requestRevision: 1,
+      stewardMessage: "I shaped a focused draft. When should it begin?",
+      name: "Pipeline review",
+      purpose,
+      steps: [
+        {
+          stepKey: "prepare-review",
+          title: "Prepare the review",
+          description: "Gather the bounded information needed for the review.",
+          actor: { kind: "STEWARD", role: "Steward" },
+          approval: "OWNER_REQUIRED",
+        },
+      ],
+      permissions: ["Read only the sources connected to this Ritual"],
+      completion: "A reviewable result is ready.",
+    },
+  };
+}
+
+function draftedState(purpose: string): RitualBuilderState {
+  const drafting = reduceRitualBuilder(createRitualBuilderState(), {
+    type: "SUBMIT_PURPOSE",
+    draftId: identity.draftId,
+    purpose,
+  });
+  return reduceRitualBuilder(drafting, stewardProposal(purpose));
 }
 
 describe("Ritual Builder", () => {
@@ -43,13 +86,7 @@ describe("Ritual Builder", () => {
   });
 
   it("shows graphical trigger choices and the exact draft revision for approval", () => {
-    let state = createRitualBuilderState();
-    state = reduceRitualBuilder(state, {
-      type: "SUBMIT_PURPOSE",
-      draftId: identity.draftId,
-      purpose: "Review my pipeline and prepare next actions.",
-      occurredAt: "2026-08-15T16:00:00.000Z",
-    });
+    let state = draftedState("Review my pipeline and prepare next actions.");
     const triggerHtml = renderToStaticMarkup(
       <RitualBuilder identity={identity} state={state} onEvent={vi.fn()} />,
     );
@@ -78,13 +115,7 @@ describe("Ritual Builder", () => {
   });
 
   it("keeps editable fields labelled and explains governed learning", () => {
-    let state = createRitualBuilderState();
-    state = reduceRitualBuilder(state, {
-      type: "SUBMIT_PURPOSE",
-      draftId: identity.draftId,
-      purpose: "Review my pipeline and prepare next actions.",
-      occurredAt: "2026-08-15T16:00:00.000Z",
-    });
+    const state = draftedState("Review my pipeline and prepare next actions.");
     const html = renderToStaticMarkup(
       <RitualBuilder identity={identity} state={state} onEvent={vi.fn()} />,
     );

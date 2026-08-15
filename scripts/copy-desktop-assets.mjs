@@ -15,3 +15,13 @@ const destination = new URL(
 );
 await mkdir(dirname(fileURLToPath(destination)), { recursive: true });
 await cp(source, destination);
+await cp(
+  new URL(
+    "../apps/desktop/src/preload/ritual-builder-bridge.cjs",
+    import.meta.url,
+  ),
+  new URL(
+    "../apps/desktop/dist/preload/ritual-builder-bridge.cjs",
+    import.meta.url,
+  ),
+);

@@ -8,6 +8,42 @@ const at = "2026-08-15T16:00:00.000Z";
 const draftId = "rtd_01J00000000000000000000000";
 const ritualId = "rtl_01J00000000000000000000000";
 
+function applyStewardProposal(
+  state:
+    | ReturnType<typeof createRitualBuilderState>
+    | ReturnType<typeof reduceRitualBuilder>,
+  purpose = "Prepare a weekday pipeline review.",
+) {
+  const drafting = reduceRitualBuilder(state, {
+    type: "SUBMIT_PURPOSE",
+    draftId,
+    purpose,
+  });
+  return reduceRitualBuilder(drafting, {
+    type: "STEWARD_PROPOSED",
+    occurredAt: "2026-08-15T16:00:10.000Z",
+    proposal: {
+      status: "proposal",
+      draftId,
+      requestRevision: 1,
+      stewardMessage: "I shaped a focused draft. When should it begin?",
+      name: "Pipeline review",
+      purpose,
+      steps: [
+        {
+          stepKey: "prepare-review",
+          title: "Prepare the review",
+          description: "Gather the bounded information needed for the review.",
+          actor: { kind: "STEWARD", role: "Steward" },
+          approval: "OWNER_REQUIRED",
+        },
+      ],
+      permissions: ["Read only connected pipeline records"],
+      completion: "A reviewable follow-up list is ready.",
+    },
+  });
+}
+
 describe("Ritual Builder state", () => {
   it("builds one revisioned draft through focused Steward questions", () => {
     let state = createRitualBuilderState();
@@ -15,7 +51,31 @@ describe("Ritual Builder state", () => {
       type: "SUBMIT_PURPOSE",
       draftId,
       purpose: "Review my sales pipeline and prepare the next follow-ups.",
-      occurredAt: at,
+    });
+    expect(state.phase).toBe("DRAFTING");
+    state = reduceRitualBuilder(state, {
+      type: "STEWARD_PROPOSED",
+      occurredAt: "2026-08-15T16:00:10.000Z",
+      proposal: {
+        status: "proposal",
+        draftId,
+        requestRevision: 1,
+        stewardMessage: "I shaped a focused draft. When should it begin?",
+        name: "Pipeline follow-up review",
+        purpose: "Review my sales pipeline and prepare the next follow-ups.",
+        steps: [
+          {
+            stepKey: "prepare-review",
+            title: "Prepare the review",
+            description:
+              "Gather the bounded information needed for the review.",
+            actor: { kind: "STEWARD", role: "Steward" },
+            approval: "OWNER_REQUIRED",
+          },
+        ],
+        permissions: ["Read only connected pipeline records"],
+        completion: "A reviewable follow-up list is ready.",
+      },
     });
     expect(state.phase).toBe("CHOOSE_TRIGGER");
     expect(state.draft).toMatchObject({ revision: 1, status: "DRAFT" });
@@ -42,14 +102,125 @@ describe("Ritual Builder state", () => {
     expect(state.draft?.reviewPolicy.learning).toBe("PROPOSE_ONLY");
   });
 
-  it("increments direct edits and rejects approval of a stale displayed revision", () => {
-    let state = createRitualBuilderState();
+  it("restores an approved Ritual without exposing a Run action", () => {
+    const approved = {
+      schemaVersion: 1 as const,
+      ritualId,
+      ritualRevision: 1 as const,
+      status: "APPROVED" as const,
+      approvedDraftId: draftId,
+      approvedDraftRevision: 3,
+      name: "Pipeline review",
+      purpose: "Prepare a weekday pipeline review.",
+      trigger: { kind: "ON_DEMAND" as const, summary: "Whenever I ask" },
+      steps: [
+        {
+          stepKey: "prepare-review",
+          title: "Prepare the review",
+          description: "Gather the bounded information needed for the review.",
+          actor: { kind: "STEWARD" as const, role: "Steward" },
+          approval: "OWNER_REQUIRED" as const,
+        },
+      ],
+      permissions: ["Read only connected records"],
+      completion: "A reviewable result is ready.",
+      reviewPolicy: {
+        ownerReview: "EVERY_RUN" as const,
+        learning: "PROPOSE_ONLY" as const,
+      },
+      approvedAt: "2026-08-15T16:03:00.000Z",
+    };
+    const state = reduceRitualBuilder(createRitualBuilderState(), {
+      type: "RESTORE_APPROVED",
+      approved,
+    });
+    expect(state).toMatchObject({ phase: "APPROVED", approved });
+    expect(JSON.stringify(state)).not.toContain("RUN_RITUAL");
+  });
+
+  it("returns a failed local save to the exact draft for retry", () => {
+    let state = applyStewardProposal(createRitualBuilderState());
+    state = reduceRitualBuilder(state, {
+      type: "SELECT_TRIGGER",
+      trigger: "ON_DEMAND",
+      timeZone: "America/Chicago",
+      occurredAt: "2026-08-15T16:01:00.000Z",
+    });
+    state = reduceRitualBuilder(state, {
+      type: "SELECT_REVIEW",
+      ownerReview: "EVERY_RUN",
+      occurredAt: "2026-08-15T16:02:00.000Z",
+    });
+    state = reduceRitualBuilder(state, {
+      type: "APPROVE",
+      ritualId,
+      expectedRevision: 3,
+      occurredAt: "2026-08-15T16:03:00.000Z",
+    });
+    state = reduceRitualBuilder(state, { type: "APPROVAL_SAVE_FAILED" });
+    expect(state).toMatchObject({
+      phase: "READY_FOR_APPROVAL",
+      approved: null,
+      draft: { revision: 3 },
+    });
+    expect(state.error).toBeNull();
+    expect(state.messages.at(-1)?.text).toContain("saved locally");
+  });
+
+  it("increments Steward request revisions across retries", () => {
+    let state = reduceRitualBuilder(createRitualBuilderState(), {
+      type: "SUBMIT_PURPOSE",
+      draftId,
+      purpose: "Prepare a weekday pipeline review.",
+    });
+    expect(state).toMatchObject({
+      phase: "DRAFTING",
+      pendingRequestRevision: 1,
+    });
+
+    state = reduceRitualBuilder(state, {
+      type: "STEWARD_FAILED",
+      message: "The Steward could not shape the draft. Try again.",
+    });
     state = reduceRitualBuilder(state, {
       type: "SUBMIT_PURPOSE",
       draftId,
       purpose: "Prepare a weekday pipeline review.",
-      occurredAt: at,
     });
+    expect(state).toMatchObject({
+      phase: "DRAFTING",
+      pendingRequestRevision: 2,
+    });
+  });
+
+  it("returns rejected Steward output to a retryable purpose form", () => {
+    let state = reduceRitualBuilder(createRitualBuilderState(), {
+      type: "SUBMIT_PURPOSE",
+      draftId,
+      purpose: "Prepare a weekday pipeline review.",
+    });
+    state = reduceRitualBuilder(state, {
+      type: "STEWARD_PROPOSED",
+      occurredAt: at,
+      proposal: {
+        status: "proposal",
+        draftId,
+        requestRevision: 99,
+        stewardMessage: "Outdated result",
+        name: "Pipeline review",
+        purpose: "Prepare a weekday pipeline review.",
+        steps: [],
+        permissions: [],
+        completion: "A review is ready.",
+      },
+    });
+
+    expect(state.phase).toBe("DESCRIBE_PURPOSE");
+    expect(state.error).toContain("outdated");
+  });
+
+  it("increments direct edits and rejects approval of a stale displayed revision", () => {
+    let state = applyStewardProposal(createRitualBuilderState());
     state = reduceRitualBuilder(state, {
       type: "SELECT_TRIGGER",
       trigger: "ON_DEMAND",
@@ -80,13 +251,7 @@ describe("Ritual Builder state", () => {
   });
 
   it("approves the exact draft without starting a Run", () => {
-    let state = createRitualBuilderState();
-    state = reduceRitualBuilder(state, {
-      type: "SUBMIT_PURPOSE",
-      draftId,
-      purpose: "Prepare a weekday pipeline review.",
-      occurredAt: at,
-    });
+    let state = applyStewardProposal(createRitualBuilderState());
     state = reduceRitualBuilder(state, {
       type: "SELECT_TRIGGER",
       trigger: "ON_DEMAND",
@@ -104,6 +269,8 @@ describe("Ritual Builder state", () => {
       expectedRevision: 3,
       occurredAt: "2026-08-15T16:03:00.000Z",
     });
+    expect(state.phase).toBe("SAVING_APPROVAL");
+    state = reduceRitualBuilder(state, { type: "APPROVAL_SAVED" });
 
     expect(state.phase).toBe("APPROVED");
     expect(state.approved).toMatchObject({
@@ -114,13 +281,7 @@ describe("Ritual Builder state", () => {
   });
 
   it("ignores replayed decisions outside their exact phase", () => {
-    let state = createRitualBuilderState();
-    state = reduceRitualBuilder(state, {
-      type: "SUBMIT_PURPOSE",
-      draftId,
-      purpose: "Prepare a weekday pipeline review.",
-      occurredAt: at,
-    });
+    let state = applyStewardProposal(createRitualBuilderState());
     state = reduceRitualBuilder(state, {
       type: "SELECT_TRIGGER",
       trigger: "WEEKDAYS",
@@ -142,7 +303,6 @@ describe("Ritual Builder state", () => {
         type: "SUBMIT_PURPOSE",
         draftId,
         purpose: "Replace the original purpose.",
-        occurredAt: "2026-08-15T16:01:30.000Z",
       }),
     ).toBe(afterTrigger);
     if (state.phase !== "CHOOSE_REVIEW") throw new Error("unexpected phase");
@@ -154,17 +314,14 @@ describe("Ritual Builder state", () => {
       type: "SUBMIT_PURPOSE",
       draftId,
       purpose: "x".repeat(321),
-      occurredAt: at,
     });
     expect(state.phase).toBe("DESCRIBE_PURPOSE");
     expect(state.error).toContain("320");
 
-    state = reduceRitualBuilder(createRitualBuilderState(), {
-      type: "SUBMIT_PURPOSE",
-      draftId,
-      purpose: "Prepare a pipeline review.",
-      occurredAt: at,
-    });
+    state = applyStewardProposal(
+      createRitualBuilderState(),
+      "Prepare a pipeline review.",
+    );
     const beforeEdit = state.draft;
     state = reduceRitualBuilder(state, {
       type: "EDIT_FIELD",
@@ -181,17 +338,14 @@ describe("Ritual Builder state", () => {
       type: "SUBMIT_PURPOSE",
       draftId: "not-a-draft-id",
       purpose: "Prepare a pipeline review.",
-      occurredAt: at,
     });
     expect(state.phase).toBe("DESCRIBE_PURPOSE");
     expect(state.error).toContain("not valid");
 
-    state = reduceRitualBuilder(createRitualBuilderState(), {
-      type: "SUBMIT_PURPOSE",
-      draftId,
-      purpose: "Prepare a pipeline review.",
-      occurredAt: at,
-    });
+    state = applyStewardProposal(
+      createRitualBuilderState(),
+      "Prepare a pipeline review.",
+    );
     state = reduceRitualBuilder(state, {
       type: "SELECT_TRIGGER",
       trigger: "ON_DEMAND",

@@ -4,6 +4,9 @@ import {
   RitualApprovalError,
   ritualApprovalRequestSchema,
   ritualDraftSchema,
+  ritualStewardContextSchema,
+  ritualStewardProposalSchema,
+  validateRitualStewardResult,
 } from "../index.js";
 
 const draft = {
@@ -43,6 +46,40 @@ const draft = {
 };
 
 describe("Ritual contracts", () => {
+  it("keeps the Steward drafting boundary bounded and rejects stale proposals", () => {
+    const context = ritualStewardContextSchema.parse({
+      schemaVersion: 1,
+      draftId: draft.draftId,
+      requestRevision: 1,
+      ownerPurpose: "Review my sales pipeline and prepare the next follow-ups.",
+    });
+    const proposal = ritualStewardProposalSchema.parse({
+      status: "proposal",
+      draftId: draft.draftId,
+      requestRevision: 1,
+      stewardMessage: "I have shaped a focused draft for you to review.",
+      name: "Pipeline follow-up review",
+      purpose: context.ownerPurpose,
+      steps: draft.steps,
+      permissions: draft.permissions,
+      completion: draft.completion,
+    });
+
+    expect(validateRitualStewardResult(context, proposal)).toEqual(proposal);
+    expect(
+      validateRitualStewardResult(context, {
+        ...proposal,
+        requestRevision: 2,
+      }),
+    ).toMatchObject({ status: "waiting", reason: "STALE_STEWARD_RESULT" });
+    expect(
+      ritualStewardContextSchema.safeParse({
+        ...context,
+        rawPageContent: "must never cross the provider boundary",
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts one strict, versioned draft without execution authority", () => {
     expect(ritualDraftSchema.parse(draft)).toEqual(draft);
     expect(
