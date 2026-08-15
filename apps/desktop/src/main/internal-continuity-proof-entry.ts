@@ -1,13 +1,13 @@
-import { continuityBindingSchema } from "@village/contracts";
+import {
+  continuityActivationIdentitySchema,
+  continuityBindingSchema,
+} from "@village/contracts";
 import { app, session } from "electron";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
 import { FileProtocolSequenceStore } from "./control-plane-client.js";
 import { ContinuityMailboxClient } from "./continuity-mailbox-client.js";
-import {
-  FixtureContinuityDestination,
-  FixtureContinuitySource,
-} from "./site-session-continuity.js";
+import { RuntimeContinuityActivation } from "./runtime-continuity-activation.js";
 
 // This entry is excluded from release packages. It isolates cookie-transfer
 // behavior from ad-hoc build Keychain prompts; signed-build prompt behavior is
@@ -33,10 +33,22 @@ async function readConfiguration(role: ProofRole) {
   const candidate = JSON.parse(
     await readFile(requiredAbsoluteArgument("--continuity-config"), "utf8"),
   ) as Record<string, unknown>;
+  const identity = continuityActivationIdentitySchema.parse(candidate.identity);
   const binding = continuityBindingSchema.parse(candidate.binding);
   if (candidate.role !== role)
     throw new Error("PACKAGED_CONTINUITY_ROLE_MISMATCH");
-  return { binding, candidate };
+  const boundToIdentity =
+    binding.principalId === identity.principalId &&
+    binding.site === identity.site &&
+    (role === "SOURCE"
+      ? binding.sourceDeviceId === identity.deviceId &&
+        binding.sourceBrowserSessionId === identity.browserSessionId
+      : binding.destinationDeviceId === identity.deviceId &&
+        binding.destinationBrowserSessionId === identity.browserSessionId);
+  if (!boundToIdentity) {
+    throw new Error("PACKAGED_CONTINUITY_BINDING_MISMATCH");
+  }
+  return { binding, identity, candidate };
 }
 
 async function importPrivateKey(
@@ -50,19 +62,6 @@ async function importPrivateKey(
     algorithm,
     false,
     [usage],
-  );
-}
-
-async function importPublicKey(
-  candidate: unknown,
-  algorithm: "Ed25519" | "X25519",
-): Promise<CryptoKey> {
-  return crypto.subtle.importKey(
-    "jwk",
-    candidate as JsonWebKey,
-    algorithm,
-    false,
-    algorithm === "Ed25519" ? ["verify"] : [],
   );
 }
 
@@ -92,29 +91,27 @@ function mailboxClient(
 }
 
 async function sourceMode(profilePath: string, baseUrl: URL): Promise<void> {
-  const { binding, candidate } = await readConfiguration("SOURCE");
-  const sourceSigningKey = await importPrivateKey(
-    candidate.sourceSigningPrivateKey,
-    "Ed25519",
-    "sign",
-  );
-  const destinationEncryptionKey = await importPublicKey(
-    candidate.destinationEncryptionPublicKey,
-    "X25519",
-  );
+  const { identity, candidate } = await readConfiguration("SOURCE");
+  const [sourceSigningKey, sourceEncryptionKey] = await Promise.all([
+    importPrivateKey(candidate.deviceSigningPrivateKey, "Ed25519", "sign"),
+    importPrivateKey(
+      candidate.recipientEncryptionPrivateKey,
+      "X25519",
+      "deriveBits",
+    ),
+  ]);
   const browserSession = session.fromPath(join(profilePath, "browser"));
   const count = Number.parseInt(argument("--continuity-count") ?? "0", 10);
   if (!Number.isInteger(count) || count < 0 || count > 20) {
     throw new Error("PACKAGED_CONTINUITY_COUNT_INVALID");
   }
-  const source = new FixtureContinuitySource({
-    binding,
-    journalPath: join(profilePath, "continuity", "source.json"),
+  const activation = new RuntimeContinuityActivation({
+    identity,
+    journalRoot: join(profilePath, "continuity"),
+    devicePrivateKey: sourceSigningKey,
+    recipientPrivateKey: sourceEncryptionKey,
     cookieStore: browserSession.cookies,
-    sourceSigningKey,
-    destinationEncryptionKey,
-    publish: (revision) =>
-      mailboxClient(baseUrl, sourceSigningKey, profilePath).publish(revision),
+    mailbox: mailboxClient(baseUrl, sourceSigningKey, profilePath),
   });
   let lastRevision = 0;
   if (count === 0) {
@@ -123,7 +120,10 @@ async function sourceMode(profilePath: string, baseUrl: URL): Promise<void> {
       "fixture_session",
     );
     await browserSession.cookies.flushStore();
-    lastRevision = (await source.publishCurrent()).revision;
+    const result = await activation.synchronize();
+    if (result.role !== "SOURCE")
+      throw new Error("PACKAGED_CONTINUITY_SOURCE_ACTIVATION_MISSING");
+    lastRevision = result.published;
   } else {
     for (let index = 0; index < count; index += 1) {
       await browserSession.cookies.set({
@@ -137,7 +137,10 @@ async function sourceMode(profilePath: string, baseUrl: URL): Promise<void> {
         expirationDate: Math.floor(Date.now() / 1_000) + 86_400,
       });
       await browserSession.cookies.flushStore();
-      lastRevision = (await source.publishCurrent()).revision;
+      const result = await activation.synchronize();
+      if (result.role !== "SOURCE")
+        throw new Error("PACKAGED_CONTINUITY_SOURCE_ACTIVATION_MISSING");
+      lastRevision = result.published;
     }
   }
   await writeReport({
@@ -154,42 +157,37 @@ async function destinationMode(
   baseUrl: URL,
   mode: "DESTINATION" | "RESTART" | "REVOKED",
 ): Promise<void> {
-  const { binding, candidate } = await readConfiguration("DESTINATION");
-  const destinationSigningKey = await importPrivateKey(
-    candidate.destinationSigningPrivateKey,
-    "Ed25519",
-    "sign",
-  );
-  const destinationEncryptionKey = await importPrivateKey(
-    candidate.destinationEncryptionPrivateKey,
-    "X25519",
-    "deriveBits",
-  );
-  const sourceSigningKey = await importPublicKey(
-    candidate.sourceSigningPublicKey,
-    "Ed25519",
-  );
+  const { binding, identity, candidate } =
+    await readConfiguration("DESTINATION");
+  const [destinationSigningKey, destinationEncryptionKey] = await Promise.all([
+    importPrivateKey(candidate.deviceSigningPrivateKey, "Ed25519", "sign"),
+    importPrivateKey(
+      candidate.recipientEncryptionPrivateKey,
+      "X25519",
+      "deriveBits",
+    ),
+  ]);
   const browserSession = session.fromPath(join(profilePath, "browser"));
-  const destination = new FixtureContinuityDestination({
-    binding,
-    journalPath: join(profilePath, "continuity", "destination.json"),
+  const activation = new RuntimeContinuityActivation({
+    identity,
+    journalRoot: join(profilePath, "continuity"),
+    devicePrivateKey: destinationSigningKey,
+    recipientPrivateKey: destinationEncryptionKey,
     cookieStore: browserSession.cookies,
-    sourceSigningKey,
-    destinationEncryptionKey,
+    mailbox: mailboxClient(baseUrl, destinationSigningKey, profilePath),
   });
-  const target = Number.parseInt(argument("--continuity-target") ?? "0", 10);
-  const client = () =>
-    mailboxClient(baseUrl, destinationSigningKey, profilePath);
 
   if (mode === "REVOKED") {
-    let rejected = false;
+    const result = await activation.synchronize();
+    let fetchRejected = false;
     try {
-      await client().fetchAfter(
-        binding,
-        (await destination.current()).revision,
-      );
+      await mailboxClient(
+        baseUrl,
+        destinationSigningKey,
+        profilePath,
+      ).fetchAfter(binding, 0);
     } catch (error) {
-      rejected =
+      fetchRejected =
         error instanceof Error &&
         ["CONTINUITY_GRANT_NOT_FOUND", "MAILBOX_NOT_ACTIVE"].includes(
           error.message,
@@ -199,21 +197,15 @@ async function destinationMode(
       status: "PASS",
       role: mode,
       keychainMode: "MOCK_TEST_ONLY",
-      rejected,
+      activationAbsent: result.role === "NONE",
+      fetchRejected,
     });
     return;
   }
 
-  let applied = 0;
-  let current = await destination.current();
-  while (current.revision < target) {
-    const revision = await client().fetchAfter(binding, current.revision);
-    if (!revision) throw new Error("PACKAGED_CONTINUITY_REVISION_MISSING");
-    const acknowledgement = await destination.apply(revision);
-    await client().acknowledge(binding, acknowledgement);
-    applied += 1;
-    current = await destination.current();
-  }
+  const result = await activation.synchronize();
+  if (result.role !== "DESTINATION")
+    throw new Error("PACKAGED_CONTINUITY_DESTINATION_ACTIVATION_MISSING");
   const authenticated =
     (
       await browserSession.cookies.get({
@@ -221,16 +213,13 @@ async function destinationMode(
         name: "fixture_session",
       })
     ).length === 1;
-  const noNewRevision =
-    mode === "RESTART"
-      ? (await client().fetchAfter(binding, current.revision)) === null
-      : undefined;
+  const noNewRevision = mode === "RESTART" ? result.applied === 0 : undefined;
   await writeReport({
     status: "PASS",
     role: mode,
     keychainMode: "MOCK_TEST_ONLY",
-    applied,
-    revision: current.revision,
+    applied: result.applied,
+    revision: result.revision,
     authenticated,
     ...(noNewRevision === undefined ? {} : { noNewRevision }),
   });

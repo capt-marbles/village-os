@@ -5,6 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import {
+  canonicalContinuityActivationRequestBytes,
+  continuityActivationRequestSchema,
+} from "../packages/contracts/dist/index.js";
 import { verifyPackagedMac } from "./verify-packaged-mac.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -31,8 +35,14 @@ export function assertPackagedSiteSessionContinuity(report) {
   ) {
     throw new Error("PACKAGED_CONTINUITY_RESTART_OR_LOGOUT_FAILED");
   }
-  if (report.revokedFetchRejected !== true) {
+  if (
+    report.revokedActivationAbsent !== true ||
+    report.revokedFetchRejected !== true
+  ) {
     throw new Error("PACKAGED_CONTINUITY_REVOCATION_FAILED");
+  }
+  if (report.badSignatureRejected !== true) {
+    throw new Error("PACKAGED_CONTINUITY_ACTIVATION_AUTH_NOT_PROVEN");
   }
   if (
     report.sourceProfileDistinct !== true ||
@@ -55,44 +65,54 @@ export function assertPackagedSiteSessionContinuity(report) {
   ) {
     throw new Error("PACKAGED_CONTINUITY_ACK_OR_RESTART_EVIDENCE_MISSING");
   }
+  if (
+    !Number.isInteger(report.sourceActivationRequests) ||
+    report.sourceActivationRequests < 1 ||
+    !Number.isInteger(report.destinationActivationRequests) ||
+    report.destinationActivationRequests < 1
+  ) {
+    throw new Error("PACKAGED_CONTINUITY_ACTIVATION_PATH_MISSING");
+  }
   return report;
 }
 
 async function createKeyMaterial() {
-  const sourceSigning = await crypto.subtle.generateKey("Ed25519", true, [
-    "sign",
-    "verify",
+  const [
+    sourceSigning,
+    destinationSigning,
+    sourceEncryption,
+    destinationEncryption,
+  ] = await Promise.all([
+    crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]),
+    crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]),
+    crypto.subtle.generateKey("X25519", true, ["deriveBits"]),
+    crypto.subtle.generateKey("X25519", true, ["deriveBits"]),
   ]);
-  const destinationSigning = await crypto.subtle.generateKey("Ed25519", true, [
-    "sign",
-    "verify",
+  const [
+    sourceSigningPrivateKey,
+    sourceSigningPublicKey,
+    destinationSigningPrivateKey,
+    destinationSigningPublicKey,
+    sourceEncryptionPrivateKey,
+    destinationEncryptionPrivateKey,
+    destinationEncryptionPublicKey,
+  ] = await Promise.all([
+    crypto.subtle.exportKey("jwk", sourceSigning.privateKey),
+    crypto.subtle.exportKey("jwk", sourceSigning.publicKey),
+    crypto.subtle.exportKey("jwk", destinationSigning.privateKey),
+    crypto.subtle.exportKey("jwk", destinationSigning.publicKey),
+    crypto.subtle.exportKey("jwk", sourceEncryption.privateKey),
+    crypto.subtle.exportKey("jwk", destinationEncryption.privateKey),
+    crypto.subtle.exportKey("jwk", destinationEncryption.publicKey),
   ]);
-  const destinationEncryption = await crypto.subtle.generateKey(
-    "X25519",
-    true,
-    ["deriveBits"],
-  );
   return {
-    sourceSigningPrivateKey: await crypto.subtle.exportKey(
-      "jwk",
-      sourceSigning.privateKey,
-    ),
-    sourceSigningPublicKey: await crypto.subtle.exportKey(
-      "jwk",
-      sourceSigning.publicKey,
-    ),
-    destinationSigningPrivateKey: await crypto.subtle.exportKey(
-      "jwk",
-      destinationSigning.privateKey,
-    ),
-    destinationEncryptionPrivateKey: await crypto.subtle.exportKey(
-      "jwk",
-      destinationEncryption.privateKey,
-    ),
-    destinationEncryptionPublicKey: await crypto.subtle.exportKey(
-      "jwk",
-      destinationEncryption.publicKey,
-    ),
+    sourceSigningPrivateKey,
+    sourceSigningPublicKey,
+    destinationSigningPrivateKey,
+    destinationSigningPublicKey,
+    sourceEncryptionPrivateKey,
+    destinationEncryptionPrivateKey,
+    destinationEncryptionPublicKey,
   };
 }
 
@@ -103,6 +123,10 @@ function createMailboxServer() {
   let loseFirstPublishResponse = true;
   let responseLossesObserved = 0;
   let plaintextMailboxOccurrences = 0;
+  const activationsByDevice = new Map();
+  const activationRequests = new Map();
+  const activationDevices = new Map();
+  const activationSequences = new Map();
   const server = createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
@@ -112,6 +136,86 @@ function createMailboxServer() {
     }
     const body = JSON.parse(text);
     const operation = request.url?.split("/").at(-1);
+    if (operation === "activations") {
+      const parsed = continuityActivationRequestSchema.safeParse(body);
+      const configured = parsed.success
+        ? activationDevices.get(parsed.data.deviceId)
+        : undefined;
+      const now = Date.now();
+      const identityMatches =
+        configured &&
+        parsed.success &&
+        parsed.data.principalId === configured.identity.principalId &&
+        parsed.data.deviceId === configured.identity.deviceId &&
+        parsed.data.browserSessionId === configured.identity.browserSessionId &&
+        parsed.data.site === configured.identity.site;
+      const current =
+        parsed.success &&
+        Date.parse(parsed.data.issuedAt) <= now + 5_000 &&
+        Date.parse(parsed.data.expiresAt) > now;
+      let signatureValid = false;
+      if (configured && parsed.success && identityMatches && current) {
+        try {
+          const key = await crypto.subtle.importKey(
+            "jwk",
+            configured.signingPublicKey,
+            "Ed25519",
+            false,
+            ["verify"],
+          );
+          const { signature, ...unsigned } = parsed.data;
+          signatureValid = await crypto.subtle.verify(
+            "Ed25519",
+            key,
+            Buffer.from(signature, "base64url"),
+            canonicalContinuityActivationRequestBytes(unsigned),
+          );
+        } catch {
+          signatureValid = false;
+        }
+      }
+      const lastSequence = parsed.success
+        ? (activationSequences.get(parsed.data.deviceId) ?? 0)
+        : 0;
+      const sequenceValid =
+        parsed.success && parsed.data.sequence > lastSequence;
+      if (
+        !parsed.success ||
+        !configured ||
+        !identityMatches ||
+        !current ||
+        !signatureValid ||
+        !sequenceValid
+      ) {
+        response.writeHead(401, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            ok: false,
+            code: !sequenceValid
+              ? "CONTINUITY_ACTIVATION_REPLAYED"
+              : !current
+                ? "CONTINUITY_ACTIVATION_EXPIRED"
+                : "INVALID_DEVICE_SIGNATURE",
+          }),
+        );
+        return;
+      }
+      activationSequences.set(parsed.data.deviceId, parsed.data.sequence);
+      activationRequests.set(
+        parsed.data.deviceId,
+        (activationRequests.get(parsed.data.deviceId) ?? 0) + 1,
+      );
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          ok: true,
+          activations: revoked
+            ? []
+            : (activationsByDevice.get(parsed.data.deviceId) ?? []),
+        }),
+      );
+      return;
+    }
     if (revoked) {
       response.writeHead(404, { "content-type": "application/json" });
       response.end(
@@ -190,11 +294,16 @@ function createMailboxServer() {
     revoke: () => {
       revoked = true;
     },
+    setActivation: (deviceId, activation, identity, signingPublicKey) => {
+      activationsByDevice.set(deviceId, [activation]);
+      activationDevices.set(deviceId, { identity, signingPublicKey });
+    },
     evidence: () => ({
       revisions,
       acknowledgedRevision,
       plaintextMailboxOccurrences,
       responseLossesObserved,
+      activationRequests,
     }),
   };
 }
@@ -210,6 +319,40 @@ async function readReport(reportPath) {
   return JSON.parse(await readFile(reportPath, "utf8"));
 }
 
+async function proveBadActivationSignatureRejected(
+  controlPlane,
+  identity,
+  wrongPrivateKey,
+) {
+  const issuedAt = Date.now();
+  const unsigned = {
+    protocolVersion: 1,
+    ...identity,
+    sequence: 1,
+    issuedAt: new Date(issuedAt).toISOString(),
+    expiresAt: new Date(issuedAt + 30_000).toISOString(),
+  };
+  const signature = await crypto.subtle.sign(
+    "Ed25519",
+    wrongPrivateKey,
+    canonicalContinuityActivationRequestBytes(unsigned),
+  );
+  const request = continuityActivationRequestSchema.parse({
+    ...unsigned,
+    signature: Buffer.from(signature).toString("base64url"),
+  });
+  const response = await fetch(
+    new URL("/api/site-session-continuity/activations", controlPlane),
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(request),
+    },
+  );
+  const body = await response.json();
+  return response.status === 401 && body.code === "INVALID_DEVICE_SIGNATURE";
+}
+
 export async function runPackagedSiteSessionContinuity({
   applicationPath = defaultApplicationPath,
 } = {}) {
@@ -222,14 +365,6 @@ export async function runPackagedSiteSessionContinuity({
   const sourceConfig = path.join(temporary, "source-config.json");
   const destinationConfig = path.join(temporary, "destination-config.json");
   const executable = path.join(applicationPath, "Contents/MacOS/Village");
-  const mailbox = createMailboxServer();
-  await new Promise((resolve) =>
-    mailbox.server.listen(0, "127.0.0.1", resolve),
-  );
-  const address = mailbox.server.address();
-  if (!address || typeof address === "string")
-    throw new Error("PACKAGED_CONTINUITY_SERVER_FAILED");
-  const controlPlane = `http://127.0.0.1:${address.port}`;
   const binding = {
     principalId: "prn_01J00000000000000000000000",
     grantId: "cgr_01J00000000000000000000000",
@@ -239,33 +374,95 @@ export async function runPackagedSiteSessionContinuity({
     destinationBrowserSessionId: "brs_01J00000000000000000000002",
     site: "OWNED_FIXTURE",
   };
+  const mailbox = createMailboxServer();
+  await new Promise((resolve) =>
+    mailbox.server.listen(0, "127.0.0.1", resolve),
+  );
+  const address = mailbox.server.address();
+  if (!address || typeof address === "string")
+    throw new Error("PACKAGED_CONTINUITY_SERVER_FAILED");
+  const controlPlane = `http://127.0.0.1:${address.port}`;
   try {
     await Promise.all([
       mkdir(sourceProfile, { recursive: true, mode: 0o700 }),
       mkdir(destinationProfile, { recursive: true, mode: 0o700 }),
     ]);
     const keys = await createKeyMaterial();
-    await writeFile(
-      sourceConfig,
-      JSON.stringify({
+    const publicKey = (jwk) => ({
+      kty: jwk.kty,
+      crv: jwk.crv,
+      x: jwk.x,
+    });
+    const sourceIdentity = {
+      principalId: binding.principalId,
+      deviceId: binding.sourceDeviceId,
+      browserSessionId: binding.sourceBrowserSessionId,
+      site: binding.site,
+    };
+    const destinationIdentity = {
+      principalId: binding.principalId,
+      deviceId: binding.destinationDeviceId,
+      browserSessionId: binding.destinationBrowserSessionId,
+      site: binding.site,
+    };
+    mailbox.setActivation(
+      binding.sourceDeviceId,
+      {
         role: "SOURCE",
         binding,
-        sourceSigningPrivateKey: keys.sourceSigningPrivateKey,
-        destinationEncryptionPublicKey: keys.destinationEncryptionPublicKey,
-      }),
-      { mode: 0o600 },
+        peerSigningPublicKey: publicKey(keys.destinationSigningPublicKey),
+        destinationEncryptionPublicKey: publicKey(
+          keys.destinationEncryptionPublicKey,
+        ),
+      },
+      sourceIdentity,
+      publicKey(keys.sourceSigningPublicKey),
     );
-    await writeFile(
-      destinationConfig,
-      JSON.stringify({
+    mailbox.setActivation(
+      binding.destinationDeviceId,
+      {
         role: "DESTINATION",
         binding,
-        destinationSigningPrivateKey: keys.destinationSigningPrivateKey,
-        destinationEncryptionPrivateKey: keys.destinationEncryptionPrivateKey,
-        sourceSigningPublicKey: keys.sourceSigningPublicKey,
-      }),
-      { mode: 0o600 },
+        peerSigningPublicKey: publicKey(keys.sourceSigningPublicKey),
+      },
+      destinationIdentity,
+      publicKey(keys.destinationSigningPublicKey),
     );
+    const badSignatureRejected = await proveBadActivationSignatureRejected(
+      controlPlane,
+      sourceIdentity,
+      await crypto.subtle.importKey(
+        "jwk",
+        keys.destinationSigningPrivateKey,
+        "Ed25519",
+        false,
+        ["sign"],
+      ),
+    );
+    await Promise.all([
+      writeFile(
+        sourceConfig,
+        JSON.stringify({
+          role: "SOURCE",
+          identity: sourceIdentity,
+          binding,
+          deviceSigningPrivateKey: keys.sourceSigningPrivateKey,
+          recipientEncryptionPrivateKey: keys.sourceEncryptionPrivateKey,
+        }),
+        { mode: 0o600 },
+      ),
+      writeFile(
+        destinationConfig,
+        JSON.stringify({
+          role: "DESTINATION",
+          identity: destinationIdentity,
+          binding,
+          deviceSigningPrivateKey: keys.destinationSigningPrivateKey,
+          recipientEncryptionPrivateKey: keys.destinationEncryptionPrivateKey,
+        }),
+        { mode: 0o600 },
+      ),
+    ]);
 
     const sourceReport = path.join(temporary, "source.json");
     const sourceBase = [
@@ -309,8 +506,6 @@ export async function runPackagedSiteSessionContinuity({
       ...destinationBase,
       "--continuity-report",
       destinationReport,
-      "--continuity-target",
-      "20",
     ]);
     const destination = await readReport(destinationReport);
 
@@ -332,8 +527,6 @@ export async function runPackagedSiteSessionContinuity({
       ...destinationBase,
       "--continuity-report",
       logoutDestinationReport,
-      "--continuity-target",
-      "21",
     ]);
     const logout = await readReport(logoutDestinationReport);
 
@@ -344,8 +537,6 @@ export async function runPackagedSiteSessionContinuity({
       ...destinationBase,
       "--continuity-report",
       restartReport,
-      "--continuity-target",
-      "21",
     ]);
     const restart = await readReport(restartReport);
     mailbox.revoke();
@@ -367,7 +558,9 @@ export async function runPackagedSiteSessionContinuity({
       authenticatedAfterRestart: restart.authenticated,
       logoutPropagated:
         logout.authenticated === false && logout.revision === 21,
-      revokedFetchRejected: revoked.rejected,
+      revokedActivationAbsent: revoked.activationAbsent,
+      revokedFetchRejected: revoked.fetchRejected,
+      badSignatureRejected,
       sourceProfileDistinct: sourceProfile !== destinationProfile,
       destinationProfileDistinct: sourceProfile !== destinationProfile,
       plaintextMailboxOccurrences: evidence.plaintextMailboxOccurrences,
@@ -380,6 +573,10 @@ export async function runPackagedSiteSessionContinuity({
       responseLossesObserved: evidence.responseLossesObserved,
       acknowledgedRevision: evidence.acknowledgedRevision,
       restartNoNewRevision: restart.noNewRevision,
+      sourceActivationRequests:
+        evidence.activationRequests.get(binding.sourceDeviceId) ?? 0,
+      destinationActivationRequests:
+        evidence.activationRequests.get(binding.destinationDeviceId) ?? 0,
     });
   } finally {
     await new Promise((resolve) => mailbox.server.close(resolve));
