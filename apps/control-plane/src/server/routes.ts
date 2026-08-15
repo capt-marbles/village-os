@@ -41,8 +41,10 @@ import {
   deleteContinuityGrant,
   fetchContinuityRevision,
   getContinuityGrant,
+  enrollContinuityRecipientKey,
   publishContinuityRevision,
   revokeContinuityGrant,
+  revokeContinuityRecipientKey,
 } from "../worker/site-session-continuity/grants.js";
 import {
   authorizeBrowserMutation,
@@ -102,6 +104,36 @@ export async function routeRequest(
   }
 
   try {
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/site-session-continuity/recipient-keys"
+    ) {
+      const origin = authorizeNonBrowserClient(request, environment);
+      if (!origin.ok) return json(request, environment, origin, 403);
+      const result = await enrollContinuityRecipientKey(
+        environment,
+        await boundedJson(request),
+        new Date().toISOString(),
+      );
+      return json(request, environment, result, result.ok ? 201 : 409);
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/site-session-continuity/recipient-keys/revoke"
+    ) {
+      const csrf = authorizeBrowserMutation(request, environment);
+      if (!csrf.ok) return json(request, environment, csrf, 403);
+      const auth = await authenticateRequest(request, environment);
+      if (!auth.ok) return json(request, environment, auth, 401);
+      const result = await revokeContinuityRecipientKey(
+        environment,
+        auth.principalId,
+        await boundedJson(request),
+      );
+      return json(request, environment, result, result.ok ? 200 : 409);
+    }
+
     if (
       request.method === "POST" &&
       url.pathname === "/api/site-session-continuity/grants"
