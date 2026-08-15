@@ -31,7 +31,6 @@ export const continuityGrantRequestSchema = z
     sourceBrowserSessionId: browserSessionIdSchema,
     destinationBrowserSessionId: browserSessionIdSchema,
     site: z.literal("OWNED_FIXTURE"),
-    destinationEncryptionPublicKey: x25519PublicKeySchema,
     expiresAt: instantSchema,
   })
   .superRefine((grant, context) => {
@@ -50,6 +49,12 @@ export const continuityGrantRequestSchema = z
       });
     }
   });
+
+export const continuityRecipientKeyRevocationSchema = z.strictObject({
+  deviceId: deviceIdSchema,
+  browserSessionId: browserSessionIdSchema,
+  site: z.literal("OWNED_FIXTURE"),
+});
 
 const unsignedContinuityRevisionSchema = z
   .strictObject({
@@ -126,6 +131,36 @@ export const continuityAcknowledgementEnvelopeSchema = boundedDeviceEnvelope({
   digest: z.string().regex(/^[a-f0-9]{64}$/),
 });
 
+const unsignedContinuityRecipientKeyEnrollmentSchema = z
+  .strictObject({
+    protocolVersion: z.literal(1),
+    principalId: principalIdSchema,
+    deviceId: deviceIdSchema,
+    browserSessionId: browserSessionIdSchema,
+    site: z.literal("OWNED_FIXTURE"),
+    sequence: z.number().int().positive(),
+    issuedAt: instantSchema,
+    expiresAt: instantSchema,
+    encryptionPublicKey: x25519PublicKeySchema,
+  })
+  .superRefine((enrollment, context) => {
+    const lifetime =
+      Date.parse(enrollment.expiresAt) - Date.parse(enrollment.issuedAt);
+    if (lifetime <= 0 || lifetime > 60_000) {
+      context.addIssue({
+        code: "custom",
+        path: ["expiresAt"],
+        message:
+          "Recipient-key enrollment lifetime must be between 1ms and 60s",
+      });
+    }
+  });
+
+export const continuityRecipientKeyEnrollmentSchema =
+  unsignedContinuityRecipientKeyEnrollmentSchema.safeExtend({
+    signature: z.string().regex(/^[A-Za-z0-9_-]{86}$/),
+  });
+
 export type ContinuityBinding = z.infer<typeof continuityBindingSchema>;
 export type EncryptedContinuityRevision = z.infer<
   typeof encryptedContinuityRevisionSchema
@@ -138,6 +173,9 @@ export type ContinuityAcknowledgementEnvelope = z.infer<
 >;
 export type UnsignedContinuityRevision = z.infer<
   typeof unsignedContinuityRevisionSchema
+>;
+export type ContinuityRecipientKeyEnrollment = z.infer<
+  typeof continuityRecipientKeyEnrollmentSchema
 >;
 
 function canonicalBytes(values: readonly unknown[]): ArrayBuffer {
@@ -225,5 +263,21 @@ export function canonicalContinuityAcknowledgementBytes(
     request.digest,
     request.issuedAt,
     request.expiresAt,
+  ]);
+}
+
+export function canonicalContinuityRecipientKeyEnrollmentBytes(
+  enrollment: Omit<ContinuityRecipientKeyEnrollment, "signature">,
+): ArrayBuffer {
+  return canonicalBytes([
+    enrollment.protocolVersion,
+    enrollment.principalId,
+    enrollment.deviceId,
+    enrollment.browserSessionId,
+    enrollment.site,
+    enrollment.sequence,
+    enrollment.issuedAt,
+    enrollment.expiresAt,
+    enrollment.encryptionPublicKey,
   ]);
 }

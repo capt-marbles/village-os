@@ -6,7 +6,8 @@ export type CloudRecordClass =
   | "WORKFLOW_EFFECTS"
   | "WORKFLOW_ACTORS"
   | "CANCELLATIONS"
-  | "CONTINUITY_GRANTS";
+  | "CONTINUITY_GRANTS"
+  | "CONTINUITY_RECIPIENT_KEYS";
 
 export type RecordRetentionPolicy = {
   scope: "PRINCIPAL";
@@ -40,6 +41,7 @@ export const recordRetentionPolicies: Readonly<
   WORKFLOW_ACTORS: defaultRecordPolicy,
   CANCELLATIONS: defaultRecordPolicy,
   CONTINUITY_GRANTS: defaultRecordPolicy,
+  CONTINUITY_RECIPIENT_KEYS: defaultRecordPolicy,
 };
 
 export async function executeRetentionBatch(
