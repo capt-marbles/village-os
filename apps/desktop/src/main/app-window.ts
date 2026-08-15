@@ -85,6 +85,8 @@ export interface VillageAppWindow {
   browserHost: LocalBrowserHost;
   trustedRenderer: WebContents;
   fixtureBrowserHost: LocalBrowserHost | undefined;
+  /** Internal proof seam. Release runtime never supplies a delegated workflow. */
+  prepareDelegatedWorkflowSurface?(): Promise<void>;
   viewport: BrowserViewportCoordinator;
   automationFence?: AuthenticatedAutomationFence;
   /** Control-plane revocation seam; it fences all future trusted IPC work. */
@@ -714,6 +716,13 @@ export async function createVillageAppWindow(
     get fixtureBrowserHost() {
       return fixtureBrowserHost;
     },
+    ...(options.delegatedWorkflow
+      ? {
+          prepareDelegatedWorkflowSurface: async () => {
+            await ensureFixtureSurface();
+          },
+        }
+      : {}),
     viewport,
     ...(options.automationFence
       ? { automationFence: options.automationFence }

@@ -535,6 +535,12 @@ async function run(): Promise<void> {
       resumedFrom === "owner-handback-restart" ||
       resumedFrom === "observer-cancel-restart"
     ) {
+      if (!application.prepareDelegatedWorkflowSurface) {
+        throw new Error(
+          "PACKAGED_DELEGATED_WORKFLOW_SURFACE_PREPARATION_MISSING",
+        );
+      }
+      await application.prepareDelegatedWorkflowSurface();
       await proof.delegatedWorkflow.retry();
     } else {
       if (
