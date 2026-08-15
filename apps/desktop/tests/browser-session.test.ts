@@ -55,6 +55,42 @@ describe("browser session boundary", () => {
     ]);
   });
 
+  it("persists bounded workflow evidence and rejects binding or phase corruption", async () => {
+    const root = await mkdtemp(join(tmpdir(), "village-workflow-journal-"));
+    const journal = new ActionJournal(join(root, "actions.json"));
+    const accepted = {
+      actionId: "act_01J00000000000000000000000",
+      jobId: "job_01J00000000000000000000000",
+      browserSessionId: "brs_01J00000000000000000000000",
+      logicalStep: "SELECT_ROLE" as const,
+      effectId: "efx_01J00000000000000000000000",
+      leaseEpoch: 4,
+      phase: "ACCEPTED" as const,
+      mutationClass: "IDEMPOTENT" as const,
+      postcondition: "UNOBSERVED" as const,
+      recordedAt: "2026-08-13T20:00:00.000Z",
+    };
+    await journal.record(accepted);
+    await expect(
+      journal.record({
+        ...accepted,
+        phase: "RECEIPTED",
+        postcondition: "SATISFIED",
+      }),
+    ).rejects.toThrow("ACTION_JOURNAL_PHASE_REGRESSION");
+    await expect(
+      journal.record({
+        ...accepted,
+        phase: "DISPATCHED",
+        effectId: "efx_01J00000000000000000000001",
+      }),
+    ).rejects.toThrow("ACTION_JOURNAL_BINDING_CONFLICT");
+    const serialized = await readFile(join(root, "actions.json"), "utf8");
+    expect(serialized).not.toMatch(
+      /Village Demo Owner|selector|pageText|https?:/,
+    );
+  });
+
   it("limits CDP to the owned fixture and closed commands", async () => {
     const transport = {
       isAttached: vi.fn(() => false),
@@ -66,11 +102,15 @@ describe("browser session boundary", () => {
       "CDP_SITE_DENIED",
     );
     const adapter = new FixtureCdpAdapter("OWNED_FIXTURE", transport);
-    await adapter.insertNonSecretText("hello");
+    await adapter.performSetupAction({ capability: "REPLACE_DISPLAY_NAME" });
     expect(transport.attach).toHaveBeenCalledWith("1.3");
-    expect(transport.sendCommand).toHaveBeenCalledWith("Input.insertText", {
-      text: "hello",
+    expect(transport.sendCommand).toHaveBeenCalledWith("Runtime.evaluate", {
+      expression:
+        'globalThis.__villageOwnedFixture.perform("REPLACE_DISPLAY_NAME")',
+      awaitPromise: true,
+      returnByValue: true,
     });
+    expect("insertNonSecretText" in adapter).toBe(false);
   });
 
   it("serializes only allowlisted structured observations", () => {

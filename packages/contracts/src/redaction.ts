@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  effectIdSchema,
+  setupLogicalStepSchema,
+  setupWorkflowKindSchema,
+  setupWorkflowVersionSchema,
+} from "./ids.js";
 
 export const canonicalOriginSchema = z
   .string()
@@ -68,6 +74,63 @@ export const browserObservationSchema = z
         code: "custom",
         path: ["facts"],
         message: "Observation fact identifiers must be unique",
+      });
+    }
+  });
+
+export const setupObservationFactSchema = z.discriminatedUnion("id", [
+  z.strictObject({
+    id: z.literal("DISPLAY_NAME_MATCH"),
+    value: z.enum(["MATCH", "MISMATCH", "MISSING", "INVALID"]),
+  }),
+  z.strictObject({
+    id: z.literal("ROLE_MATCH"),
+    value: z.enum(["MATCH", "MISMATCH", "MISSING", "INVALID"]),
+  }),
+  z.strictObject({
+    id: z.literal("PREFERRED_FOCUS_MATCH"),
+    value: z.enum(["MATCH", "MISMATCH", "MISSING", "INVALID"]),
+  }),
+  z.strictObject({
+    id: z.literal("FINALIZATION_STATE"),
+    value: z.enum(["NOT_FINALIZED", "FINALIZED", "UNKNOWN"]),
+  }),
+  z.strictObject({
+    id: z.literal("HUMAN_GATE"),
+    value: z.enum([
+      "NONE",
+      "CREDENTIAL",
+      "TWO_FACTOR",
+      "CAPTCHA",
+      "PASSKEY",
+      "PASSWORD_RESET",
+      "FEDERATED_IDENTITY",
+      "TERMS_OR_CONSENT",
+      "PERMISSION",
+      "SECURITY_WARNING",
+      "UNKNOWN_CHALLENGE",
+    ]),
+  }),
+]);
+
+export const setupObservationSchema = z
+  .strictObject({
+    schemaVersion: z.literal(1),
+    source: z.literal("BROWSER_UNTRUSTED"),
+    workflowKind: setupWorkflowKindSchema,
+    workflowVersion: setupWorkflowVersionSchema,
+    logicalStep: setupLogicalStepSchema,
+    effectId: effectIdSchema,
+    predicateIds: z.array(predicateIdSchema).min(1).max(16),
+    facts: z.array(setupObservationFactSchema).min(1).max(8),
+  })
+  .superRefine((observation, context) => {
+    const ids = observation.facts.map((fact) => fact.id);
+    if (new Set(ids).size !== ids.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["facts"],
+        message: "Setup observation fact identifiers must be unique",
       });
     }
   });

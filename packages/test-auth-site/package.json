@@ -4,10 +4,15 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./variants": "./src/variants.tsx"
+    "./variants": "./src/variants.tsx",
+    "./owned-fixture/account": "./src/account.tsx",
+    "./owned-fixture/setup": "./src/setup.ts",
+    "./owned-fixture/local-service": "./src/local-service.ts",
+    "./owned-fixture/request-handler": "./src/request-handler.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "test": "vitest run --root ../.. --config vitest.config.ts packages/test-auth-site/src/__tests__/setup.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

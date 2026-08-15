@@ -1,4 +1,8 @@
-import { VillageShell, type BrowserUiAction } from "@village/ui";
+import {
+  VillageShell,
+  type BrowserUiAction,
+  type ObserverCancellationState,
+} from "@village/ui";
 import { useEffect, useMemo, useState } from "react";
 import { ObserverBrowserCard } from "../browser/ObserverBrowserCard.js";
 import { PairDesktopCard } from "../browser/PairDesktopCard.js";
@@ -41,7 +45,8 @@ export function ChatPage({
   const [status, setStatus] = useState<"LOADING" | "READY" | "UNAVAILABLE">(
     activeSelection ? "LOADING" : "UNAVAILABLE",
   );
-  const [intentPending, setIntentPending] = useState(false);
+  const [cancellationState, setCancellationState] =
+    useState<ObserverCancellationState>("READY");
   const [intentError, setIntentError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -80,29 +85,27 @@ export function ChatPage({
   }, [activeClient, activeSelection]);
 
   const handleIntent = async (intent: ObserverIntent) => {
-    if (!activeSelection || intentPending) return;
-    setIntentPending(true);
+    if (!activeSelection || cancellationState === "SUBMITTING") return;
+    setCancellationState("SUBMITTING");
     setIntentError(null);
     try {
-      await activeClient.sendIntent(activeSelection, intent);
+      const receipt = await activeClient.sendIntent(
+        activeSelection,
+        intent,
+        snapshot.jobRevision,
+      );
       if (intent === "CANCEL_AUTOMATION") {
         setSnapshot((current) => ({
           ...current,
-          jobState: "CANCELED",
-          controller: current.controller === "USER" ? "USER" : "NONE",
-          takeover:
-            current.controller === "USER" && current.connection === "OFFLINE"
-              ? "OFFLINE_MARKED"
-              : "NONE",
-          lastUpdatedAt: new Date().toISOString(),
+          cancellationAcknowledgedAt: receipt.acknowledgedAt,
         }));
+        setCancellationState(receipt.state);
       }
     } catch {
+      setCancellationState("FAILED");
       setIntentError(
         "The request did not reach the paired desktop. Try again.",
       );
-    } finally {
-      setIntentPending(false);
     }
   };
 
@@ -126,7 +129,7 @@ export function ChatPage({
                 onIntent: (intent: ObserverIntent) => void handleIntent(intent),
               }
             : {})}
-          intentPending={intentPending}
+          cancellationState={cancellationState}
         />
       </div>
     </div>

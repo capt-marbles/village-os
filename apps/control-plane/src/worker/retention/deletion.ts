@@ -23,6 +23,9 @@ const deletionCountQueries = [
   "SELECT COUNT(*) AS count FROM pairing_challenges WHERE principal_id = ?",
   "SELECT COUNT(*) AS count FROM authenticated_quota_usage WHERE principal_id = ?",
   "SELECT COUNT(*) AS count FROM authenticated_principal_quota_usage WHERE principal_id = ?",
+  "SELECT COUNT(*) AS count FROM workflow_effect_projections WHERE principal_id = ?",
+  "SELECT COUNT(*) AS count FROM workflow_last_effect_actor WHERE principal_id = ?",
+  "SELECT COUNT(*) AS count FROM workflow_cancellations WHERE principal_id = ?",
 ] as const;
 
 export async function exportPrincipalRecords(
@@ -30,13 +33,32 @@ export async function exportPrincipalRecords(
   principalCandidate: unknown,
 ) {
   const principal = principalIdSchema.parse(principalCandidate);
-  const [projections, events, checkpoints, receipts] = await Promise.all([
+  const [
+    projections,
+    workflowActors,
+    events,
+    checkpoints,
+    receipts,
+    workflowEffects,
+    cancellations,
+  ] = await Promise.all([
     db
       .prepare(
         `SELECT browser_session_id AS browserSessionId, sequence, event_type AS eventType,
                 occurred_at AS occurredAt
          FROM browser_session_event_projections
          WHERE principal_id = ? ORDER BY browser_session_id, sequence`,
+      )
+      .bind(principal)
+      .all(),
+    db
+      .prepare(
+        `SELECT browser_session_id AS browserSessionId, job_id AS jobId,
+                workflow_kind AS workflowKind, workflow_version AS workflowVersion,
+                logical_step AS logicalStep, actor, event_sequence AS eventSequence,
+                occurred_at AS occurredAt
+         FROM workflow_last_effect_actor WHERE principal_id = ?
+         ORDER BY browser_session_id`,
       )
       .bind(principal)
       .all(),
@@ -64,6 +86,31 @@ export async function exportPrincipalRecords(
       )
       .bind(principal)
       .all(),
+    db
+      .prepare(
+        `SELECT browser_session_id AS browserSessionId, job_id AS jobId,
+                job_revision AS jobRevision, workflow_kind AS workflowKind,
+                workflow_version AS workflowVersion, logical_step AS logicalStep,
+                effect_id AS effectId, canonical_action_id AS canonicalActionId,
+                action_phase AS actionPhase, receipt_id AS receiptId,
+                checkpoint_id AS checkpointId, updated_at AS updatedAt
+         FROM workflow_effect_projections WHERE principal_id = ?
+         ORDER BY browser_session_id, logical_step`,
+      )
+      .bind(principal)
+      .all(),
+    db
+      .prepare(
+        `SELECT browser_session_id AS browserSessionId,
+                cancellation_id AS cancellationId, job_id AS jobId,
+                expected_job_revision AS expectedJobRevision,
+                resulting_job_revision AS resultingJobRevision,
+                event_sequence AS eventSequence, accepted_at AS acceptedAt
+         FROM workflow_cancellations WHERE principal_id = ?
+         ORDER BY browser_session_id, event_sequence`,
+      )
+      .bind(principal)
+      .all(),
   ]);
   return {
     principalId: principal,
@@ -71,6 +118,9 @@ export async function exportPrincipalRecords(
     events: events.results,
     checkpoints: checkpoints.results,
     receipts: receipts.results,
+    workflowEffects: workflowEffects.results,
+    workflowActors: workflowActors.results,
+    cancellations: cancellations.results,
   };
 }
 

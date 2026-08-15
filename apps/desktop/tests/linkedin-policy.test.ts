@@ -22,7 +22,7 @@ describe("LinkedIn human-only policy", () => {
       "POST",
       "REACT",
       "CONNECT",
-      "FIXTURE_INPUT",
+      "OWNED_FIXTURE_SETUP",
       "REQUEST_SECRET_FILL",
       "RAW_CDP",
     ]) {

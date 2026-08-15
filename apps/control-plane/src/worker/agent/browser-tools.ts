@@ -44,9 +44,7 @@ export function nextOwnedFixtureAction(
   );
   return action?.id === "APPROVED_ACTION_AVAILABLE" && action.value
     ? {
-        capability: "FIXTURE_INPUT",
-        field: "IDENTIFIER",
-        value: "fixture-user",
+        capability: "REPLACE_DISPLAY_NAME",
       }
     : { wait: "NO_SAFE_ACTION" };
 }

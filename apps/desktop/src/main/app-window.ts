@@ -4,6 +4,7 @@ import {
   dialog,
   ipcMain,
   type IpcMainInvokeEvent,
+  type WebContents,
   WebContentsView,
 } from "electron";
 import { LocalActionExecutor } from "../browser/local-action-executor.js";
@@ -35,6 +36,29 @@ import {
   type PersonalAgentTaskResult,
 } from "@village/contracts";
 import type { PersonalAgentTaskOperations } from "./personal-agent-task.js";
+import type {
+  DelegatedWorkflowAction,
+  DelegatedWorkflowSnapshot,
+  DelegatedWorkflowTask,
+} from "@village/ui";
+import type { BrowserHostManager } from "./browser-host-manager.js";
+import type { AuthenticatedAutomationFence } from "./delegated-workflow-controller.js";
+import { assertDelegatedWorkflowActionAllowed } from "./delegated-workflow-action-policy.js";
+
+export interface InternalDelegatedWorkflowOperations {
+  createFixtureHost(): Promise<LocalBrowserHost>;
+  invalidateFixtureHost?(host: LocalBrowserHost): void;
+  snapshot(): DelegatedWorkflowSnapshot;
+  subscribe(
+    listener: (snapshot: DelegatedWorkflowSnapshot) => void,
+  ): () => void;
+  start(): Promise<DelegatedWorkflowSnapshot>;
+  takeOver(): Promise<DelegatedWorkflowSnapshot>;
+  handBack(): Promise<DelegatedWorkflowSnapshot>;
+  cancel(): Promise<DelegatedWorkflowSnapshot>;
+  retry(): Promise<DelegatedWorkflowSnapshot>;
+  fence(reason: "TASK_SWITCH" | "APP_CLOSE"): void;
+}
 
 export interface VillageAppWindowOptions {
   principalId: string;
@@ -50,12 +74,21 @@ export interface VillageAppWindowOptions {
   revokeCredentialReferences: (binding: SessionErasureBinding) => Promise<void>;
   modelProviderAccount: ModelProviderAccountOperations;
   personalAgentTask: PersonalAgentTaskOperations;
+  /** Signed paired-device synchronization used by production workflow controllers. */
+  automationFence?: AuthenticatedAutomationFence;
+  /** Internal/dev proof composition. Release runtime never supplies this. */
+  delegatedWorkflow?: InternalDelegatedWorkflowOperations;
 }
 
 export interface VillageAppWindow {
   window: BaseWindow;
   browserHost: LocalBrowserHost;
+  trustedRenderer: WebContents;
+  fixtureBrowserHost: LocalBrowserHost | undefined;
+  /** Internal proof seam. Release runtime never supplies a delegated workflow. */
+  prepareDelegatedWorkflowSurface?(): Promise<void>;
   viewport: BrowserViewportCoordinator;
+  automationFence?: AuthenticatedAutomationFence;
   /** Control-plane revocation seam; it fences all future trusted IPC work. */
   revokeDevice(): void;
 }
@@ -64,17 +97,14 @@ function browserViewAdapter(
   window: BaseWindow,
   browserHost: LocalBrowserHost,
   inputShield: WebContentsView,
+  activeBrowserHost: () => Pick<LocalBrowserHost, "view"> = () => browserHost,
 ): NativeBrowserView {
   let visible = true;
   let inputEnabled = false;
-  let lastBrowserVisible: boolean | undefined;
   let lastShieldVisible: boolean | undefined;
   const applyVisibility = () => {
     const state = calculateNativeViewVisibility(visible, inputEnabled);
-    if (state.browserVisible !== lastBrowserVisible) {
-      browserHost.view.setVisible(state.browserVisible);
-      lastBrowserVisible = state.browserVisible;
-    }
+    activeBrowserHost().view.setVisible(state.browserVisible);
     if (state.shieldVisible !== lastShieldVisible) {
       inputShield.setVisible(state.shieldVisible);
       lastShieldVisible = state.shieldVisible;
@@ -93,7 +123,7 @@ function browserViewAdapter(
       inputEnabled = enabled;
       applyVisibility();
     },
-    focus: () => browserHost.view.webContents.focus(),
+    focus: () => activeBrowserHost().view.webContents.focus(),
     destroy: () => {
       window.contentView.removeChildView(inputShield);
       window.contentView.removeChildView(browserHost.view);
@@ -123,18 +153,26 @@ export async function createVillageAppWindow(
   });
   inputShield.setBackgroundColor("#00000000");
   const shieldLoad = inputShield.webContents.loadURL("village://app/shield");
+  const browserHostCreation = LocalBrowserHost.create({
+    principalId: options.principalId,
+    deviceId: options.deviceId,
+    site: options.site,
+    profileRoot: LocalBrowserHost.profileRoot(options.userDataPath),
+    initialUrl: options.initialUrl,
+  });
   let browserHost: LocalBrowserHost | undefined;
+  let fixtureBrowserHost: LocalBrowserHost | undefined;
   try {
-    browserHost = await LocalBrowserHost.create({
-      principalId: options.principalId,
-      deviceId: options.deviceId,
-      site: options.site,
-      profileRoot: LocalBrowserHost.profileRoot(options.userDataPath),
-      initialUrl: options.initialUrl,
-    });
-    await shieldLoad;
+    const [primaryHost] = await Promise.all([browserHostCreation, shieldLoad]);
+    browserHost = primaryHost;
   } catch (error) {
-    await Promise.allSettled([shieldLoad]);
+    const [primaryResult] = await Promise.allSettled([
+      browserHostCreation,
+      shieldLoad,
+    ]);
+    if (primaryResult.status === "fulfilled") {
+      browserHost = primaryResult.value;
+    }
     await browserHost?.close();
     if (!appView.webContents.isDestroyed()) appView.webContents.close();
     if (!inputShield.webContents.isDestroyed()) inputShield.webContents.close();
@@ -142,8 +180,14 @@ export async function createVillageAppWindow(
     throw error;
   }
   if (!browserHost) throw new Error("BROWSER_HOST_CREATION_FAILED");
+  let hostManager: BrowserHostManager | undefined;
   const viewport = new BrowserViewportCoordinator(
-    browserViewAdapter(window, browserHost, inputShield),
+    browserViewAdapter(
+      window,
+      browserHost,
+      inputShield,
+      () => hostManager?.currentHost() ?? browserHost,
+    ),
   );
   viewport.configure({ splitRatio: 0.42, topInset: 0, minWidth: 360 });
 
@@ -157,9 +201,58 @@ export async function createVillageAppWindow(
     const height = size[1] ?? 0;
     appView.setBounds({ x: 0, y: 0, width, height });
     viewport.layout({ width, height });
+    if (fixtureBrowserHost)
+      fixtureBrowserHost.view.setBounds(browserHost.view.getBounds());
   };
   window.on("resize", layout);
   layout();
+  let closing = false;
+  const fixtureSurfaceGate = new ControlTransferGate();
+  const ensureFixtureSurface = async (): Promise<BrowserHostManager> => {
+    if (hostManager) return hostManager;
+    if (!options.delegatedWorkflow) {
+      throw new Error("DELEGATED_WORKFLOW_UNAVAILABLE");
+    }
+    return fixtureSurfaceGate.run(async () => {
+      if (hostManager) return hostManager;
+      const fixtureHost = await options.delegatedWorkflow!.createFixtureHost();
+      if (closing || window.isDestroyed()) {
+        options.delegatedWorkflow!.invalidateFixtureHost?.(fixtureHost);
+        await fixtureHost.close();
+        throw new Error("WINDOW_CLOSED_DURING_FIXTURE_START");
+      }
+      const { BrowserHostManager: InternalBrowserHostManager } =
+        await import("./browser-host-manager.js");
+      if (closing || window.isDestroyed()) {
+        options.delegatedWorkflow!.invalidateFixtureHost?.(fixtureHost);
+        await fixtureHost.close();
+        throw new Error("WINDOW_CLOSED_DURING_FIXTURE_START");
+      }
+      let attached = false;
+      try {
+        const manager = new InternalBrowserHostManager(
+          browserHost,
+          fixtureHost,
+          {
+            fenceFixture: (reason) => options.delegatedWorkflow!.fence(reason),
+          },
+        );
+        window.contentView.addChildView(fixtureHost.view, 2);
+        attached = true;
+        fixtureBrowserHost = fixtureHost;
+        hostManager = manager;
+        layout();
+        return manager;
+      } catch (error) {
+        fixtureBrowserHost = undefined;
+        hostManager = undefined;
+        if (attached) window.contentView.removeChildView(fixtureHost.view);
+        options.delegatedWorkflow!.invalidateFixtureHost?.(fixtureHost);
+        await fixtureHost.close();
+        throw error;
+      }
+    });
+  };
 
   const authorizer = new SensitiveActionAuthorizer();
   const stepUpAuthorizer = new StepUpAuthorizer();
@@ -214,6 +307,13 @@ export async function createVillageAppWindow(
       appView.webContents.send("village:browser-ui-state", snapshot);
     }
   });
+  const unsubscribeWorkflow = options.delegatedWorkflow?.subscribe(
+    (snapshot) => {
+      if (!appView.webContents.isDestroyed()) {
+        appView.webContents.send("village:delegated-workflow-state", snapshot);
+      }
+    },
+  );
   const takeoverChannel = "village:request-takeover";
   const assertTrustedRequest = (
     event: IpcMainInvokeEvent,
@@ -261,6 +361,100 @@ export async function createVillageAppWindow(
     });
   };
   ipcMain.handle(takeoverChannel, handleTakeover);
+  if (options.delegatedWorkflow) {
+    const workflow = options.delegatedWorkflow;
+    ipcMain.handle(
+      "village:get-delegated-workflow-state",
+      (event, ...arguments_) => {
+        assertTrustedRequest(event, arguments_);
+        return workflow.snapshot();
+      },
+    );
+    ipcMain.handle(
+      "village:run-delegated-workflow-action",
+      async (event, action: unknown, ...arguments_) => {
+        assertTrustedRequest(event, arguments_);
+        if (
+          !(
+            ["START", "TAKE_OVER", "HAND_BACK", "CANCEL", "RETRY"] as unknown[]
+          ).includes(action)
+        ) {
+          throw new Error("MALFORMED_IPC_REQUEST");
+        }
+        const delegatedAction = action as DelegatedWorkflowAction;
+        assertDelegatedWorkflowActionAllowed(
+          delegatedAction,
+          workflow.snapshot(),
+        );
+        switch (delegatedAction) {
+          case "START": {
+            const manager = await ensureFixtureSurface();
+            const snapshot = await workflow.start();
+            if (snapshot.state !== "DISCONNECTED") {
+              manager.allowFixtureAfterHandBack();
+              manager.show("VILLAGE_FIXTURE");
+            }
+            return snapshot;
+          }
+          case "TAKE_OVER": {
+            if (!hostManager) throw new Error("FIXTURE_TASK_NOT_STARTED");
+            viewport.beginTakeover();
+            const snapshot = await workflow.takeOver();
+            if (snapshot.state === "OWNER_CONTROL") {
+              viewport.acknowledgeTakeover();
+            }
+            return snapshot;
+          }
+          case "HAND_BACK": {
+            if (!hostManager) throw new Error("FIXTURE_TASK_NOT_STARTED");
+            viewport.beginTakeover();
+            const snapshot = await workflow.handBack();
+            if (
+              snapshot.state !== "HUMAN_GATE" &&
+              snapshot.state !== "OFFLINE"
+            ) {
+              hostManager.allowFixtureAfterHandBack();
+              hostManager.show("VILLAGE_FIXTURE");
+              viewport.restoreAgentControl();
+            } else if (snapshot.state === "HUMAN_GATE") {
+              viewport.restoreUserControl();
+            }
+            return snapshot;
+          }
+          case "CANCEL":
+            return workflow.cancel();
+          case "RETRY": {
+            const manager = await ensureFixtureSurface();
+            const snapshot = await workflow.retry();
+            if (
+              snapshot.state !== "DISCONNECTED" &&
+              snapshot.state !== "FAILED"
+            ) {
+              manager.allowFixtureAfterHandBack();
+              manager.show("VILLAGE_FIXTURE");
+            }
+            return snapshot;
+          }
+        }
+      },
+    );
+    ipcMain.handle(
+      "village:select-desktop-task",
+      (event, task: unknown, ...arguments_) => {
+        assertTrustedRequest(event, arguments_);
+        if (task !== "LINKEDIN_PERSONAL" && task !== "VILLAGE_FIXTURE") {
+          throw new Error("MALFORMED_IPC_REQUEST");
+        }
+        if (!hostManager) {
+          if (task === "LINKEDIN_PERSONAL") return task;
+          throw new Error("FIXTURE_TASK_NOT_STARTED");
+        }
+        hostManager.show(task as DelegatedWorkflowTask);
+        layout();
+        return hostManager.currentTask();
+      },
+    );
+  }
   ipcMain.handle("village:get-browser-ui-state", (event, ...arguments_) => {
     assertTrustedRequest(event, arguments_);
     return uiState.current();
@@ -476,12 +670,12 @@ export async function createVillageAppWindow(
     },
   );
 
-  let closing = false;
   window.on("close", (event) => {
     if (closing) return;
     event.preventDefault();
     closing = true;
     unsubscribeUiState();
+    unsubscribeWorkflow?.();
     for (const channel of [
       takeoverChannel,
       "village:get-browser-ui-state",
@@ -495,13 +689,16 @@ export async function createVillageAppWindow(
       "village:record-verification-decision",
       "village:request-forget-session",
       "village:request-observer-intent",
+      "village:get-delegated-workflow-state",
+      "village:run-delegated-workflow-action",
+      "village:select-desktop-task",
     ]) {
       ipcMain.removeHandler(channel);
     }
     viewport.destroy();
     if (!appView.webContents.isDestroyed()) appView.webContents.close();
     void Promise.allSettled([
-      browserHost.close(),
+      hostManager ? hostManager.close() : browserHost.close(),
       options.modelProviderAccount.close(),
     ]).finally(() => window.destroy());
   });
@@ -512,7 +709,26 @@ export async function createVillageAppWindow(
     throw error;
   }
   window.show();
-  return { window, browserHost, viewport, revokeDevice };
+  return {
+    window,
+    browserHost,
+    trustedRenderer: appView.webContents,
+    get fixtureBrowserHost() {
+      return fixtureBrowserHost;
+    },
+    ...(options.delegatedWorkflow
+      ? {
+          prepareDelegatedWorkflowSurface: async () => {
+            await ensureFixtureSurface();
+          },
+        }
+      : {}),
+    viewport,
+    ...(options.automationFence
+      ? { automationFence: options.automationFence }
+      : {}),
+    revokeDevice,
+  };
 }
 
 export function defaultPreloadPath(appPath: string): string {

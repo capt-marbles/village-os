@@ -30,6 +30,7 @@ describe("pairing bootstrap", () => {
       () => "dev_01J00000000000000000000000",
       "Village desktop",
       () => "a".repeat(43),
+      "https://village.example",
     );
 
     await expect(service.request()).resolves.toMatchObject({
@@ -53,6 +54,9 @@ describe("pairing bootstrap", () => {
       secret: "a".repeat(43),
     });
     expect(runtimeStore.store).toHaveBeenCalledWith(identity);
+    expect(identity).toMatchObject({
+      controlPlaneOrigin: "https://village.example",
+    });
   });
 
   it("rejects a challenge registered for another device", async () => {

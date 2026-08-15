@@ -3,7 +3,11 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SecretVault } from "../secrets/secret-vault.js";
-import { createVillageAppWindow, defaultPreloadPath } from "./app-window.js";
+import {
+  createVillageAppWindow,
+  defaultPreloadPath,
+  type VillageAppWindow,
+} from "./app-window.js";
 import { DeviceIdentityVault } from "./device-identity-vault.js";
 import { ElectronSafeStorageProtector } from "./electron-safe-storage.js";
 import {
@@ -24,9 +28,12 @@ import { PairingDeepLinkInbox } from "./pairing-deep-link.js";
 import { createPairingWindow } from "./pairing-window.js";
 import { installGlobalSecurityPolicy } from "./security.js";
 import { verifyMacOsOwnerPresence } from "./step-up-auth.js";
-import { createCodexAppServerProvider } from "../model-provider/codex-app-server.js";
-import { ModelProviderAccountController } from "./model-provider-account.js";
-import { PersonalAgentTaskController } from "./personal-agent-task.js";
+import type { InternalDelegatedWorkflowOperations } from "./app-window.js";
+import {
+  createRuntimeModelProviderComposition,
+  type RuntimeModelProviderComposition,
+} from "./runtime-model-provider.js";
+import { createRuntimeControlPlaneAutomationFence } from "./runtime-control-plane.js";
 
 registerVillageScheme(protocol);
 installGlobalSecurityPolicy(app);
@@ -36,8 +43,8 @@ app.on("open-url", (event, url) => {
   pairingInbox.accept(url);
 });
 
-function controlPlaneUrl(): URL {
-  const configured = process.env.VILLAGE_CONTROL_PLANE_URL;
+export function resolveRuntimeControlPlaneUrl(storedOrigin?: string): URL {
+  const configured = storedOrigin ?? process.env.VILLAGE_CONTROL_PLANE_URL;
   if (!configured) throw new Error("VILLAGE_CONTROL_PLANE_URL_REQUIRED");
   const url = new URL(configured);
   const loopback = url.hostname === "127.0.0.1" || url.hostname === "localhost";
@@ -49,7 +56,13 @@ function controlPlaneUrl(): URL {
 
 export async function startVillageRuntime(
   pairedIdentitySource?: PairedRuntimeIdentitySource,
-): Promise<void> {
+  internalComposition?: {
+    /** Supplied only by the internal packaged proof harness. */
+    delegatedWorkflow: InternalDelegatedWorkflowOperations;
+    /** One owner for account, personal-task, and delegated provider access. */
+    modelProviders?: RuntimeModelProviderComposition;
+  },
+): Promise<VillageAppWindow> {
   installVillageProtocol(
     protocol,
     fileURLToPath(new URL("../renderer", import.meta.url)),
@@ -86,15 +99,18 @@ export async function startVillageRuntime(
       if (!app.setAsDefaultProtocolClient("village-pair")) {
         throw new Error("PAIRING_DEEP_LINK_REGISTRATION_FAILED");
       }
+      const pairingUrl = resolveRuntimeControlPlaneUrl();
       const pairingService = new PairingBootstrapService(
         new DeviceIdentityVault(
           join(identityDirectory, "device.json"),
           protector,
         ),
-        new PairingClient(controlPlaneUrl().origin),
+        new PairingClient(pairingUrl.origin),
         runtimeStore,
         deviceIdForPublicKey,
         hostname().slice(0, 80) || "Village Mac",
+        undefined,
+        pairingUrl.origin,
       );
       identity = await createPairingWindow({
         preloadPath,
@@ -103,19 +119,35 @@ export async function startVillageRuntime(
       });
     }
   }
-  await createVillageAppWindow({
+  const modelProviders =
+    internalComposition?.modelProviders ??
+    createRuntimeModelProviderComposition((url) => shell.openExternal(url));
+  const automationFence =
+    app.isPackaged && !internalComposition
+      ? await createRuntimeControlPlaneAutomationFence({
+          controlPlaneUrl: resolveRuntimeControlPlaneUrl(
+            identity.controlPlaneOrigin,
+          ),
+          userDataPath: app.getPath("userData"),
+          identity,
+          deviceIdentitySource: new DeviceIdentityVault(
+            join(app.getPath("userData"), "identity/device.json"),
+            new ElectronSafeStorageProtector(),
+          ),
+        })
+      : undefined;
+  return createVillageAppWindow({
     ...identity,
     site: "LINKEDIN",
     initialUrl: "https://www.linkedin.com/login",
     userDataPath: app.getPath("userData"),
     preloadPath,
-    modelProviderAccount: new ModelProviderAccountController(
-      createCodexAppServerProvider(),
-      (url) => shell.openExternal(url),
-    ),
-    personalAgentTask: new PersonalAgentTaskController(
-      createCodexAppServerProvider(),
-    ),
+    modelProviderAccount: modelProviders.modelProviderAccount,
+    personalAgentTask: modelProviders.personalAgentTask,
+    ...(automationFence ? { automationFence } : {}),
+    ...(internalComposition
+      ? { delegatedWorkflow: internalComposition.delegatedWorkflow }
+      : {}),
     verifyStepUp: () => verifyMacOsOwnerPresence(),
     // LinkedIn authentication is human-only: Village never persists a
     // LinkedIn credential reference. Keeping this required callback in the
@@ -129,15 +161,12 @@ export async function startVillageRuntime(
   });
 }
 
-void app
-  .whenReady()
-  .then(() => {
-    for (const argument of process.argv) pairingInbox.accept(argument);
-    return startVillageRuntime();
-  })
-  .catch((error: unknown) => {
-    console.error("Village startup blocked:", error);
-    app.exit(1);
-  });
-
-app.on("window-all-closed", () => app.quit());
+export async function runVillageApplication(
+  pairedIdentitySource?: PairedRuntimeIdentitySource,
+  internalComposition?: Parameters<typeof startVillageRuntime>[1],
+): Promise<VillageAppWindow> {
+  await app.whenReady();
+  for (const argument of process.argv) pairingInbox.accept(argument);
+  app.on("window-all-closed", () => app.quit());
+  return startVillageRuntime(pairedIdentitySource, internalComposition);
+}

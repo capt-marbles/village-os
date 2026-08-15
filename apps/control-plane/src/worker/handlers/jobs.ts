@@ -1,4 +1,8 @@
-import { jobIdSchema, principalIdSchema } from "@village/contracts";
+import {
+  jobIdSchema,
+  principalIdSchema,
+  setupObjectiveSchema,
+} from "@village/contracts";
 
 const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
@@ -24,6 +28,8 @@ type JobRow = {
   active_human_gate_id: string | null;
   created_at: string;
   updated_at: string;
+  objective_kind: string | null;
+  objective_version: number | null;
 };
 
 function presentJob(row: JobRow) {
@@ -37,6 +43,10 @@ function presentJob(row: JobRow) {
     activeHumanGateId: row.active_human_gate_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    objective:
+      row.objective_kind === null || row.objective_version === null
+        ? null
+        : { kind: row.objective_kind, version: row.objective_version },
   };
 }
 
@@ -44,20 +54,36 @@ export async function createJob(
   db: D1Database,
   principalCandidate: unknown,
   now: string,
+  objectiveCandidate?: unknown,
 ) {
   const principal = principalIdSchema.safeParse(principalCandidate);
   if (!principal.success)
     return { ok: false as const, code: "INVALID_PRINCIPAL" };
+  const objective =
+    objectiveCandidate === undefined || objectiveCandidate === null
+      ? null
+      : setupObjectiveSchema.safeParse(objectiveCandidate);
+  if (objective !== null && !objective.success)
+    return { ok: false as const, code: "INVALID_OBJECTIVE" };
   const jobId = jobIdSchema.parse(villageId("job", Date.parse(now)));
   const eventId = villageId("evt", Date.parse(now));
   await db.batch([
     db
       .prepare(
         `INSERT INTO jobs
-         (principal_id, job_id, state, version, last_event_sequence, created_at, updated_at)
-         VALUES (?, ?, 'QUEUED', 1, 1, ?, ?)`,
+         (principal_id, job_id, state, version, last_event_sequence, created_at,
+          updated_at, objective_kind, objective_version, workflow_schema_version)
+         VALUES (?, ?, 'QUEUED', 1, 1, ?, ?, ?, ?, ?)`,
       )
-      .bind(principal.data, jobId, now, now),
+      .bind(
+        principal.data,
+        jobId,
+        now,
+        now,
+        objective === null ? null : objective.data.kind,
+        objective === null ? null : objective.data.version,
+        objective === null ? null : 1,
+      ),
     db
       .prepare(
         `INSERT INTO job_events
@@ -93,7 +119,8 @@ export async function getJob(
   const row = await db
     .prepare(
       `SELECT principal_id, job_id, browser_session_id, state, version,
-              last_event_sequence, active_human_gate_id, created_at, updated_at
+              last_event_sequence, active_human_gate_id, created_at, updated_at,
+              objective_kind, objective_version
        FROM jobs WHERE principal_id = ? AND job_id = ?`,
     )
     .bind(principal.data, job.data)
@@ -110,7 +137,8 @@ export async function listJobs(db: D1Database, principalCandidate: unknown) {
   const rows = await db
     .prepare(
       `SELECT principal_id, job_id, browser_session_id, state, version,
-              last_event_sequence, active_human_gate_id, created_at, updated_at
+              last_event_sequence, active_human_gate_id, created_at, updated_at,
+              objective_kind, objective_version
        FROM jobs WHERE principal_id = ? ORDER BY updated_at DESC, job_id DESC LIMIT 100`,
     )
     .bind(principal.data)

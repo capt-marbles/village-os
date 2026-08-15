@@ -3,15 +3,20 @@ import {
   actionIdSchema,
   browserSessionIdSchema,
   deviceIdSchema,
+  effectIdSchema,
   instantSchema,
   jobIdSchema,
   principalIdSchema,
+  setupLogicalStepSchema,
+  setupWorkflowKindSchema,
+  setupWorkflowVersionSchema,
 } from "./ids.js";
 import { verificationStatusSchema } from "./browser.js";
 import {
   browserObservationSchema,
   canonicalOriginSchema,
   predicateIdSchema,
+  setupObservationSchema,
 } from "./redaction.js";
 import { humanGateReasonSchema } from "./secrets.js";
 
@@ -33,11 +38,57 @@ const observeCommandSchema = z.strictObject({
     .max(8),
 });
 
-const fixtureInputCommandSchema = z.strictObject({
-  capability: z.literal("FIXTURE_INPUT"),
-  field: z.enum(["IDENTIFIER", "NON_SECRET_TEXT"]),
-  value: z.string().min(1).max(256),
-});
+const setupCommandCapabilities = [
+  "OBSERVE_SETUP",
+  "REPLACE_DISPLAY_NAME",
+  "SELECT_ROLE",
+  "REPLACE_PREFERRED_FOCUS",
+  "FINALIZE_SETUP",
+  "VERIFY_SETUP",
+] as const;
+
+export const ownedFixtureSetupCommandSchema = z.discriminatedUnion(
+  "capability",
+  setupCommandCapabilities.map((capability) =>
+    z.strictObject({ capability: z.literal(capability) }),
+  ) as [
+    z.ZodObject<{ capability: z.ZodLiteral<"OBSERVE_SETUP"> }>,
+    z.ZodObject<{ capability: z.ZodLiteral<"REPLACE_DISPLAY_NAME"> }>,
+    z.ZodObject<{ capability: z.ZodLiteral<"SELECT_ROLE"> }>,
+    z.ZodObject<{ capability: z.ZodLiteral<"REPLACE_PREFERRED_FOCUS"> }>,
+    z.ZodObject<{ capability: z.ZodLiteral<"FINALIZE_SETUP"> }>,
+    z.ZodObject<{ capability: z.ZodLiteral<"VERIFY_SETUP"> }>,
+  ],
+);
+
+export type OwnedFixtureSetupCommand = z.infer<
+  typeof ownedFixtureSetupCommandSchema
+>;
+
+const setupStepCapabilities: Record<
+  z.infer<typeof setupLogicalStepSchema>,
+  ReadonlySet<OwnedFixtureSetupCommand["capability"]>
+> = {
+  SET_DISPLAY_NAME: new Set([
+    "OBSERVE_SETUP",
+    "REPLACE_DISPLAY_NAME",
+    "VERIFY_SETUP",
+  ]),
+  SELECT_ROLE: new Set(["OBSERVE_SETUP", "SELECT_ROLE", "VERIFY_SETUP"]),
+  SET_PREFERRED_FOCUS: new Set([
+    "OBSERVE_SETUP",
+    "REPLACE_PREFERRED_FOCUS",
+    "VERIFY_SETUP",
+  ]),
+  FINALIZE_SETUP: new Set(["OBSERVE_SETUP", "FINALIZE_SETUP", "VERIFY_SETUP"]),
+};
+
+export function isSetupCommandAllowedForStep(
+  logicalStep: z.infer<typeof setupLogicalStepSchema>,
+  command: OwnedFixtureSetupCommand,
+): boolean {
+  return setupStepCapabilities[logicalStep].has(command.capability);
+}
 
 const secretFillCommandSchema = z.strictObject({
   capability: z.literal("REQUEST_SECRET_FILL"),
@@ -64,15 +115,22 @@ const verifyCommandSchema = z.strictObject({
   predicateVersion: predicateIdSchema,
 });
 
+export const authenticationBrowserCommandSchema = z.discriminatedUnion(
+  "capability",
+  [
+    sessionOpenCommandSchema,
+    navigateCommandSchema,
+    observeCommandSchema,
+    secretFillCommandSchema,
+    humanGateCommandSchema,
+    checkpointCommandSchema,
+    verifyCommandSchema,
+  ],
+);
+
 export const browserCommandSchema = z.discriminatedUnion("capability", [
-  sessionOpenCommandSchema,
-  navigateCommandSchema,
-  observeCommandSchema,
-  fixtureInputCommandSchema,
-  secretFillCommandSchema,
-  humanGateCommandSchema,
-  checkpointCommandSchema,
-  verifyCommandSchema,
+  ...authenticationBrowserCommandSchema.options,
+  ...ownedFixtureSetupCommandSchema.options,
 ]);
 
 /** JSON Schema advertised to model providers; local Zod parsing remains authoritative. */
@@ -90,6 +148,14 @@ const authenticatedEnvelopeBinding = {
   issuedAt: instantSchema,
   expiresAt: instantSchema,
   signature: z.string().regex(/^[A-Za-z0-9_-]{8,2048}$/),
+};
+
+const setupWorkflowEnvelopeBinding = {
+  workflowKind: setupWorkflowKindSchema,
+  workflowVersion: setupWorkflowVersionSchema,
+  jobRevision: z.number().int().positive(),
+  logicalStep: setupLogicalStepSchema,
+  effectId: effectIdSchema,
 };
 
 function boundedAuthenticatedEnvelope<Shape extends z.ZodRawShape>(
@@ -114,9 +180,23 @@ function boundedAuthenticatedEnvelope<Shape extends z.ZodRawShape>(
     });
 }
 
-export const signedCommandEnvelopeSchema = boundedAuthenticatedEnvelope({
-  command: browserCommandSchema,
+const setupSignedCommandEnvelopeSchema = boundedAuthenticatedEnvelope({
+  ...setupWorkflowEnvelopeBinding,
+  command: ownedFixtureSetupCommandSchema,
+}).superRefine((envelope, context) => {
+  if (!isSetupCommandAllowedForStep(envelope.logicalStep, envelope.command)) {
+    context.addIssue({
+      code: "custom",
+      path: ["command"],
+      message: "Setup command is not available for this logical step",
+    });
+  }
 });
+
+export const signedCommandEnvelopeSchema = z.union([
+  boundedAuthenticatedEnvelope({ command: authenticationBrowserCommandSchema }),
+  setupSignedCommandEnvelopeSchema,
+]);
 
 export const commandResultSchema = z.discriminatedUnion("status", [
   z.strictObject({ status: z.literal("ACCEPTED") }),
@@ -137,9 +217,32 @@ export const commandResultSchema = z.discriminatedUnion("status", [
   }),
 ]);
 
-export const signedResultEnvelopeSchema = boundedAuthenticatedEnvelope({
-  result: commandResultSchema,
-});
+export const setupCommandResultSchema = z.discriminatedUnion("status", [
+  z.strictObject({ status: z.literal("ACCEPTED") }),
+  z.strictObject({
+    status: z.literal("REJECTED"),
+    code: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/),
+  }),
+  z.strictObject({ status: z.literal("WAITING_FOR_USER") }),
+  z.strictObject({ status: z.literal("RECONCILIATION_REQUIRED") }),
+  z.strictObject({
+    status: z.literal("OBSERVATION"),
+    observation: setupObservationSchema,
+  }),
+  z.strictObject({
+    status: z.literal("VERIFICATION"),
+    complete: z.boolean(),
+    predicateVersion: predicateIdSchema,
+  }),
+]);
+
+export const signedResultEnvelopeSchema = z.union([
+  boundedAuthenticatedEnvelope({ result: commandResultSchema }),
+  boundedAuthenticatedEnvelope({
+    ...setupWorkflowEnvelopeBinding,
+    result: setupCommandResultSchema,
+  }),
+]);
 
 export type BrowserCommand = z.infer<typeof browserCommandSchema>;
 export type SignedCommandEnvelope = z.infer<typeof signedCommandEnvelopeSchema>;
@@ -160,7 +263,7 @@ export const browserSiteActionSchema = z.enum([
   "POST",
   "REACT",
   "CONNECT",
-  "FIXTURE_INPUT",
+  "OWNED_FIXTURE_SETUP",
   "REQUEST_SECRET_FILL",
   "RAW_CDP",
 ]);
@@ -205,21 +308,21 @@ export function authorizeBrowserSiteAction(
     "HUMAN_TAKEOVER",
     "VERIFY_AUTHENTICATION",
     "OWNER_CONFIRMED_SIGN_OUT",
-    "FIXTURE_INPUT",
+    "OWNED_FIXTURE_SETUP",
     "REQUEST_SECRET_FILL",
   ]).has(parsedAction.data)
     ? { ok: true }
     : { ok: false, code: "SITE_CAPABILITY_DENIED" };
 }
 
-const capabilitySchema = browserCommandSchema.options[0].shape.capability
-  .or(browserCommandSchema.options[1].shape.capability)
-  .or(browserCommandSchema.options[2].shape.capability)
-  .or(browserCommandSchema.options[3].shape.capability)
-  .or(browserCommandSchema.options[4].shape.capability)
-  .or(browserCommandSchema.options[5].shape.capability)
-  .or(browserCommandSchema.options[6].shape.capability)
-  .or(browserCommandSchema.options[7].shape.capability);
+const capabilitySchema = z.enum(
+  browserCommandSchema.options.map(
+    (option) => option.shape.capability.value,
+  ) as [
+    z.infer<typeof browserCommandSchema>["capability"],
+    ...z.infer<typeof browserCommandSchema>["capability"][],
+  ],
+);
 
 export const commandCapabilityPolicySchema = z.strictObject({
   capability: capabilitySchema,
@@ -259,7 +362,9 @@ function capabilityPolicy(capability: (typeof allCapabilities)[number]) {
     preconditions: [
       "ACTIVE_LEASE",
       "EXACT_SITE",
-      ...(capability === "FIXTURE_INPUT" || capability === "REQUEST_SECRET_FILL"
+      ...(setupCommandCapabilities.includes(
+        capability as (typeof setupCommandCapabilities)[number],
+      ) || capability === "REQUEST_SECRET_FILL"
         ? (["OWNED_FIXTURE"] as const)
         : []),
     ],

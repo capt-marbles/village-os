@@ -1,13 +1,21 @@
 import {
+  automationSyncRequestSchema,
+  canonicalAutomationSyncRequestBytes,
   canonicalCommandEnvelopeBytes,
   canonicalResultEnvelopeBytes,
+  canonicalWorkflowOperationRequestBytes,
   signedCommandEnvelopeSchema,
   signedResultEnvelopeSchema,
+  unsignedWorkflowOperationRequestSchema,
+  workflowOperationRequestSchema,
   type BrowserCommand,
+  type AutomationSyncRequest,
+  type UnsignedAutomationSyncRequest,
   type SignedCommandEnvelope,
   type SignedResultEnvelope,
   type UnsignedCommandEnvelope,
   type UnsignedResultEnvelope,
+  type WorkflowOperationRequest,
 } from "@village/contracts";
 
 function encodeBase64Url(bytes: Uint8Array): string {
@@ -56,6 +64,37 @@ export async function signResultEnvelope(
   );
   return signedResultEnvelopeSchema.parse({
     ...envelope,
+    signature: encodeBase64Url(new Uint8Array(signature)),
+  });
+}
+
+export async function signAutomationSyncRequest(
+  request: UnsignedAutomationSyncRequest,
+  privateKey: CryptoKey,
+): Promise<AutomationSyncRequest> {
+  const signature = await crypto.subtle.sign(
+    "Ed25519",
+    privateKey,
+    canonicalAutomationSyncRequestBytes(request),
+  );
+  return automationSyncRequestSchema.parse({
+    ...request,
+    signature: encodeBase64Url(new Uint8Array(signature)),
+  });
+}
+
+export async function signWorkflowOperationRequest(
+  candidate: unknown,
+  privateKey: CryptoKey,
+): Promise<WorkflowOperationRequest> {
+  const unsigned = unsignedWorkflowOperationRequestSchema.parse(candidate);
+  const signature = await crypto.subtle.sign(
+    "Ed25519",
+    privateKey,
+    canonicalWorkflowOperationRequestBytes(unsigned),
+  );
+  return workflowOperationRequestSchema.parse({
+    ...unsigned,
     signature: encodeBase64Url(new Uint8Array(signature)),
   });
 }

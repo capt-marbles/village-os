@@ -4,6 +4,9 @@ import { fileURLToPath } from "node:url";
 export default defineConfig({
   define: {
     "process.env.NODE_ENV": JSON.stringify("production"),
+    __VILLAGE_INTERNAL_BUILD__: JSON.stringify(
+      process.env.VILLAGE_BUILD_CHANNEL !== "release",
+    ),
   },
   build: {
     outDir: "dist/renderer",

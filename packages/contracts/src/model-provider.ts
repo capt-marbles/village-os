@@ -1,8 +1,22 @@
 import { z } from "zod";
 import { actionPhaseSchema } from "./actions.js";
 import { browserCommandSchema } from "./commands.js";
+import {
+  isSetupCommandAllowedForStep,
+  ownedFixtureSetupCommandSchema,
+} from "./commands.js";
+import {
+  browserSessionIdSchema,
+  effectIdSchema,
+  jobIdSchema,
+  setupLogicalStepSchema,
+  setupObjectiveSchema,
+} from "./ids.js";
 import { jobStateSchema } from "./jobs.js";
-import { browserObservationSchema } from "./redaction.js";
+import {
+  browserObservationSchema,
+  setupObservationSchema,
+} from "./redaction.js";
 
 export const sanitizedModelContextSchema = z.strictObject({
   schemaVersion: z.literal(1),
@@ -11,6 +25,129 @@ export const sanitizedModelContextSchema = z.strictObject({
   observation: browserObservationSchema,
   objective: z.string().trim().min(1).max(500).optional(),
 });
+
+const providerWorkflowBinding = {
+  jobId: jobIdSchema,
+  jobRevision: z.number().int().positive(),
+  logicalStep: setupLogicalStepSchema,
+  effectId: effectIdSchema,
+  leaseEpoch: z.number().int().positive(),
+};
+
+export const setupModelProviderContextSchema = z
+  .strictObject({
+    schemaVersion: z.literal(1),
+    objective: setupObjectiveSchema,
+    browserSessionId: browserSessionIdSchema,
+    ...providerWorkflowBinding,
+    actionPhase: actionPhaseSchema,
+    allowedActions: z.array(ownedFixtureSetupCommandSchema).min(1).max(6),
+    completedSteps: z.array(setupLogicalStepSchema).max(4),
+    observation: setupObservationSchema,
+  })
+  .superRefine((context, refinement) => {
+    if (
+      context.observation.logicalStep !== context.logicalStep ||
+      context.observation.effectId !== context.effectId ||
+      context.observation.workflowKind !== context.objective.kind ||
+      context.observation.workflowVersion !== context.objective.version
+    ) {
+      refinement.addIssue({
+        code: "custom",
+        path: ["observation"],
+        message: "Observation must match the current durable workflow binding",
+      });
+    }
+    if (
+      new Set(context.completedSteps).size !== context.completedSteps.length
+    ) {
+      refinement.addIssue({
+        code: "custom",
+        path: ["completedSteps"],
+        message: "Completed logical steps must be unique",
+      });
+    }
+    if (
+      context.allowedActions.some(
+        (action) => !isSetupCommandAllowedForStep(context.logicalStep, action),
+      )
+    ) {
+      refinement.addIssue({
+        code: "custom",
+        path: ["allowedActions"],
+        message: "Advertised actions must belong to the current logical step",
+      });
+    }
+  });
+
+export const setupModelProviderResultSchema = z.discriminatedUnion("status", [
+  z.strictObject({
+    status: z.literal("action"),
+    ...providerWorkflowBinding,
+    command: ownedFixtureSetupCommandSchema,
+  }),
+  z.strictObject({
+    status: z.literal("waiting"),
+    ...providerWorkflowBinding,
+    reason: z.enum([
+      "AUTHENTICATION_REQUIRED",
+      "PROVIDER_UNAVAILABLE",
+      "MALFORMED_PROVIDER_OUTPUT",
+      "HUMAN_GATE_REQUIRED",
+      "NO_SAFE_ACTION",
+      "SITE_POLICY_DENIED",
+      "TURN_BUDGET_EXHAUSTED",
+      "TIME_BUDGET_EXHAUSTED",
+      "STALE_PROVIDER_RESULT",
+    ]),
+  }),
+]);
+
+export function validateSetupModelProviderResult(
+  contextCandidate: unknown,
+  candidate: unknown,
+):
+  | z.infer<typeof setupModelProviderResultSchema>
+  | { status: "waiting"; reason: "MALFORMED_PROVIDER_OUTPUT" } {
+  const parsedContext =
+    setupModelProviderContextSchema.safeParse(contextCandidate);
+  if (!parsedContext.success) {
+    return { status: "waiting", reason: "MALFORMED_PROVIDER_OUTPUT" };
+  }
+  const context = parsedContext.data;
+  const parsed = setupModelProviderResultSchema.safeParse(candidate);
+  if (!parsed.success) {
+    return { status: "waiting", reason: "MALFORMED_PROVIDER_OUTPUT" };
+  }
+  const result = parsed.data;
+  if (
+    result.jobId !== context.jobId ||
+    result.jobRevision !== context.jobRevision ||
+    result.logicalStep !== context.logicalStep ||
+    result.effectId !== context.effectId ||
+    result.leaseEpoch !== context.leaseEpoch
+  ) {
+    return setupModelProviderResultSchema.parse({
+      status: "waiting",
+      jobId: context.jobId,
+      jobRevision: context.jobRevision,
+      logicalStep: context.logicalStep,
+      effectId: context.effectId,
+      leaseEpoch: context.leaseEpoch,
+      reason: "STALE_PROVIDER_RESULT",
+    });
+  }
+  if (
+    result.status === "action" &&
+    (!isSetupCommandAllowedForStep(context.logicalStep, result.command) ||
+      !context.allowedActions.some(
+        (allowed) => allowed.capability === result.command.capability,
+      ))
+  ) {
+    return { status: "waiting", reason: "MALFORMED_PROVIDER_OUTPUT" };
+  }
+  return result;
+}
 
 export const personalAgentTaskRequestSchema = z.strictObject({
   task: z.literal("CHECK_LINKEDIN_SIGN_IN"),
@@ -101,6 +238,12 @@ export const modelProviderAccountSnapshotSchema = z.discriminatedUnion(
 );
 
 export type SanitizedModelContext = z.infer<typeof sanitizedModelContextSchema>;
+export type SetupModelProviderContext = z.infer<
+  typeof setupModelProviderContextSchema
+>;
+export type SetupModelProviderResult = z.infer<
+  typeof setupModelProviderResultSchema
+>;
 export type ModelProviderResult = z.infer<typeof modelProviderResultSchema>;
 export type ModelProviderAccountSnapshot = z.infer<
   typeof modelProviderAccountSnapshotSchema

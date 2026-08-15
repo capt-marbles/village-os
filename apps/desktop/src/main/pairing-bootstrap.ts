@@ -78,6 +78,7 @@ export class PairingBootstrapService {
       Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString(
         "base64url",
       ),
+    private readonly controlPlaneOrigin?: string,
   ) {}
 
   async request(): Promise<PublicPairingRequest> {
@@ -159,6 +160,9 @@ export class PairingBootstrapService {
       principalId: principalId.data,
       deviceId: deviceId.data,
       browserSessionId: browserSessionId.data,
+      ...(this.controlPlaneOrigin
+        ? { controlPlaneOrigin: this.controlPlaneOrigin }
+        : {}),
     };
     await this.runtimeStore.store(identity);
     return identity;

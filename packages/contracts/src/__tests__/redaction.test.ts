@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   browserObservationSchema,
   serializeBrowserObservation,
+  setupObservationSchema,
 } from "../redaction.js";
 
 describe("browser observation boundary", () => {
@@ -72,5 +73,41 @@ describe("browser observation boundary", () => {
       '{"schemaVersion":1,"source":"BROWSER_UNTRUSTED","canonicalOrigin":"https://fixture.village.test","predicateIds":["auth-form-visible-v1"],"facts":[{"id":"HUMAN_GATE","value":"UNKNOWN_CHALLENGE"}]}',
     );
     expect(serialized).not.toContain(secret);
+  });
+
+  it("exposes setup match state without profile values or page content", () => {
+    const observation = {
+      schemaVersion: 1,
+      source: "BROWSER_UNTRUSTED",
+      workflowKind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+      workflowVersion: 1,
+      logicalStep: "SET_DISPLAY_NAME",
+      effectId: "efx_01J00000000000000000000000",
+      predicateIds: ["setup-display-name-v1"],
+      facts: [
+        { id: "DISPLAY_NAME_MATCH", value: "MISMATCH" },
+        { id: "HUMAN_GATE", value: "NONE" },
+        { id: "FINALIZATION_STATE", value: "NOT_FINALIZED" },
+      ],
+    } as const;
+    expect(setupObservationSchema.safeParse(observation).success).toBe(true);
+    for (const field of [
+      "value",
+      "pageText",
+      "selector",
+      "url",
+      "screenshot",
+    ]) {
+      expect(
+        setupObservationSchema.safeParse({ ...observation, [field]: "secret" })
+          .success,
+      ).toBe(false);
+    }
+    expect(
+      setupObservationSchema.safeParse({
+        ...observation,
+        site: "LINKEDIN",
+      }).success,
+    ).toBe(false);
   });
 });

@@ -16,11 +16,15 @@ describe("owned fixture sign-in orchestration", () => {
     ).toEqual({ ok: true });
     expect(
       authorizeAgentBrowserTool("OWNED_FIXTURE", {
-        capability: "FIXTURE_INPUT",
-        field: "IDENTIFIER",
-        value: "fixture-user",
+        capability: "REPLACE_DISPLAY_NAME",
       }),
     ).toEqual({ ok: true });
+    expect(
+      authorizeAgentBrowserTool("OWNED_FIXTURE", {
+        capability: "REPLACE_DISPLAY_NAME",
+        value: "must-remain-local",
+      }),
+    ).toEqual({ ok: false, code: "SITE_CAPABILITY_DENIED" });
     expect(
       authorizeAgentBrowserTool("OWNED_FIXTURE", {
         capability: "REQUEST_SECRET_FILL",

@@ -1,9 +1,56 @@
-import { describe, expect, it, vi } from "vitest";
-import { signedCommandEnvelopeSchema } from "@village/contracts";
-import { ControlPlaneClient } from "../src/main/control-plane-client.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import {
+  automationSyncRequestSchema,
+  signedCommandEnvelopeSchema,
+  workflowOperationRequestSchema,
+} from "@village/contracts";
+import {
+  ControlPlaneClient,
+  ControlPlaneWorkflowCoordinator,
+  FileAutomationSyncCursorStore,
+  MemoryAutomationSyncCursorStore,
+} from "../src/main/control-plane-client.js";
 import { generateDeviceSigningKey } from "../src/main/device-identity.js";
 
 describe("paired desktop connector", () => {
+  const temporaryDirectories: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(
+      temporaryDirectories
+        .splice(0)
+        .map((path) => rm(path, { recursive: true, force: true })),
+    );
+  });
+  it("bounds a stalled control-plane request", async () => {
+    const keys = await generateDeviceSigningKey();
+    const request = vi.fn<typeof fetch>(() => new Promise(() => {}));
+    const client = new ControlPlaneClient(
+      "https://village.test",
+      "connector-desktop",
+      keys.privateKey,
+      { reserveNext: async () => 1 },
+      request,
+      5,
+    );
+
+    await expect(
+      client.connect(
+        {
+          principalId: "prn_01J00000000000000000000000",
+          deviceId: "dev_01J00000000000000000000000",
+          jobId: "job_01J00000000000000000000000",
+          browserSessionId: "brs_01J00000000000000000000000",
+        },
+        "act_01J00000000000000000000000",
+        "OWNED_FIXTURE",
+        1,
+      ),
+    ).rejects.toThrow("CONTROL_PLANE_TIMEOUT");
+  });
   it("reserves monotonic sequence before sending and binds one connection", async () => {
     const keys = await generateDeviceSigningKey();
     let sequence = 0;
@@ -61,5 +108,411 @@ describe("paired desktop connector", () => {
         "x-village-connection-id": "connector-desktop",
       }),
     });
+  });
+
+  it("signs workflow commands with stable effect identity independent of action id", async () => {
+    const keys = await generateDeviceSigningKey();
+    let sequence = 0;
+    const request = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () =>
+        Response.json({ ok: true, eventSequence: 3 }, { status: 202 }),
+      );
+    const client = new ControlPlaneClient(
+      "https://village.test",
+      "connector-desktop",
+      keys.privateKey,
+      { reserveNext: async () => ++sequence },
+      request,
+    );
+    const identity = {
+      principalId: "prn_01J00000000000000000000000",
+      deviceId: "dev_01J00000000000000000000000",
+      jobId: "job_01J00000000000000000000000",
+      browserSessionId: "brs_01J00000000000000000000000",
+    };
+    const workflow = {
+      workflowKind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1" as const,
+      workflowVersion: 1 as const,
+      jobRevision: 2,
+      logicalStep: "SELECT_ROLE" as const,
+      effectId: "efx_01J00000000000000000000000",
+    };
+    await client.workflowCommand(
+      identity,
+      workflow,
+      "act_01J00000000000000000000000",
+      4,
+      { capability: "SELECT_ROLE" },
+    );
+    await client.workflowCommand(
+      identity,
+      workflow,
+      "act_01J00000000000000000000001",
+      4,
+      { capability: "SELECT_ROLE" },
+    );
+
+    const envelopes = request.mock.calls.map((call) =>
+      signedCommandEnvelopeSchema.parse(
+        JSON.parse((call[1] as RequestInit).body as string),
+      ),
+    );
+    expect(envelopes.map((envelope) => envelope.actionId)).toEqual([
+      "act_01J00000000000000000000000",
+      "act_01J00000000000000000000001",
+    ]);
+    expect(
+      envelopes.map((envelope) => "effectId" in envelope && envelope.effectId),
+    ).toEqual([workflow.effectId, workflow.effectId]);
+  });
+
+  it("maps durable workflow state and preserves a rejected action code", async () => {
+    const keys = await generateDeviceSigningKey();
+    let sequence = 0;
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({
+          ok: true,
+          cursor: 4,
+          jobId: "job_01J00000000000000000000000",
+          controller: "AGENT",
+          connection: "ONLINE",
+          leaseEpoch: 2,
+          automationBlocked: false,
+          canceled: false,
+          workflow: {
+            objective: {
+              kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+              version: 1,
+            },
+            jobRevision: 2,
+            logicalStep: "SET_DISPLAY_NAME",
+            effectId: "efx_01J00000000000000000000000",
+            completedEffects: [],
+            actionPhase: "ACCEPTED",
+            outstandingAction: null,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            ok: true,
+            eventSequence: 5,
+            canonicalActionId: "act_01J00000000000000000000000",
+          },
+          { status: 202 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          { ok: false, code: "LOGICAL_EFFECT_CONFLICT" },
+          { status: 409 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          ok: true,
+          operation: "RECORD_RECEIPT",
+          cursor: 6,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          ok: true,
+          operation: "CLAIM_FRESH_LEASE",
+          cursor: 8,
+          leaseEpoch: 3,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          ok: true,
+          operation: "TAKEOVER",
+          cursor: 9,
+          leaseEpoch: 4,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          ok: true,
+          operation: "RECORD_OWNER_PROGRESS",
+          cursor: 10,
+        }),
+      );
+    const client = new ControlPlaneClient(
+      "https://village.test",
+      "connector-desktop",
+      keys.privateKey,
+      { reserveNext: async () => ++sequence },
+      request,
+    );
+    const coordinator = new ControlPlaneWorkflowCoordinator(
+      client,
+      new MemoryAutomationSyncCursorStore(),
+    );
+    const identity = {
+      principalId: "prn_01J00000000000000000000000",
+      deviceId: "dev_01J00000000000000000000000",
+      jobId: "job_01J00000000000000000000000",
+      browserSessionId: "brs_01J00000000000000000000000",
+    };
+
+    await expect(
+      coordinator.synchronize({ ...identity, cursor: 0 }),
+    ).resolves.toMatchObject({
+      ...identity,
+      authenticated: true,
+      cursor: 4,
+      logicalStep: "SET_DISPLAY_NAME",
+      effectId: "efx_01J00000000000000000000000",
+      leaseEpoch: 2,
+    });
+    await expect(
+      coordinator.acceptAction({
+        ...identity,
+        objective: {
+          kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+          version: 1,
+        },
+        jobRevision: 2,
+        logicalStep: "SET_DISPLAY_NAME",
+        effectId: "efx_01J00000000000000000000000",
+        leaseEpoch: 2,
+        actionId: "act_01J00000000000000000000001",
+        command: { capability: "REPLACE_DISPLAY_NAME" },
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      actionId: "act_01J00000000000000000000000",
+      cursor: 5,
+    });
+    await expect(
+      coordinator.acceptAction({
+        ...identity,
+        objective: {
+          kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+          version: 1,
+        },
+        jobRevision: 2,
+        logicalStep: "SET_DISPLAY_NAME",
+        effectId: "efx_01J00000000000000000000009",
+        leaseEpoch: 2,
+        actionId: "act_01J00000000000000000000009",
+        command: { capability: "REPLACE_DISPLAY_NAME" },
+      }),
+    ).resolves.toEqual({ ok: false, code: "LOGICAL_EFFECT_CONFLICT" });
+
+    await expect(
+      coordinator.recordReceipt({
+        receipt: {
+          receiptId: "rcp_01J00000000000000000000000",
+          ...identity,
+          actionId: "act_01J00000000000000000000000",
+          stepId: "bsp_01J00000000000000000000000",
+          objective: {
+            kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+            version: 1,
+          },
+          jobRevision: 2,
+          logicalStep: "SET_DISPLAY_NAME",
+          effectId: "efx_01J00000000000000000000000",
+          leaseEpoch: 2,
+          outcome: "POSTCONDITION_SATISFIED",
+          predicateIds: ["setup-display-name-matches-v1"],
+          recordedAt: "2026-08-14T12:00:01.000Z",
+        },
+        checkpoint: {
+          checkpointId: "chk_01J00000000000000000000000",
+          ...identity,
+          jobRevision: 2,
+          eventSequence: 6,
+          state: "RUNNING_AGENT",
+          objective: {
+            kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+            version: 1,
+          },
+          site: "OWNED_FIXTURE",
+          currentStep: "SET_DISPLAY_NAME",
+          currentEffectId: "efx_01J00000000000000000000000",
+          completedEffects: [
+            {
+              logicalStep: "SET_DISPLAY_NAME",
+              effectId: "efx_01J00000000000000000000000",
+            },
+          ],
+          outstandingAction: null,
+          lastPredicateVersion: "setup-display-name-matches-v1",
+          actionPhase: "RECEIPTED",
+          reconciliation: "NONE",
+          createdAt: "2026-08-14T12:00:01.000Z",
+        },
+      }),
+    ).resolves.toEqual({ ok: true, cursor: 6 });
+    await expect(
+      coordinator.claimFreshLease({
+        ...identity,
+        afterLeaseEpoch: 2,
+        cursor: 7,
+      }),
+    ).resolves.toEqual({ ok: true, leaseEpoch: 3, cursor: 8 });
+    await expect(
+      coordinator.takeover({
+        ...identity,
+        expectedLeaseEpoch: 3,
+        cursor: 8,
+      }),
+    ).resolves.toEqual({ ok: true, leaseEpoch: 4, cursor: 9 });
+    await expect(
+      coordinator.recordOwnerProgress({
+        ...identity,
+        objective: {
+          kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+          version: 1,
+        },
+        jobRevision: 2,
+        logicalStep: "SELECT_ROLE",
+        effectId: "efx_01J00000000000000000000001",
+        actionPhase: "RECEIPTED",
+        leaseEpoch: 4,
+        cursor: 9,
+        actor: "OWNER",
+        occurredAt: "2026-08-14T12:00:02.000Z",
+      }),
+    ).resolves.toEqual({ ok: true, cursor: 10 });
+
+    const operations = request.mock.calls
+      .slice(3)
+      .map((call) =>
+        workflowOperationRequestSchema.parse(
+          JSON.parse((call[1] as RequestInit).body as string),
+        ),
+      );
+    expect(operations.map((operation) => operation.operation)).toEqual([
+      "RECORD_RECEIPT",
+      "CLAIM_FRESH_LEASE",
+      "TAKEOVER",
+      "RECORD_OWNER_PROGRESS",
+    ]);
+  });
+
+  it("authenticates automation sync and resumes from a durable cursor", async () => {
+    const keys = await generateDeviceSigningKey();
+    let sequence = 0;
+    const cursorStore = new MemoryAutomationSyncCursorStore(7);
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        ok: true,
+        cursor: 9,
+        jobId: "job_01J00000000000000000000000",
+        controller: "NONE",
+        connection: "ONLINE",
+        leaseEpoch: 5,
+        automationBlocked: true,
+        canceled: true,
+        workflow: null,
+      }),
+    );
+    const client = new ControlPlaneClient(
+      "https://village.test",
+      "connector-desktop",
+      keys.privateKey,
+      { reserveNext: async () => ++sequence },
+      request,
+    );
+    const identity = {
+      principalId: "prn_01J00000000000000000000000",
+      deviceId: "dev_01J00000000000000000000000",
+      browserSessionId: "brs_01J00000000000000000000000",
+    };
+
+    const synchronized = await client.synchronizeAutomation(
+      identity,
+      cursorStore,
+    );
+    expect(synchronized).toMatchObject({
+      cursor: 9,
+      automationBlocked: true,
+    });
+    expect(await cursorStore.load(identity.browserSessionId)).toBe(9);
+
+    const [url, init] = request.mock.calls[0]!;
+    expect(String(url)).toBe(
+      `${identity.browserSessionId.replace(
+        /^/,
+        "https://village.test/api/browser-sessions/",
+      )}/automation-sync`,
+    );
+    expect(init).toMatchObject({
+      method: "POST",
+      headers: expect.objectContaining({
+        "x-village-connection-id": "connector-desktop",
+      }),
+    });
+    expect(
+      automationSyncRequestSchema.parse(JSON.parse(init!.body as string)),
+    ).toMatchObject({ ...identity, cursor: 7, sequence: 1 });
+  });
+
+  it("does not advance the cursor for a malformed or regressing response", async () => {
+    const keys = await generateDeviceSigningKey();
+    const cursorStore = new MemoryAutomationSyncCursorStore(7);
+    const identity = {
+      principalId: "prn_01J00000000000000000000000",
+      deviceId: "dev_01J00000000000000000000000",
+      browserSessionId: "brs_01J00000000000000000000000",
+    };
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json({ ok: true, cursor: 8, rawPageText: "hostile" }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          ok: true,
+          cursor: 6,
+          jobId: "job_01J00000000000000000000000",
+          controller: "NONE",
+          connection: "ONLINE",
+          leaseEpoch: 5,
+          automationBlocked: true,
+          canceled: true,
+          workflow: null,
+        }),
+      );
+    const client = new ControlPlaneClient(
+      "https://village.test",
+      "connector-desktop",
+      keys.privateKey,
+      { reserveNext: async () => 1 },
+      request,
+    );
+
+    await expect(
+      client.synchronizeAutomation(identity, cursorStore),
+    ).rejects.toThrow("INVALID_AUTOMATION_SYNC_RESPONSE");
+    await expect(
+      client.synchronizeAutomation(identity, cursorStore),
+    ).rejects.toThrow("STALE_AUTOMATION_SYNC_RESPONSE");
+    expect(await cursorStore.load(identity.browserSessionId)).toBe(7);
+  });
+
+  it("resumes the automation cursor after a desktop restart", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-sync-"));
+    temporaryDirectories.push(directory);
+    const path = join(directory, "cursor.json");
+    const sessionId = "brs_01J00000000000000000000000";
+
+    const firstProcess = new FileAutomationSyncCursorStore(path);
+    await firstProcess.save(sessionId, 12);
+    const restartedProcess = new FileAutomationSyncCursorStore(path);
+
+    expect(await restartedProcess.load(sessionId)).toBe(12);
+    await expect(restartedProcess.save(sessionId, 11)).rejects.toThrow(
+      "STALE_AUTOMATION_SYNC_CURSOR",
+    );
+    expect(await restartedProcess.load(sessionId)).toBe(12);
   });
 });

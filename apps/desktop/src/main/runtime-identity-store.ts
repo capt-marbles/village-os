@@ -8,6 +8,7 @@ import type {
   PairedRuntimeIdentitySource,
   RuntimeIdentity,
 } from "./runtime-identity.js";
+import { parseControlPlaneOrigin } from "./runtime-identity.js";
 
 const runtimeIdentityReference = "sec_runtime_identity";
 
@@ -16,7 +17,13 @@ function parseRuntimeIdentity(value: unknown): RuntimeIdentity {
     !value ||
     typeof value !== "object" ||
     Object.keys(value).some(
-      (key) => !["principalId", "deviceId", "browserSessionId"].includes(key),
+      (key) =>
+        ![
+          "principalId",
+          "deviceId",
+          "browserSessionId",
+          "controlPlaneOrigin",
+        ].includes(key),
     )
   ) {
     throw new Error("PAIRED_RUNTIME_IDENTITY_REQUIRED");
@@ -27,13 +34,22 @@ function parseRuntimeIdentity(value: unknown): RuntimeIdentity {
   const browserSessionId = browserSessionIdSchema.safeParse(
     candidate.browserSessionId,
   );
-  if (!principalId.success || !deviceId.success || !browserSessionId.success) {
+  const controlPlaneOrigin = parseControlPlaneOrigin(
+    candidate.controlPlaneOrigin,
+  );
+  if (
+    !principalId.success ||
+    !deviceId.success ||
+    !browserSessionId.success ||
+    controlPlaneOrigin === null
+  ) {
     throw new Error("PAIRED_RUNTIME_IDENTITY_REQUIRED");
   }
   return {
     principalId: principalId.data,
     deviceId: deviceId.data,
     browserSessionId: browserSessionId.data,
+    ...(controlPlaneOrigin ? { controlPlaneOrigin } : {}),
   };
 }
 

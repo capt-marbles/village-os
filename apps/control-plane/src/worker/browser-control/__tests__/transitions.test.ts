@@ -288,10 +288,13 @@ describe("browser control transitions", () => {
         initial,
         {
           ...oldCommand,
+          workflowKind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+          workflowVersion: 1,
+          jobRevision: 1,
+          logicalStep: "SET_DISPLAY_NAME",
+          effectId: "efx_01J00000000000000000000000",
           command: {
-            capability: "FIXTURE_INPUT",
-            field: "IDENTIFIER",
-            value: "fixture-user",
+            capability: "REPLACE_DISPLAY_NAME",
           },
         },
         "LINKEDIN",

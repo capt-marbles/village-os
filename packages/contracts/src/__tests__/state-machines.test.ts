@@ -4,6 +4,10 @@ import {
   browserControlStateSchema,
   resolveActionReconciliation,
   verificationResultSchema,
+  setupCompletionEvidenceSchema,
+  validateSetupCompletion,
+  jobCompletionEvidenceSchema,
+  jobEventSchema,
 } from "../index.js";
 
 describe("durable action phases", () => {
@@ -94,5 +98,121 @@ describe("durable action phases", () => {
         takeover: "OFFLINE_MARKED",
       }).success,
     ).toBe(true);
+  });
+
+  it("accepts matching finalization evidence once and rejects stale identity", () => {
+    const evidence = {
+      objective: {
+        kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+        version: 1,
+      },
+      jobId: "job_01J00000000000000000000000",
+      browserSessionId: "brs_01J00000000000000000000000",
+      jobRevision: 12,
+      logicalStep: "FINALIZE_SETUP",
+      effectId: "efx_01J00000000000000000000000",
+      receiptId: "rcp_01J00000000000000000000000",
+      leaseEpoch: 5,
+      predicateVersion: "setup-complete-v1",
+    } as const;
+    expect(setupCompletionEvidenceSchema.safeParse(evidence).success).toBe(
+      true,
+    );
+    expect(
+      validateSetupCompletion(evidence, {
+        jobId: evidence.jobId,
+        browserSessionId: evidence.browserSessionId,
+        jobRevision: evidence.jobRevision,
+        logicalStep: evidence.logicalStep,
+        effectId: evidence.effectId,
+        leaseEpoch: evidence.leaseEpoch,
+        receiptedEffectIds: [evidence.effectId],
+        completionReceiptIds: [],
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      validateSetupCompletion(evidence, {
+        jobId: evidence.jobId,
+        browserSessionId: evidence.browserSessionId,
+        jobRevision: evidence.jobRevision + 1,
+        logicalStep: evidence.logicalStep,
+        effectId: evidence.effectId,
+        leaseEpoch: evidence.leaseEpoch,
+        receiptedEffectIds: [evidence.effectId],
+        completionReceiptIds: [],
+      }),
+    ).toEqual({ ok: false, code: "STALE_WORKFLOW_BINDING" });
+    expect(
+      validateSetupCompletion(evidence, {
+        jobId: evidence.jobId,
+        browserSessionId: evidence.browserSessionId,
+        jobRevision: evidence.jobRevision,
+        logicalStep: evidence.logicalStep,
+        effectId: evidence.effectId,
+        leaseEpoch: evidence.leaseEpoch,
+        receiptedEffectIds: [evidence.effectId],
+        completionReceiptIds: [evidence.receiptId],
+      }),
+    ).toEqual({ ok: false, code: "DUPLICATE_COMPLETION" });
+    expect(
+      validateSetupCompletion(evidence, {
+        jobId: evidence.jobId,
+        browserSessionId: evidence.browserSessionId,
+        jobRevision: evidence.jobRevision,
+        logicalStep: evidence.logicalStep,
+        effectId: evidence.effectId,
+        leaseEpoch: evidence.leaseEpoch,
+        receiptedEffectIds: [],
+        completionReceiptIds: [],
+      }),
+    ).toEqual({ ok: false, code: "EFFECT_NOT_RECEIPTED" });
+  });
+
+  it("preserves authentication evidence beside strict setup completion", () => {
+    expect(
+      jobCompletionEvidenceSchema.safeParse({
+        evidence: "PREDICATE_AUTHENTICATED",
+        predicateVersion: "linkedin-auth-v1",
+      }).success,
+    ).toBe(true);
+    expect(
+      jobCompletionEvidenceSchema.safeParse({
+        evidence: "OWNER_CONFIRMED",
+        confirmationVersion: "owner-confirmation-v1",
+      }).success,
+    ).toBe(true);
+    expect(
+      jobCompletionEvidenceSchema.safeParse({
+        objective: {
+          kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+          version: 1,
+        },
+        evidence: "MODEL_SAID_COMPLETE",
+      }).success,
+    ).toBe(false);
+    expect(
+      jobEventSchema.safeParse({
+        eventId: "evt_01J00000000000000000000000",
+        principalId: "prn_01J00000000000000000000000",
+        jobId: "job_01J00000000000000000000001",
+        sequence: 1,
+        occurredAt: "2026-08-12T18:00:00.000Z",
+        type: "JOB_SUCCEEDED",
+        payload: {
+          objective: {
+            kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+            version: 1,
+          },
+          jobId: "job_01J00000000000000000000000",
+          browserSessionId: "brs_01J00000000000000000000000",
+          jobRevision: 12,
+          logicalStep: "FINALIZE_SETUP",
+          effectId: "efx_01J00000000000000000000000",
+          receiptId: "rcp_01J00000000000000000000000",
+          leaseEpoch: 5,
+          predicateVersion: "setup-complete-v1",
+        },
+      }).success,
+    ).toBe(false);
   });
 });

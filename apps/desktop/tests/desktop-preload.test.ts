@@ -103,4 +103,50 @@ describe("desktop preload bridge", () => {
       task: "CHECK_LINKEDIN_SIGN_IN",
     });
   });
+
+  it("keeps the delegated proof API in the separate internal preload", async () => {
+    const source = await readFile(
+      new URL("../src/preload/village-bridge.internal.cjs", import.meta.url),
+      "utf8",
+    );
+    const bridges: Record<
+      string,
+      Record<string, (...arguments_: unknown[]) => unknown>
+    > = {};
+    const invoke = vi.fn(async () => undefined);
+    const on = vi.fn();
+    const removeListener = vi.fn();
+    vm.runInNewContext(source, {
+      require: () => ({
+        contextBridge: {
+          exposeInMainWorld: (
+            name: string,
+            value: Record<string, (...arguments_: unknown[]) => unknown>,
+          ) => {
+            bridges[name] = value;
+          },
+        },
+        ipcRenderer: { invoke, on, removeListener },
+      }),
+      Object,
+      TypeError,
+    });
+    expect(Object.keys(bridges.village!)).toEqual(
+      expect.arrayContaining([
+        "getDelegatedWorkflowState",
+        "runDelegatedWorkflowAction",
+        "selectDesktopTask",
+        "subscribeDelegatedWorkflowState",
+      ]),
+    );
+    expect(Object.keys(bridges.villagePairing!).sort()).toEqual([
+      "getPairingRequest",
+      "subscribePairingState",
+    ]);
+    await bridges.village!.runDelegatedWorkflowAction!("START");
+    expect(invoke).toHaveBeenCalledWith(
+      "village:run-delegated-workflow-action",
+      "START",
+    );
+  });
 });
