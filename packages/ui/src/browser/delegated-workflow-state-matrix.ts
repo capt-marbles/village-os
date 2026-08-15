@@ -43,6 +43,19 @@ export interface DelegatedWorkflowSnapshot {
   lastDurableUpdateAt: string;
 }
 
+export const delegatedWorkflowReadySnapshot: DelegatedWorkflowSnapshot = {
+  workflowKind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
+  state: "READY",
+  logicalStep: null,
+  controller: "NONE",
+  connection: "ABSENT",
+  actionPhase: "NONE",
+  lastEffectActor: null,
+  humanGate: null,
+  inputOwner: "NONE",
+  lastDurableUpdateAt: new Date(0).toISOString(),
+};
+
 export interface DelegatedWorkflowModel {
   label: string;
   explanation: string;

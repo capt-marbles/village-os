@@ -1,4 +1,5 @@
 import { browserSessionIdSchema } from "@village/contracts";
+import { delegatedWorkflowReadySnapshot } from "@village/ui";
 import { app, shell, type WebContents } from "electron";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { readFile, rename, writeFile } from "node:fs/promises";
@@ -26,6 +27,9 @@ import {
   resolveRuntimeIdentity,
   type PairedRuntimeIdentitySource,
 } from "./runtime-identity.js";
+import { LazyDelegatedWorkflow } from "./lazy-delegated-workflow.js";
+import { InternalPairedBootstrap } from "./internal-paired-bootstrap.js";
+import type { InternalDelegatedWorkflowOperations } from "./app-window.js";
 
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -105,9 +109,7 @@ async function waitForObserverIntent(
 }
 
 async function waitForTerminal(
-  workflow: Awaited<
-    ReturnType<typeof createInternalDelegatedProof>
-  >["delegatedWorkflow"],
+  workflow: InternalDelegatedWorkflowOperations,
   timeoutMs = 120_000,
 ) {
   const current = workflow.snapshot();
@@ -144,9 +146,7 @@ async function waitForTerminal(
 }
 
 async function waitForWorkflowSnapshot(
-  workflow: Awaited<
-    ReturnType<typeof createInternalDelegatedProof>
-  >["delegatedWorkflow"],
+  workflow: InternalDelegatedWorkflowOperations,
   predicate: (snapshot: ReturnType<typeof workflow.snapshot>) => boolean,
   timeoutCode: string,
   timeoutMs = 10_000,
@@ -200,6 +200,26 @@ async function clickVisibleButton(
   );
 }
 
+async function waitForWorkflowLabel(
+  renderer: WebContents,
+  expected: string,
+  timeoutMs = 10_000,
+): Promise<string | undefined> {
+  return renderer.executeJavaScript(
+    `(async () => {
+      const expected = ${JSON.stringify(expected)};
+      const deadline = Date.now() + ${timeoutMs};
+      while (Date.now() < deadline) {
+        const label = document.querySelector('[aria-labelledby="delegated-workflow-title"] h3')?.textContent;
+        if (label === expected) return label;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      return undefined;
+    })()`,
+    true,
+  );
+}
+
 async function run(): Promise<void> {
   const proofProfilePath = argument("--village-proof-profile");
   if (proofProfilePath) {
@@ -233,82 +253,131 @@ async function run(): Promise<void> {
     | Awaited<ReturnType<typeof createPairedWorkflowRuntimeComposition>>
     | undefined;
   let fixtureBrowserSessionId: string | undefined;
-  if (coordinationMode === "paired") {
+  const pairedSetup = await (async () => {
+    if (coordinationMode !== "paired") return undefined;
     const protector = new ElectronSafeStorageProtector();
     const identityDirectory = join(app.getPath("userData"), "identity");
     const runtimeIdentityStore = new SecretRuntimeIdentityStore(
       new SecretVault(join(identityDirectory, "runtime-vault.json"), protector),
     );
-    const pairedIdentity = await resolveRuntimeIdentity({
+    const identity = await resolveRuntimeIdentity({
       isPackaged: true,
       pairedIdentitySource: runtimeIdentityStore,
     });
-    const controlPlaneUrl = resolveRuntimeControlPlaneUrl(
-      pairedIdentity.controlPlaneOrigin,
-    );
-    const providedFixtureSessionId = argument(
-      "--village-proof-fixture-session",
-    );
-    fixtureBrowserSessionId = providedFixtureSessionId
-      ? browserSessionIdSchema.parse(providedFixtureSessionId)
-      : (
-          await provisionInternalOwnedFixture({
-            controlPlaneUrl,
-            identity: pairedIdentity,
-          })
-        ).browserSessionId;
-    assertDistinctBrowserSessionIdentity(
-      pairedIdentity.browserSessionId,
-      fixtureBrowserSessionId,
-    );
-    applicationIdentitySource = { load: async () => pairedIdentity };
-    coordination = await createPairedWorkflowRuntimeComposition({
-      controlPlaneUrl,
-      userDataPath: app.getPath("userData"),
-      identity: {
-        ...pairedIdentity,
-        browserSessionId: fixtureBrowserSessionId,
-      },
-      deviceIdentitySource: new DeviceIdentityVault(
-        join(identityDirectory, "device.json"),
-        protector,
+    return {
+      identity,
+      controlPlaneUrl: resolveRuntimeControlPlaneUrl(
+        identity.controlPlaneOrigin,
       ),
-    });
+      identityDirectory,
+      protector,
+    };
+  })();
+  if (pairedSetup) {
+    applicationIdentitySource = { load: async () => pairedSetup.identity };
   }
-  const proof = await createInternalDelegatedProof({
-    userDataPath: proofProfilePath
-      ? join(internalProofUserDataPath(), "proof-state")
-      : join(internalProofUserDataPath(), "proof-runs", String(process.pid)),
-    providerMode,
-    modelProvider: modelProviders.provider,
-    ...(coordination
-      ? {
-          coordination: {
-            initialSnapshot: coordination.initialSnapshot,
-            coordinator: coordination.workflowCoordinator,
-            automationFence: coordination.automationFence,
-          },
+  type CreatedProof = Awaited<ReturnType<typeof createInternalDelegatedProof>>;
+  let createdProof: CreatedProof | undefined;
+  const pairedBootstrap = pairedSetup
+    ? new InternalPairedBootstrap(
+        async () => {
+          const providedFixtureSessionId = argument(
+            "--village-proof-fixture-session",
+          );
+          const fixtureBrowserSessionId = providedFixtureSessionId
+            ? browserSessionIdSchema.parse(providedFixtureSessionId)
+            : (
+                await provisionInternalOwnedFixture({
+                  controlPlaneUrl: pairedSetup.controlPlaneUrl,
+                  identity: pairedSetup.identity,
+                })
+              ).browserSessionId;
+          assertDistinctBrowserSessionIdentity(
+            pairedSetup.identity.browserSessionId,
+            fixtureBrowserSessionId,
+          );
+          return { fixtureBrowserSessionId };
+        },
+        ({ fixtureBrowserSessionId }) =>
+          createPairedWorkflowRuntimeComposition({
+            controlPlaneUrl: pairedSetup.controlPlaneUrl,
+            userDataPath: app.getPath("userData"),
+            identity: {
+              ...pairedSetup.identity,
+              browserSessionId: fixtureBrowserSessionId,
+            },
+            deviceIdentitySource: new DeviceIdentityVault(
+              join(pairedSetup.identityDirectory, "device.json"),
+              pairedSetup.protector,
+            ),
+          }),
+      )
+    : undefined;
+  const lazyWorkflow = new LazyDelegatedWorkflow(
+    delegatedWorkflowReadySnapshot,
+    async () => {
+      if (coordinationMode === "paired") {
+        if (!pairedSetup) {
+          throw new Error("PACKAGED_DELEGATED_WORKFLOW_PAIRED_SETUP_MISSING");
         }
-      : {}),
-    ...(variantId ? { variantId } : {}),
-    interruptAfterEffectBeforeReceipt:
-      interruption === "post-effect-before-receipt",
-    ...(interruption === "crash-after-effect-before-observation"
-      ? { abruptlyExitAfterFinalEffect: () => app.exit(86) }
-      : {}),
-    ...(ownerCheckpoint === "owner-handback-restart" ||
-    ownerCheckpoint === "observer-cancel-restart"
-      ? {
-          delayProviderAfterFirstStepMs:
-            ownerCheckpoint === "observer-cancel-restart" ? 30_000 : 3_000,
+        if (!pairedBootstrap) {
+          throw new Error("PACKAGED_DELEGATED_WORKFLOW_PAIRED_SETUP_MISSING");
         }
-      : {}),
-  }).catch(async (error: unknown) => {
-    await modelProviders.modelProviderAccount.close();
-    throw error;
-  });
+        const bootstrap = await pairedBootstrap.result();
+        fixtureBrowserSessionId = bootstrap.provisioned.fixtureBrowserSessionId;
+        coordination = bootstrap.coordination;
+      }
+      createdProof = await createInternalDelegatedProof({
+        userDataPath: proofProfilePath
+          ? join(internalProofUserDataPath(), "proof-state")
+          : join(
+              internalProofUserDataPath(),
+              "proof-runs",
+              String(process.pid),
+            ),
+        providerMode,
+        modelProvider: modelProviders.provider,
+        ...(coordination
+          ? {
+              coordination: {
+                initialSnapshot: coordination.initialSnapshot,
+                coordinator: coordination.workflowCoordinator,
+                automationFence: coordination.automationFence,
+              },
+            }
+          : {}),
+        ...(variantId ? { variantId } : {}),
+        interruptAfterEffectBeforeReceipt:
+          interruption === "post-effect-before-receipt",
+        ...(interruption === "crash-after-effect-before-observation"
+          ? { abruptlyExitAfterFinalEffect: () => app.exit(86) }
+          : {}),
+        ...(ownerCheckpoint === "owner-handback-restart" ||
+        ownerCheckpoint === "observer-cancel-restart"
+          ? {
+              delayProviderAfterFirstStepMs:
+                ownerCheckpoint === "observer-cancel-restart" ? 30_000 : 3_000,
+            }
+          : {}),
+      });
+      return {
+        operations: createdProof.delegatedWorkflow,
+        proof: createdProof,
+      };
+    },
+  );
+  const proof = {
+    delegatedWorkflow: lazyWorkflow,
+    evidence: async () => (await lazyWorkflow.result()).proof.evidence(),
+    cancelFromObserver: async () =>
+      (await lazyWorkflow.result()).proof.cancelFromObserver(),
+    close: async () => {
+      lazyWorkflow.dispose();
+      await createdProof?.close();
+    },
+  };
   const application = await runVillageApplication(applicationIdentitySource, {
-    delegatedWorkflow: proof.delegatedWorkflow,
+    delegatedWorkflow: lazyWorkflow,
     modelProviders,
   }).catch(async (error: unknown) => {
     await proof.close();
@@ -318,10 +387,11 @@ async function run(): Promise<void> {
   const reportPath = argument("--village-proof-report");
   if (!reportPath) return;
   try {
-    const readyLabel = await application.trustedRenderer.executeJavaScript(
-      `document.querySelector('[aria-labelledby="delegated-workflow-title"] h3')?.textContent`,
-      true,
+    const readyLabel = await waitForWorkflowLabel(
+      application.trustedRenderer,
+      "Ready for delegated setup",
     );
+    const provisionedBeforeStart = lazyWorkflow.isCreationStarted();
     if (ownerCheckpoint === "observer-cancel-restart") {
       const projectionPath = requiredAbsoluteArgument(
         "--village-proof-observer-projection",
@@ -467,10 +537,14 @@ async function run(): Promise<void> {
     ) {
       await proof.delegatedWorkflow.retry();
     } else {
-      await application.trustedRenderer.executeJavaScript(
-        `Array.from(document.querySelectorAll('button')).find((button) => button.textContent === 'Start demo setup')?.click()`,
-        true,
-      );
+      if (
+        !(await clickVisibleButton(
+          application.trustedRenderer,
+          "Start demo setup",
+        ))
+      ) {
+        throw new Error("PACKAGED_DELEGATED_WORKFLOW_START_CONTROL_MISSING");
+      }
     }
     const terminal = await waitForTerminal(proof.delegatedWorkflow);
     const evidence = await proof.evidence();
@@ -498,8 +572,10 @@ async function run(): Promise<void> {
             }
           : {}),
         readyLabel,
+        provisionedBeforeStart,
         terminal,
         finalizationEffects: evidence.finalizationEffects,
+        reconciliations: evidence.reconciliations,
         stopReason: evidence.stopReason,
         actionPhase: terminal.actionPhase,
         ...(interruption ? { interruption } : {}),

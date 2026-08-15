@@ -436,6 +436,10 @@ export class DelegatedWorkflowController {
     });
   }
 
+  reconciliationCount(): number {
+    return this.reconciliations;
+  }
+
   async handBack(): Promise<WorkflowRuntimeResult> {
     const synchronized = await this.synchronize(false);
     if (!synchronized.ok) return synchronized.result;

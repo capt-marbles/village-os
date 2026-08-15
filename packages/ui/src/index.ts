@@ -19,6 +19,7 @@ export type {
 } from "./browser/browser-ui-state-matrix.js";
 export {
   delegatedWorkflowActionLabel,
+  delegatedWorkflowReadySnapshot,
   delegatedWorkflowStates,
   deriveDelegatedWorkflowModel,
 } from "./browser/delegated-workflow-state-matrix.js";

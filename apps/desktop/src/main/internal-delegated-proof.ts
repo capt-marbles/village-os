@@ -614,6 +614,7 @@ export async function createInternalDelegatedProof(options: {
           : 0;
       })(),
       stopReason: coordinator.stopReason(),
+      reconciliations: controller.reconciliationCount(),
       leaseEpoch: coordinator.snapshot().leaseEpoch,
       cursor: coordinator.snapshot().cursor,
       completedEffectCount: coordinator.snapshot().completedEffects.length,

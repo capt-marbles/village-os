@@ -43,9 +43,11 @@ import type {
 } from "@village/ui";
 import type { BrowserHostManager } from "./browser-host-manager.js";
 import type { AuthenticatedAutomationFence } from "./delegated-workflow-controller.js";
+import { assertDelegatedWorkflowActionAllowed } from "./delegated-workflow-action-policy.js";
 
 export interface InternalDelegatedWorkflowOperations {
   createFixtureHost(): Promise<LocalBrowserHost>;
+  invalidateFixtureHost?(host: LocalBrowserHost): void;
   snapshot(): DelegatedWorkflowSnapshot;
   subscribe(
     listener: (snapshot: DelegatedWorkflowSnapshot) => void,
@@ -82,7 +84,7 @@ export interface VillageAppWindow {
   window: BaseWindow;
   browserHost: LocalBrowserHost;
   trustedRenderer: WebContents;
-  fixtureBrowserHost?: LocalBrowserHost;
+  fixtureBrowserHost: LocalBrowserHost | undefined;
   viewport: BrowserViewportCoordinator;
   automationFence?: AuthenticatedAutomationFence;
   /** Control-plane revocation seam; it fences all future trusted IPC work. */
@@ -156,31 +158,20 @@ export async function createVillageAppWindow(
     profileRoot: LocalBrowserHost.profileRoot(options.userDataPath),
     initialUrl: options.initialUrl,
   });
-  const fixtureHostCreation = options.delegatedWorkflow?.createFixtureHost();
   let browserHost: LocalBrowserHost | undefined;
   let fixtureBrowserHost: LocalBrowserHost | undefined;
   try {
-    const [primaryHost, fixtureHost] = await Promise.all([
-      browserHostCreation,
-      fixtureHostCreation,
-      shieldLoad,
-    ]);
+    const [primaryHost] = await Promise.all([browserHostCreation, shieldLoad]);
     browserHost = primaryHost;
-    fixtureBrowserHost = fixtureHost;
   } catch (error) {
-    const [primaryResult, fixtureResult] = await Promise.allSettled([
+    const [primaryResult] = await Promise.allSettled([
       browserHostCreation,
-      fixtureHostCreation,
       shieldLoad,
     ]);
     if (primaryResult.status === "fulfilled") {
       browserHost = primaryResult.value;
     }
-    if (fixtureResult.status === "fulfilled") {
-      fixtureBrowserHost = fixtureResult.value;
-    }
     await browserHost?.close();
-    await fixtureBrowserHost?.close();
     if (!appView.webContents.isDestroyed()) appView.webContents.close();
     if (!inputShield.webContents.isDestroyed()) inputShield.webContents.close();
     window.destroy();
@@ -200,20 +191,7 @@ export async function createVillageAppWindow(
 
   window.contentView.addChildView(appView);
   window.contentView.addChildView(browserHost.view);
-  if (fixtureBrowserHost)
-    window.contentView.addChildView(fixtureBrowserHost.view);
   window.contentView.addChildView(inputShield);
-  if (fixtureBrowserHost && options.delegatedWorkflow) {
-    const { BrowserHostManager: InternalBrowserHostManager } =
-      await import("./browser-host-manager.js");
-    hostManager = new InternalBrowserHostManager(
-      browserHost,
-      fixtureBrowserHost,
-      {
-        fenceFixture: (reason) => options.delegatedWorkflow!.fence(reason),
-      },
-    );
-  }
 
   const layout = () => {
     const size = window.getContentSize();
@@ -226,6 +204,53 @@ export async function createVillageAppWindow(
   };
   window.on("resize", layout);
   layout();
+  let closing = false;
+  const fixtureSurfaceGate = new ControlTransferGate();
+  const ensureFixtureSurface = async (): Promise<BrowserHostManager> => {
+    if (hostManager) return hostManager;
+    if (!options.delegatedWorkflow) {
+      throw new Error("DELEGATED_WORKFLOW_UNAVAILABLE");
+    }
+    return fixtureSurfaceGate.run(async () => {
+      if (hostManager) return hostManager;
+      const fixtureHost = await options.delegatedWorkflow!.createFixtureHost();
+      if (closing || window.isDestroyed()) {
+        options.delegatedWorkflow!.invalidateFixtureHost?.(fixtureHost);
+        await fixtureHost.close();
+        throw new Error("WINDOW_CLOSED_DURING_FIXTURE_START");
+      }
+      const { BrowserHostManager: InternalBrowserHostManager } =
+        await import("./browser-host-manager.js");
+      if (closing || window.isDestroyed()) {
+        options.delegatedWorkflow!.invalidateFixtureHost?.(fixtureHost);
+        await fixtureHost.close();
+        throw new Error("WINDOW_CLOSED_DURING_FIXTURE_START");
+      }
+      let attached = false;
+      try {
+        const manager = new InternalBrowserHostManager(
+          browserHost,
+          fixtureHost,
+          {
+            fenceFixture: (reason) => options.delegatedWorkflow!.fence(reason),
+          },
+        );
+        window.contentView.addChildView(fixtureHost.view, 2);
+        attached = true;
+        fixtureBrowserHost = fixtureHost;
+        hostManager = manager;
+        layout();
+        return manager;
+      } catch (error) {
+        fixtureBrowserHost = undefined;
+        hostManager = undefined;
+        if (attached) window.contentView.removeChildView(fixtureHost.view);
+        options.delegatedWorkflow!.invalidateFixtureHost?.(fixtureHost);
+        await fixtureHost.close();
+        throw error;
+      }
+    });
+  };
 
   const authorizer = new SensitiveActionAuthorizer();
   const stepUpAuthorizer = new StepUpAuthorizer();
@@ -334,7 +359,7 @@ export async function createVillageAppWindow(
     });
   };
   ipcMain.handle(takeoverChannel, handleTakeover);
-  if (options.delegatedWorkflow && hostManager) {
+  if (options.delegatedWorkflow) {
     const workflow = options.delegatedWorkflow;
     ipcMain.handle(
       "village:get-delegated-workflow-state",
@@ -354,16 +379,23 @@ export async function createVillageAppWindow(
         ) {
           throw new Error("MALFORMED_IPC_REQUEST");
         }
-        switch (action as DelegatedWorkflowAction) {
+        const delegatedAction = action as DelegatedWorkflowAction;
+        assertDelegatedWorkflowActionAllowed(
+          delegatedAction,
+          workflow.snapshot(),
+        );
+        switch (delegatedAction) {
           case "START": {
+            const manager = await ensureFixtureSurface();
             const snapshot = await workflow.start();
             if (snapshot.state !== "DISCONNECTED") {
-              hostManager.allowFixtureAfterHandBack();
-              hostManager.show("VILLAGE_FIXTURE");
+              manager.allowFixtureAfterHandBack();
+              manager.show("VILLAGE_FIXTURE");
             }
             return snapshot;
           }
           case "TAKE_OVER": {
+            if (!hostManager) throw new Error("FIXTURE_TASK_NOT_STARTED");
             viewport.beginTakeover();
             const snapshot = await workflow.takeOver();
             if (snapshot.state === "OWNER_CONTROL") {
@@ -372,6 +404,7 @@ export async function createVillageAppWindow(
             return snapshot;
           }
           case "HAND_BACK": {
+            if (!hostManager) throw new Error("FIXTURE_TASK_NOT_STARTED");
             viewport.beginTakeover();
             const snapshot = await workflow.handBack();
             if (
@@ -388,8 +421,18 @@ export async function createVillageAppWindow(
           }
           case "CANCEL":
             return workflow.cancel();
-          case "RETRY":
-            return workflow.retry();
+          case "RETRY": {
+            const manager = await ensureFixtureSurface();
+            const snapshot = await workflow.retry();
+            if (
+              snapshot.state !== "DISCONNECTED" &&
+              snapshot.state !== "FAILED"
+            ) {
+              manager.allowFixtureAfterHandBack();
+              manager.show("VILLAGE_FIXTURE");
+            }
+            return snapshot;
+          }
         }
       },
     );
@@ -399,6 +442,10 @@ export async function createVillageAppWindow(
         assertTrustedRequest(event, arguments_);
         if (task !== "LINKEDIN_PERSONAL" && task !== "VILLAGE_FIXTURE") {
           throw new Error("MALFORMED_IPC_REQUEST");
+        }
+        if (!hostManager) {
+          if (task === "LINKEDIN_PERSONAL") return task;
+          throw new Error("FIXTURE_TASK_NOT_STARTED");
         }
         hostManager.show(task as DelegatedWorkflowTask);
         layout();
@@ -621,7 +668,6 @@ export async function createVillageAppWindow(
     },
   );
 
-  let closing = false;
   window.on("close", (event) => {
     if (closing) return;
     event.preventDefault();
@@ -665,7 +711,9 @@ export async function createVillageAppWindow(
     window,
     browserHost,
     trustedRenderer: appView.webContents,
-    ...(fixtureBrowserHost ? { fixtureBrowserHost } : {}),
+    get fixtureBrowserHost() {
+      return fixtureBrowserHost;
+    },
     viewport,
     ...(options.automationFence
       ? { automationFence: options.automationFence }

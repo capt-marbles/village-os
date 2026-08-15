@@ -70,11 +70,12 @@ node scripts/verify-delegated-workflow.mjs --genuine \
 
 The genuine gate uses the paired production coordinator, signed device
 operations, and a separately provisioned `OWNED_FIXTURE` Browser Session for
-the same principal and device. By default, the internal packaged app provisions
-that fixed job and a distinct fixture session through the paired loopback
-control plane before showing the start surface. `--fixture-session` remains an
-optional recovery/debug override and must never name the personal LinkedIn
-Browser Session. The explicit profile must already contain the paired
+the same principal and device. By default, the internal packaged app initially
+shows an unprovisioned ready state, then creates that fixed job, a distinct
+fixture session, and the fixture browser surface only after the owner selects
+`Start demo setup`. `--fixture-session` remains an optional recovery/debug
+override and must never name the personal LinkedIn Browser Session. The
+explicit profile must already contain the paired
 runtime identity and device key. The paired control plane must be running with
 all migrations applied. `VILLAGE_CONTROL_PLANE_URL` is a compatibility fallback
 for profiles created before Village persisted the origin; a stored origin stays

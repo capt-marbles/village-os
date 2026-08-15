@@ -44,8 +44,10 @@ test("static release config requires Electron 43, hardened fuses and a separate 
       "!dist/main/desktop-delegated-workflow*",
       "!dist/main/fixture-session-handler*",
       "!dist/main/internal-fixture-provisioner*",
+      "!dist/main/lazy-delegated-workflow*",
       "!dist/main/internal-delegated-proof*",
       "!dist/main/internal-proof-entry*",
+      "!dist/main/internal-paired-bootstrap*",
       "!dist/main/paired-proof-coordination*",
       "!dist/main/proof-projection*",
       "package.json",
@@ -98,6 +100,34 @@ test("static release config requires Electron 43, hardened fuses and a separate 
       e2eConfig,
     }).includes(
       "Release config must exclude !dist/main/internal-fixture-provisioner*",
+    ),
+  );
+  assert.ok(
+    validateReleaseFiles({
+      desktopPackage: { devDependencies: { electron: "43.2.0" } },
+      releaseConfig: {
+        ...releaseConfig,
+        files: releaseConfig.files.filter(
+          (entry) => entry !== "!dist/main/lazy-delegated-workflow*",
+        ),
+      },
+      e2eConfig,
+    }).includes(
+      "Release config must exclude !dist/main/lazy-delegated-workflow*",
+    ),
+  );
+  assert.ok(
+    validateReleaseFiles({
+      desktopPackage: { devDependencies: { electron: "43.2.0" } },
+      releaseConfig: {
+        ...releaseConfig,
+        files: releaseConfig.files.filter(
+          (entry) => entry !== "!dist/main/internal-paired-bootstrap*",
+        ),
+      },
+      e2eConfig,
+    }).includes(
+      "Release config must exclude !dist/main/internal-paired-bootstrap*",
     ),
   );
 });

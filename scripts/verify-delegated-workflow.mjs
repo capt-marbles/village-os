@@ -36,6 +36,7 @@ export function assertPackagedDelegatedWorkflowRun(
   if (
     provider === "CHATGPT_ACCOUNT" &&
     (report.coordinator !== "PAIRED" ||
+      report.provisionedBeforeStart !== false ||
       !/^job_[0-9A-HJKMNP-TV-Z]{26}$/.test(report.coordinatorJobId ?? "") ||
       !/^brs_[0-9A-HJKMNP-TV-Z]{26}$/.test(
         report.fixtureBrowserSessionId ?? "",
@@ -71,6 +72,12 @@ export function assertPackagedDelegatedWorkflowRecovery(
   if (recovered.resumedFrom !== "post-effect-before-receipt") {
     throw new Error("PACKAGED_DELEGATED_WORKFLOW_RECOVERY_MISSING");
   }
+  if (
+    !Number.isInteger(recovered.reconciliations) ||
+    recovered.reconciliations < 1
+  ) {
+    throw new Error("PACKAGED_DELEGATED_WORKFLOW_RECONCILIATION_MISSING");
+  }
   return { interrupted, recovered };
 }
 
@@ -90,6 +97,12 @@ export function assertPackagedDelegatedWorkflowAbruptRecovery(
   assertPackagedDelegatedWorkflowRun(recovered, provider);
   if (recovered.resumedFrom !== "crash-after-effect-before-observation") {
     throw new Error("PACKAGED_DELEGATED_WORKFLOW_ABRUPT_RECOVERY_MISSING");
+  }
+  if (
+    !Number.isInteger(recovered.reconciliations) ||
+    recovered.reconciliations < 1
+  ) {
+    throw new Error("PACKAGED_DELEGATED_WORKFLOW_RECONCILIATION_MISSING");
   }
   return { interruption, recovered };
 }
@@ -115,6 +128,12 @@ export function assertPackagedDelegatedWorkflowOwnerRecovery(
   assertPackagedDelegatedWorkflowRun(recovered, provider);
   if (recovered.resumedFrom !== "owner-handback-restart") {
     throw new Error("PACKAGED_DELEGATED_WORKFLOW_OWNER_RECOVERY_MISSING");
+  }
+  if (
+    !Number.isInteger(recovered.reconciliations) ||
+    recovered.reconciliations < 1
+  ) {
+    throw new Error("PACKAGED_DELEGATED_WORKFLOW_RECONCILIATION_MISSING");
   }
   return { checkpoint, recovered };
 }
@@ -152,6 +171,8 @@ export function assertPackagedDelegatedWorkflowObserverRecovery(
     restarted.provider !== provider ||
     restarted.terminal?.state !== "CANCELLED" ||
     restarted.finalizationEffects !== 0 ||
+    !Number.isInteger(restarted.reconciliations) ||
+    restarted.reconciliations < 1 ||
     restarted.resumedFrom !== "observer-cancel-restart"
   ) {
     throw new Error("PACKAGED_DELEGATED_WORKFLOW_CANCELED_RESTART_MISSING");

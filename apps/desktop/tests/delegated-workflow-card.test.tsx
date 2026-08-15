@@ -5,7 +5,10 @@ import {
   deriveDelegatedWorkflowModel,
   type DelegatedWorkflowSnapshot,
 } from "@village/ui";
-import { DelegatedWorkflowCard } from "../src/renderer/DelegatedWorkflowCard.js";
+import {
+  DelegatedWorkflowCard,
+  desktopTaskSelectionError,
+} from "../src/renderer/DelegatedWorkflowCard.js";
 
 const base: DelegatedWorkflowSnapshot = {
   workflowKind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
@@ -63,5 +66,17 @@ describe("delegated workflow card", () => {
         actionPhase: "RECEIPTED",
       }).label,
     ).not.toBe("Setup complete");
+  });
+
+  it("explains that the fixture task must be started before selection", () => {
+    expect(
+      desktopTaskSelectionError(
+        "VILLAGE_FIXTURE",
+        new Error("FIXTURE_TASK_NOT_STARTED"),
+      ),
+    ).toBe("Start the demo setup before opening the Village demo browser.");
+    expect(
+      desktopTaskSelectionError("VILLAGE_FIXTURE", new Error("FENCED")),
+    ).toContain("Return control explicitly");
   });
 });

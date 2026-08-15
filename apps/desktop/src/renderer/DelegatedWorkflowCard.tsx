@@ -1,5 +1,6 @@
 import {
   delegatedWorkflowActionLabel,
+  delegatedWorkflowReadySnapshot,
   deriveDelegatedWorkflowModel,
   type DelegatedWorkflowAction,
   type DelegatedWorkflowSnapshot,
@@ -20,18 +21,18 @@ export interface DelegatedWorkflowBridge {
   ): Promise<DelegatedWorkflowTask>;
 }
 
-const initialSnapshot: DelegatedWorkflowSnapshot = {
-  workflowKind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
-  state: "READY",
-  logicalStep: null,
-  controller: "NONE",
-  connection: "ABSENT",
-  actionPhase: "NONE",
-  lastEffectActor: null,
-  humanGate: null,
-  inputOwner: "NONE",
-  lastDurableUpdateAt: new Date(0).toISOString(),
-};
+export function desktopTaskSelectionError(
+  task: DelegatedWorkflowTask,
+  error: unknown,
+): string {
+  if (task !== "VILLAGE_FIXTURE") {
+    return "The browser task could not be switched safely.";
+  }
+  return error instanceof Error &&
+    error.message.includes("FIXTURE_TASK_NOT_STARTED")
+    ? "Start the demo setup before opening the Village demo browser."
+    : "Return control explicitly before reopening the Village demo setup.";
+}
 
 const stepLabels: Record<
   Exclude<DelegatedWorkflowSnapshot["logicalStep"], null>,
@@ -143,7 +144,7 @@ export function InternalDelegatedWorkflowPanel({
   bridge: DelegatedWorkflowBridge;
   onError(message: string): void;
 }) {
-  const [snapshot, setSnapshot] = useState(initialSnapshot);
+  const [snapshot, setSnapshot] = useState(delegatedWorkflowReadySnapshot);
   const [activeTask, setActiveTask] =
     useState<DelegatedWorkflowTask>("LINKEDIN_PERSONAL");
   const [pendingAction, setPendingAction] =
@@ -187,12 +188,8 @@ export function InternalDelegatedWorkflowPanel({
     if (task === activeTask) return;
     try {
       setActiveTask(await bridge.selectDesktopTask(task));
-    } catch {
-      onError(
-        task === "VILLAGE_FIXTURE"
-          ? "Return control explicitly before reopening the Village demo setup."
-          : "The browser task could not be switched safely.",
-      );
+    } catch (error) {
+      onError(desktopTaskSelectionError(task, error));
     }
   };
 
