@@ -75,11 +75,96 @@ export const approvedRitualRevisionSchema = z.strictObject({
   approvedAt: instantSchema,
 });
 
+export const approvedRitualStoreSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  rituals: z.array(approvedRitualRevisionSchema).max(100),
+});
+
+export const ritualStewardContextSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  draftId: ritualDraftIdSchema,
+  requestRevision: z.number().int().positive(),
+  ownerPurpose: sentenceSchema,
+});
+
+const ritualStewardProposalFields = {
+  stewardMessage: sentenceSchema,
+  name: ritualDefinition.name,
+  purpose: ritualDefinition.purpose,
+  steps: ritualDefinition.steps,
+  permissions: ritualDefinition.permissions,
+  completion: ritualDefinition.completion,
+};
+
+export const ritualStewardProposalContentSchema = z.strictObject({
+  ...ritualStewardProposalFields,
+  steps: ritualDefinition.steps.max(6),
+});
+
+export const ritualStewardProposalContentJsonSchema = z.toJSONSchema(
+  ritualStewardProposalContentSchema,
+);
+
+export const ritualStewardProposalSchema = z.strictObject({
+  status: z.literal("proposal"),
+  draftId: ritualDraftIdSchema,
+  requestRevision: z.number().int().positive(),
+  ...ritualStewardProposalContentSchema.shape,
+});
+
+export const ritualStewardResultSchema = z.discriminatedUnion("status", [
+  ritualStewardProposalSchema,
+  z.strictObject({
+    status: z.literal("waiting"),
+    draftId: ritualDraftIdSchema,
+    requestRevision: z.number().int().positive(),
+    reason: z.enum([
+      "AUTHENTICATION_REQUIRED",
+      "PROVIDER_UNAVAILABLE",
+      "MALFORMED_PROVIDER_OUTPUT",
+      "TIME_BUDGET_EXHAUSTED",
+      "STALE_STEWARD_RESULT",
+    ]),
+  }),
+]);
+
 export type RitualDraft = z.infer<typeof ritualDraftSchema>;
 export type RitualApprovalRequest = z.infer<typeof ritualApprovalRequestSchema>;
 export type ApprovedRitualRevision = z.infer<
   typeof approvedRitualRevisionSchema
 >;
+export type ApprovedRitualStore = z.infer<typeof approvedRitualStoreSchema>;
+export type RitualStewardContext = z.infer<typeof ritualStewardContextSchema>;
+export type RitualStewardProposal = z.infer<typeof ritualStewardProposalSchema>;
+export type RitualStewardResult = z.infer<typeof ritualStewardResultSchema>;
+
+export function validateRitualStewardResult(
+  contextCandidate: unknown,
+  resultCandidate: unknown,
+): RitualStewardResult {
+  const context = ritualStewardContextSchema.parse(contextCandidate);
+  const result = ritualStewardResultSchema.safeParse(resultCandidate);
+  if (!result.success) {
+    return {
+      status: "waiting",
+      draftId: context.draftId,
+      requestRevision: context.requestRevision,
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    };
+  }
+  if (
+    result.data.draftId !== context.draftId ||
+    result.data.requestRevision !== context.requestRevision
+  ) {
+    return {
+      status: "waiting",
+      draftId: context.draftId,
+      requestRevision: context.requestRevision,
+      reason: "STALE_STEWARD_RESULT",
+    };
+  }
+  return result.data;
+}
 
 export type RitualApprovalErrorCode =
   "RITUAL_DRAFT_ID_MISMATCH" | "STALE_RITUAL_DRAFT";

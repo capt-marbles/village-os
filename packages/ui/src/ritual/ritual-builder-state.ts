@@ -2,19 +2,22 @@ import {
   approveRitualDraft,
   RitualApprovalError,
   ritualDraftSchema,
+  ritualStewardContextSchema,
   type ApprovedRitualRevision,
   type RitualDraft,
+  type RitualStewardProposal,
 } from "@village/contracts";
 
 export interface RitualBuilderMessage {
   id: string;
-  speaker: "OWNER" | "STEWARD";
+  speaker: "OWNER" | "STEWARD" | "SYSTEM";
   text: string;
 }
 
 interface RitualBuilderStateBase {
   messages: readonly RitualBuilderMessage[];
   error: string | null;
+  requestRevision: number;
 }
 
 export type RitualBuilderState =
@@ -24,9 +27,22 @@ export type RitualBuilderState =
       approved: null;
     })
   | (RitualBuilderStateBase & {
+      phase: "DRAFTING";
+      draft: null;
+      approved: null;
+      pendingDraftId: string;
+      pendingRequestRevision: number;
+    })
+  | (RitualBuilderStateBase & {
       phase: "CHOOSE_TRIGGER" | "CHOOSE_REVIEW" | "READY_FOR_APPROVAL";
       draft: RitualDraft;
       approved: null;
+    })
+  | (RitualBuilderStateBase & {
+      phase: "SAVING_APPROVAL";
+      draft: RitualDraft;
+      approved: null;
+      pendingApproval: ApprovedRitualRevision;
     })
   | (RitualBuilderStateBase & {
       phase: "APPROVED";
@@ -44,8 +60,16 @@ export type RitualBuilderEvent =
       type: "SUBMIT_PURPOSE";
       draftId: string;
       purpose: string;
+    }
+  | {
+      type: "STEWARD_PROPOSED";
+      proposal: RitualStewardProposal;
       occurredAt: string;
     }
+  | { type: "STEWARD_FAILED"; message: string }
+  | { type: "RESTORE_APPROVED"; approved: ApprovedRitualRevision }
+  | { type: "APPROVAL_SAVED" }
+  | { type: "APPROVAL_SAVE_FAILED" }
   | {
       type: "SELECT_TRIGGER";
       trigger: "ON_DEMAND" | "WEEKDAYS" | "EVENT";
@@ -96,11 +120,6 @@ function message(
   return [...messages, { id: `message-${messages.length + 1}`, speaker, text }];
 }
 
-function nameFromPurpose(purpose: string): string {
-  const firstClause = purpose.trim().split(/[.!?]/u)[0]?.trim() ?? "";
-  return (firstClause || "New Ritual").slice(0, 80);
-}
-
 function revise(
   draft: RitualDraft,
   occurredAt: string,
@@ -142,6 +161,7 @@ export function createRitualBuilderState(): RitualBuilderState {
       },
     ],
     error: null,
+    requestRevision: 0,
   };
 }
 
@@ -160,44 +180,67 @@ export function reduceRitualBuilder(
           error: "Keep the Ritual outcome to 320 characters or fewer.",
         };
       }
+      const requestRevision = state.requestRevision + 1;
+      if (
+        !ritualStewardContextSchema.safeParse({
+          schemaVersion: 1,
+          draftId: event.draftId,
+          requestRevision,
+          ownerPurpose: purpose,
+        }).success
+      ) {
+        return {
+          ...state,
+          error:
+            "The Ritual draft details are not valid. Review them and try again.",
+        };
+      }
+      let messages = message(state.messages, "OWNER", purpose);
+      messages = message(
+        messages,
+        "STEWARD",
+        "I’m shaping a concise Ritual draft from that outcome.",
+      );
+      return {
+        ...state,
+        phase: "DRAFTING",
+        pendingDraftId: event.draftId,
+        pendingRequestRevision: requestRevision,
+        requestRevision,
+        messages,
+        error: null,
+      };
+    }
+    case "STEWARD_PROPOSED": {
+      if (state.phase !== "DRAFTING") return state;
+      if (
+        event.proposal.draftId !== state.pendingDraftId ||
+        event.proposal.requestRevision !== state.pendingRequestRevision
+      ) {
+        const error = "The Steward returned an outdated draft. Try again.";
+        return {
+          phase: "DESCRIBE_PURPOSE",
+          draft: null,
+          approved: null,
+          messages: message(state.messages, "SYSTEM", error),
+          error,
+          requestRevision: state.requestRevision,
+        };
+      }
       const parsedDraft = ritualDraftSchema.safeParse({
         schemaVersion: 1,
-        draftId: event.draftId,
+        draftId: state.pendingDraftId,
         revision: 1,
         status: "DRAFT",
-        name: nameFromPurpose(purpose),
-        purpose,
+        name: event.proposal.name,
+        purpose: event.proposal.purpose,
         trigger: {
           kind: triggerCopy.ON_DEMAND.kind,
           summary: triggerCopy.ON_DEMAND.summary,
         },
-        steps: [
-          {
-            stepKey: "gather-current-work",
-            title: "Gather the current work",
-            description: "Collect only the information needed for this Ritual.",
-            actor: { kind: "STEWARD", role: "Steward" },
-            approval: "NONE",
-          },
-          {
-            stepKey: "prepare-reviewed-result",
-            title: "Prepare the result",
-            description:
-              "Organize the outcome and retain evidence for the Receipt.",
-            actor: { kind: "STEWARD", role: "Steward" },
-            approval: "NONE",
-          },
-          {
-            stepKey: "present-for-review",
-            title: "Present it for Review",
-            description:
-              "Show the result, uncertainty, and any proposed external effect.",
-            actor: { kind: "STEWARD", role: "Steward" },
-            approval: "OWNER_REQUIRED",
-          },
-        ],
-        permissions: ["Read only the sources connected to this Ritual"],
-        completion: "A reviewable result and Receipt are ready for the owner.",
+        steps: event.proposal.steps,
+        permissions: event.proposal.permissions,
+        completion: event.proposal.completion,
         reviewPolicy: {
           ownerReview: "EVERY_RUN",
           learning: "PROPOSE_ONLY",
@@ -205,25 +248,99 @@ export function reduceRitualBuilder(
         updatedAt: event.occurredAt,
       });
       if (!parsedDraft.success) {
+        const error =
+          "The Ritual draft details are not valid. Review them and try again.";
         return {
-          ...state,
-          error:
-            "The Ritual draft details are not valid. Review them and try again.",
+          phase: "DESCRIBE_PURPOSE",
+          draft: null,
+          approved: null,
+          messages: message(state.messages, "SYSTEM", error),
+          error,
+          requestRevision: state.requestRevision,
         };
       }
       const draft = parsedDraft.data;
-      let messages = message(state.messages, "OWNER", purpose);
-      messages = message(
-        messages,
-        "STEWARD",
-        "I have started the draft. When should this Ritual begin?",
-      );
       return {
         ...state,
         phase: "CHOOSE_TRIGGER",
         draft,
-        messages,
+        messages: message(
+          state.messages,
+          "STEWARD",
+          event.proposal.stewardMessage,
+        ),
         error: null,
+      };
+    }
+    case "STEWARD_FAILED": {
+      if (state.phase !== "DRAFTING") return state;
+      return {
+        phase: "DESCRIBE_PURPOSE",
+        draft: null,
+        approved: null,
+        messages: message(state.messages, "SYSTEM", event.message),
+        error: event.message,
+        requestRevision: state.requestRevision,
+      };
+    }
+    case "RESTORE_APPROVED": {
+      if (state.phase !== "DESCRIBE_PURPOSE") return state;
+      const approved = event.approved;
+      const draft = ritualDraftSchema.parse({
+        schemaVersion: 1,
+        draftId: approved.approvedDraftId,
+        revision: approved.approvedDraftRevision,
+        status: "DRAFT",
+        name: approved.name,
+        purpose: approved.purpose,
+        trigger: approved.trigger,
+        steps: approved.steps,
+        permissions: approved.permissions,
+        completion: approved.completion,
+        reviewPolicy: approved.reviewPolicy,
+        updatedAt: approved.approvedAt,
+      });
+      return {
+        phase: "APPROVED",
+        draft,
+        approved,
+        messages: message(
+          state.messages,
+          "SYSTEM",
+          `Restored the approved ${approved.name} Ritual. No Run has started.`,
+        ),
+        error: null,
+        requestRevision: state.requestRevision,
+      };
+    }
+    case "APPROVAL_SAVE_FAILED": {
+      if (state.phase !== "SAVING_APPROVAL") return state;
+      return {
+        phase: "READY_FOR_APPROVAL",
+        draft: state.draft,
+        approved: null,
+        messages: message(
+          state.messages,
+          "SYSTEM",
+          "The approval could not be saved locally. Nothing ran; review the draft and try again.",
+        ),
+        error: null,
+        requestRevision: state.requestRevision,
+      };
+    }
+    case "APPROVAL_SAVED": {
+      if (state.phase !== "SAVING_APPROVAL") return state;
+      return {
+        phase: "APPROVED",
+        draft: state.draft,
+        approved: state.pendingApproval,
+        messages: message(
+          state.messages,
+          "SYSTEM",
+          "Ritual approved and saved. No Run has started; the Steward can plan a safe first test Run when you are ready.",
+        ),
+        error: null,
+        requestRevision: state.requestRevision,
       };
     }
     case "SELECT_TRIGGER": {
@@ -245,7 +362,7 @@ export function reduceRitualBuilder(
       let messages = message(state.messages, "OWNER", selected.ownerMessage);
       messages = message(
         messages,
-        "STEWARD",
+        "SYSTEM",
         "How closely should I involve you when a Run finishes?",
       );
       return {
@@ -277,7 +394,7 @@ export function reduceRitualBuilder(
       );
       messages = message(
         messages,
-        "STEWARD",
+        "SYSTEM",
         "The Ritual is ready to inspect. You can change the supported fields directly in the draft. Nothing runs until you approve it.",
       );
       return {
@@ -318,8 +435,8 @@ export function reduceRitualBuilder(
         draft,
         messages: message(
           state.messages,
-          "STEWARD",
-          `I updated the ${event.field}. The draft is now revision ${draft.revision}.`,
+          "SYSTEM",
+          `Updated the ${event.field}. The draft is now revision ${draft.revision}.`,
         ),
         error: null,
       };
@@ -336,12 +453,13 @@ export function reduceRitualBuilder(
         });
         return {
           ...state,
-          phase: "APPROVED",
-          approved,
+          phase: "SAVING_APPROVAL",
+          approved: null,
+          pendingApproval: approved,
           messages: message(
             state.messages,
-            "STEWARD",
-            "Ritual approved. No Run has started; when you are ready, I can plan a safe first test Run.",
+            "SYSTEM",
+            "Approval received. I’m saving the exact Ritual revision locally; no Run has started.",
           ),
           error: null,
         };

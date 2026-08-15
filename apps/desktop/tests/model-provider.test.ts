@@ -67,7 +67,7 @@ describe("model provider boundary", () => {
         throw new Error(`unexpected method ${method}`);
       },
       notify: () => undefined,
-      runBrowserActionTurn: async (_threadId, turnContext) => {
+      runToolTurn: async (_threadId, turnContext) => {
         turns.push(turnContext);
         return { capability: "SELECT_ROLE" };
       },
@@ -135,7 +135,7 @@ describe("model provider boundary", () => {
         throw new Error(`unexpected method ${method}`);
       },
       notify: () => undefined,
-      runBrowserActionTurn: async (_threadId, _context, options) => {
+      runToolTurn: async (_threadId, _context, options) => {
         turn += 1;
         if (turn === 1) return { capability: "FINALIZE_SETUP" };
         if (turn === 2) throw new Error("CODEX_APP_SERVER_TURN_INCOMPLETE");
@@ -192,7 +192,7 @@ describe("model provider boundary", () => {
         throw new Error(`unexpected method ${method}`);
       },
       notify: () => undefined,
-      runBrowserActionTurn: async () => ({ capability: "SELECT_ROLE" }),
+      runToolTurn: async () => ({ capability: "SELECT_ROLE" }),
       close: async () => undefined,
     });
     const context = createSanitizedSetupModelContext(setupContextInput);
@@ -255,7 +255,7 @@ describe("model provider boundary", () => {
         throw new Error(`unexpected method ${method}`);
       },
       notify: () => undefined,
-      runBrowserActionTurn: async () => {
+      runToolTurn: async () => {
         await turn;
         return { capability: "OBSERVE", facts: ["AUTH_STATE"] };
       },
@@ -333,7 +333,7 @@ describe("model provider boundary", () => {
         throw new Error(`unexpected method ${method}`);
       },
       notify: () => undefined,
-      runBrowserActionTurn: async () => ({
+      runToolTurn: async () => ({
         capability: "OBSERVE",
         facts: ["AUTH_STATE"],
       }),
@@ -391,11 +391,7 @@ describe("model provider boundary", () => {
       once: () => undefined,
     }));
 
-    const result = transport.runBrowserActionTurn(
-      "thread-1",
-      { safe: "context" },
-      500,
-    );
+    const result = transport.runToolTurn("thread-1", { safe: "context" }, 500);
     await new Promise((resolve) => setTimeout(resolve, 0));
     const turnRequest = JSON.parse(writes[0] ?? "{}") as { id: number };
     expect(JSON.parse(writes[0] ?? "{}").params.input[0]).toEqual({
@@ -492,7 +488,7 @@ describe("model provider boundary", () => {
           throw new Error(`unexpected method ${method}`);
         },
         notify: () => undefined,
-        runBrowserActionTurn: async () => ({
+        runToolTurn: async () => ({
           capability: "OBSERVE",
           facts: ["AUTH_STATE"],
         }),
@@ -531,7 +527,7 @@ describe("model provider boundary", () => {
       }),
       50,
     );
-    const turn = transport.runBrowserActionTurn("thread-timeout", {}, 5);
+    const turn = transport.runToolTurn("thread-timeout", {}, 5);
     await new Promise((resolve) => setTimeout(resolve, 0));
     const request = JSON.parse(writes[0] ?? "{}") as { id: number };
     stdout.write(
@@ -563,7 +559,7 @@ describe("model provider boundary", () => {
       once: () => undefined,
     }));
     const controller = new AbortController();
-    const turn = transport.runBrowserActionTurn(
+    const turn = transport.runToolTurn(
       "thread-cancelled",
       { safe: "context" },
       {
@@ -656,7 +652,7 @@ describe("model provider boundary", () => {
         throw new Error(`unexpected method ${method}`);
       },
       notify: () => undefined,
-      runBrowserActionTurn: async () => ({
+      runToolTurn: async () => ({
         capability: "OBSERVE",
         facts: ["AUTH_STATE"],
       }),

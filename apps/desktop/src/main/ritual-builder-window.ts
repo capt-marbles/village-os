@@ -1,12 +1,22 @@
-import { BaseWindow, WebContentsView, type WebContents } from "electron";
-import { trustedWebPreferences } from "./security.js";
+import {
+  BaseWindow,
+  ipcMain,
+  type IpcMainInvokeEvent,
+  WebContentsView,
+  type WebContents,
+} from "electron";
+import { isTrustedVillageSender, trustedWebPreferences } from "./security.js";
+import type { RitualBuilderController } from "./ritual-builder-controller.js";
 
 export interface RitualBuilderWindow {
   window: BaseWindow;
   trustedRenderer: WebContents;
 }
 
-export async function createRitualBuilderWindow(): Promise<RitualBuilderWindow> {
+export async function createRitualBuilderWindow(options: {
+  preloadPath: string;
+  controller: RitualBuilderController;
+}): Promise<RitualBuilderWindow> {
   const window = new BaseWindow({
     width: 1_280,
     height: 800,
@@ -17,8 +27,9 @@ export async function createRitualBuilderWindow(): Promise<RitualBuilderWindow> 
     fullscreenable: false,
   });
   const appView = new WebContentsView({
-    webPreferences: trustedWebPreferences(),
+    webPreferences: trustedWebPreferences(options.preloadPath),
   });
+  let closed = false;
   window.contentView.addChildView(appView);
   let disposed = false;
   const disposeView = () => {
@@ -33,14 +44,59 @@ export async function createRitualBuilderWindow(): Promise<RitualBuilderWindow> 
   };
   window.on("resize", layout);
   layout();
-  window.on("close", disposeView);
+  const identity = {
+    draftId: villageId("rtd"),
+    ritualId: villageId("rtl"),
+  };
+  const initializeChannel = "village:ritual-builder:initialize";
+  const draftChannel = "village:ritual-builder:draft";
+  const approveChannel = "village:ritual-builder:approve";
+  const assertSender = (event: IpcMainInvokeEvent) => {
+    if (
+      event.sender !== appView.webContents ||
+      !isTrustedVillageSender(event.sender)
+    ) {
+      throw new Error("UNTRUSTED_RITUAL_BUILDER_SENDER");
+    }
+  };
+  ipcMain.handle(initializeChannel, async (event) => {
+    assertSender(event);
+    return { identity, approved: await options.controller.loadLatest() };
+  });
+  ipcMain.handle(draftChannel, async (event, candidate) => {
+    assertSender(event);
+    return options.controller.draft(candidate);
+  });
+  ipcMain.handle(approveChannel, async (event, candidate) => {
+    assertSender(event);
+    return options.controller.approve(candidate);
+  });
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    ipcMain.removeHandler(initializeChannel);
+    ipcMain.removeHandler(draftChannel);
+    ipcMain.removeHandler(approveChannel);
+    void options.controller.close();
+    disposeView();
+  };
+  window.on("close", cleanup);
   try {
     await appView.webContents.loadURL("village://app/?mode=ritual-builder");
   } catch (error) {
-    disposeView();
+    cleanup();
     window.destroy();
     throw error;
   }
   window.show();
   return { window, trustedRenderer: appView.webContents };
+}
+
+const villageIdAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+function villageId(prefix: "rtd" | "rtl"): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(26));
+  return `${prefix}_${[...bytes]
+    .map((byte) => villageIdAlphabet[byte & 31])
+    .join("")}`;
 }

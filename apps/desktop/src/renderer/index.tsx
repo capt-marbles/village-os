@@ -2,7 +2,7 @@ import { createRoot } from "react-dom/client";
 import type { BrowserUiSnapshot } from "@village/ui";
 import { DesktopBrowserPane } from "./DesktopBrowserPane.js";
 import { PairingBootstrap } from "./PairingBootstrap.js";
-import { RitualBuilderPrototype } from "./RitualBuilderPrototype.js";
+import { RitualBuilderWorkspace } from "./RitualBuilderWorkspace.js";
 import { resolveDesktopRendererMode } from "./renderer-mode.js";
 
 const initialSnapshot: BrowserUiSnapshot = {
@@ -31,7 +31,7 @@ createRoot(root).render(
   rendererMode === "PAIRING" ? (
     <PairingBootstrap />
   ) : rendererMode === "RITUAL_BUILDER" ? (
-    <RitualBuilderPrototype />
+    <RitualBuilderWorkspace />
   ) : (
     <DesktopBrowserPane initialSnapshot={initialSnapshot} />
   ),

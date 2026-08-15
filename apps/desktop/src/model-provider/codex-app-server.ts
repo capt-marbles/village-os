@@ -82,13 +82,16 @@ export interface AppServerTurnOptions {
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
   readonly onTurnStarted?: () => void;
-  readonly toolName?: "village_browser_action" | "village_setup_action";
+  readonly toolName?: AppServerToolName;
 }
+
+export type AppServerToolName =
+  "village_browser_action" | "village_setup_action" | "village_ritual_draft";
 
 export interface AppServerTransport {
   request(method: string, params: unknown): Promise<unknown>;
   notify(method: string, params?: unknown): void;
-  runBrowserActionTurn(
+  runToolTurn(
     threadId: string,
     context: unknown,
     options?: number | AppServerTurnOptions,
@@ -113,7 +116,7 @@ interface AppServerProcess {
 
 type PendingTurn = {
   threadId: string;
-  toolName: "village_browser_action" | "village_setup_action";
+  toolName: AppServerToolName;
   candidate: unknown;
   multipleCandidates: boolean;
   resolve(value: unknown): void;
@@ -189,7 +192,7 @@ export class CodexStdioTransport implements AppServerTransport {
     this.write({ jsonrpc: "2.0", method, params });
   }
 
-  async runBrowserActionTurn(
+  async runToolTurn(
     threadId: string,
     context: unknown,
     options: number | AppServerTurnOptions = {},
@@ -565,7 +568,7 @@ export class CodexAppServerProvider implements ModelProvider {
       if (!this.setupThreadId) {
         return boundSetupWaiting(context, "PROVIDER_UNAVAILABLE");
       }
-      const candidate = await this.startedTransport().runBrowserActionTurn(
+      const candidate = await this.startedTransport().runToolTurn(
         this.setupThreadId,
         createSanitizedSetupProviderPrompt(context),
         {
@@ -694,7 +697,7 @@ export class CodexAppServerProvider implements ModelProvider {
         }
         this.threadId = created.thread.id;
       }
-      const candidate = await this.startedTransport().runBrowserActionTurn(
+      const candidate = await this.startedTransport().runToolTurn(
         this.threadId,
         sanitizedModelContextSchema.parse(context),
       );

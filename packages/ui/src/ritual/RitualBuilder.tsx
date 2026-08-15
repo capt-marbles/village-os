@@ -25,7 +25,6 @@ export function RitualBuilder({
       type: "SUBMIT_PURPOSE",
       draftId: identity.draftId,
       purpose: String(data.get("purpose") ?? ""),
-      occurredAt: now(),
     });
   };
   const edit = (field: "name" | "purpose" | "completion", value: string) =>
@@ -52,7 +51,13 @@ export function RitualBuilder({
               className={`ritual-message ritual-message--${entry.speaker.toLowerCase()}`}
               key={entry.id}
             >
-              <span>{entry.speaker === "STEWARD" ? "Steward" : "You"}</span>
+              <span>
+                {entry.speaker === "STEWARD"
+                  ? "Steward"
+                  : entry.speaker === "SYSTEM"
+                    ? "Village"
+                    : "You"}
+              </span>
               <p>{entry.text}</p>
             </li>
           ))}
@@ -71,6 +76,13 @@ export function RitualBuilder({
             />
             <button type="submit">Start the draft</button>
           </form>
+        ) : null}
+
+        {state.phase === "DRAFTING" ? (
+          <div className="ritual-drafting" role="status">
+            <span aria-hidden="true" />
+            <p>The Steward is shaping your first reviewable draft…</p>
+          </div>
         ) : null}
 
         {state.phase === "CHOOSE_TRIGGER" ? (
@@ -172,7 +184,9 @@ export function RitualBuilder({
               label="Name"
               value={state.draft.name}
               maxLength={80}
-              disabled={state.phase === "APPROVED"}
+              disabled={
+                state.phase === "APPROVED" || state.phase === "SAVING_APPROVAL"
+              }
               onCommit={(value) => edit("name", value)}
             />
 
@@ -182,7 +196,9 @@ export function RitualBuilder({
               value={state.draft.purpose}
               maxLength={320}
               rows={3}
-              disabled={state.phase === "APPROVED"}
+              disabled={
+                state.phase === "APPROVED" || state.phase === "SAVING_APPROVAL"
+              }
               onCommit={(value) => edit("purpose", value)}
             />
 
@@ -220,7 +236,9 @@ export function RitualBuilder({
               value={state.draft.completion}
               maxLength={320}
               rows={2}
-              disabled={state.phase === "APPROVED"}
+              disabled={
+                state.phase === "APPROVED" || state.phase === "SAVING_APPROVAL"
+              }
               onCommit={(value) => edit("completion", value)}
             />
 
@@ -271,6 +289,13 @@ export function RitualBuilder({
                 >
                   Approve Ritual
                 </button>
+              </div>
+            ) : null}
+
+            {state.phase === "SAVING_APPROVAL" ? (
+              <div className="ritual-approved" role="status">
+                <strong>Saving approval…</strong>
+                <p>No Run has started.</p>
               </div>
             ) : null}
 

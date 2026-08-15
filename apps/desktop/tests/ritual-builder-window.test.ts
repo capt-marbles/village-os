@@ -19,6 +19,7 @@ const electron = vi.hoisted(() => ({
     };
   }>,
   loadError: null as Error | null,
+  handlers: new Map<string, (...arguments_: any[]) => unknown>(),
 }));
 
 vi.mock("electron", () => {
@@ -46,6 +47,7 @@ vi.mock("electron", () => {
     readonly webContents = {
       close: vi.fn(),
       isDestroyed: vi.fn(() => false),
+      getURL: vi.fn(() => "village://app/?mode=ritual-builder"),
       loadURL: vi.fn(async () => {
         if (electron.loadError) throw electron.loadError;
       }),
@@ -55,20 +57,41 @@ vi.mock("electron", () => {
     }
   }
 
-  return { BaseWindow, WebContentsView };
+  return {
+    BaseWindow,
+    WebContentsView,
+    ipcMain: {
+      handle: vi.fn((channel, handler) =>
+        electron.handlers.set(channel, handler),
+      ),
+      removeHandler: vi.fn((channel) => electron.handlers.delete(channel)),
+    },
+  };
 });
 
 import { createRitualBuilderWindow } from "../src/main/ritual-builder-window.js";
 
 describe("Ritual Builder window", () => {
+  const controller = {
+    loadLatest: vi.fn(async () => null),
+    draft: vi.fn(async () => ({ status: "waiting" })),
+    approve: vi.fn(async (ritual) => ritual),
+    close: vi.fn(async () => undefined),
+  };
+
   beforeEach(() => {
     electron.windows.length = 0;
     electron.views.length = 0;
     electron.loadError = null;
+    electron.handlers.clear();
+    vi.clearAllMocks();
   });
 
   it("shows after load and disposes the child view exactly once", async () => {
-    await createRitualBuilderWindow();
+    await createRitualBuilderWindow({
+      preloadPath: "/app/ritual-builder-bridge.cjs",
+      controller,
+    });
     const window = electron.windows[0]!;
     const view = electron.views[0]!;
 
@@ -80,13 +103,17 @@ describe("Ritual Builder window", () => {
     window.listeners.get("close")?.();
     expect(window.contentView.removeChildView).toHaveBeenCalledOnce();
     expect(view.webContents.close).toHaveBeenCalledOnce();
+    expect(controller.close).toHaveBeenCalledOnce();
   });
 
   it("disposes and destroys the window when loading fails", async () => {
     electron.loadError = new Error("renderer failed");
-    await expect(createRitualBuilderWindow()).rejects.toThrow(
-      "renderer failed",
-    );
+    await expect(
+      createRitualBuilderWindow({
+        preloadPath: "/app/ritual-builder-bridge.cjs",
+        controller,
+      }),
+    ).rejects.toThrow("renderer failed");
     const window = electron.windows[0]!;
     const view = electron.views[0]!;
 
@@ -94,5 +121,29 @@ describe("Ritual Builder window", () => {
     expect(view.webContents.close).toHaveBeenCalledOnce();
     expect(window.destroy).toHaveBeenCalledOnce();
     expect(window.show).not.toHaveBeenCalled();
+  });
+
+  it("routes only exact local-renderer IPC to the controller", async () => {
+    await createRitualBuilderWindow({
+      preloadPath: "/app/ritual-builder-bridge.cjs",
+      controller,
+    });
+    const view = electron.views[0]!;
+    const event = { sender: view.webContents };
+    const initialize = electron.handlers.get(
+      "village:ritual-builder:initialize",
+    )!;
+    const draft = electron.handlers.get("village:ritual-builder:draft")!;
+    const approve = electron.handlers.get("village:ritual-builder:approve")!;
+
+    await initialize(event);
+    await draft(event, { request: "bounded" });
+    await approve(event, { approval: "bounded" });
+    expect(controller.loadLatest).toHaveBeenCalledOnce();
+    expect(controller.draft).toHaveBeenCalledWith({ request: "bounded" });
+    expect(controller.approve).toHaveBeenCalledWith({ approval: "bounded" });
+    await expect(initialize({ sender: {} })).rejects.toThrow(
+      "UNTRUSTED_RITUAL_BUILDER_SENDER",
+    );
   });
 });

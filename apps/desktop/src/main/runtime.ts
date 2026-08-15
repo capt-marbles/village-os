@@ -38,6 +38,10 @@ import {
   createRitualBuilderWindow,
   type RitualBuilderWindow,
 } from "./ritual-builder-window.js";
+import { RitualRepository } from "./ritual-repository.js";
+import { RitualBuilderController } from "./ritual-builder-controller.js";
+import { CodexStdioTransport } from "../model-provider/codex-app-server.js";
+import { CodexRitualStewardProvider } from "../model-provider/ritual-steward.js";
 
 registerVillageScheme(protocol);
 installGlobalSecurityPolicy(app);
@@ -182,5 +186,18 @@ export async function runRitualBuilderApplication(): Promise<RitualBuilderWindow
     fileURLToPath(new URL("../renderer", import.meta.url)),
   );
   app.on("window-all-closed", () => app.quit());
-  return createRitualBuilderWindow();
+  return createRitualBuilderWindow({
+    preloadPath: join(
+      app.getAppPath(),
+      "dist",
+      "preload",
+      "ritual-builder-bridge.cjs",
+    ),
+    controller: new RitualBuilderController(
+      new CodexRitualStewardProvider(() => new CodexStdioTransport()),
+      new RitualRepository(
+        join(app.getPath("userData"), "rituals", "approved.json"),
+      ),
+    ),
+  });
 }
