@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  canonicalContinuityActivationRequestBytes,
   canonicalContinuityAcknowledgementBytes,
   canonicalContinuityFetchBytes,
   canonicalContinuityRecipientKeyEnrollmentBytes,
   canonicalContinuityRevisionBytes,
   continuityAcknowledgementEnvelopeSchema,
+  continuityActivationRequestSchema,
+  continuityActivationResponseSchema,
   continuityFetchEnvelopeSchema,
   continuityGrantRequestSchema,
   continuityRecipientKeyEnrollmentSchema,
@@ -204,6 +207,55 @@ describe("Site Session continuity wire contracts", () => {
         browserSessionId: binding.destinationBrowserSessionId,
         site: binding.site,
         allDevices: true,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("returns only role-scoped public activation material to a signed device", () => {
+    const request = continuityActivationRequestSchema.parse({
+      protocolVersion: 1,
+      principalId: binding.principalId,
+      deviceId: binding.sourceDeviceId,
+      browserSessionId: binding.sourceBrowserSessionId,
+      site: binding.site,
+      sequence: 3,
+      issuedAt: "2026-08-15T19:00:00.000Z",
+      expiresAt: "2026-08-15T19:00:30.000Z",
+      signature: "j".repeat(86),
+    });
+    const activation = continuityActivationResponseSchema.parse({
+      ok: true,
+      activations: [
+        {
+          role: "SOURCE",
+          binding,
+          peerSigningPublicKey: {
+            kty: "OKP",
+            crv: "Ed25519",
+            x: "k".repeat(43),
+          },
+          destinationEncryptionPublicKey: {
+            kty: "OKP",
+            crv: "X25519",
+            x: "h".repeat(43),
+          },
+        },
+      ],
+    });
+
+    expect(
+      Buffer.from(canonicalContinuityActivationRequestBytes(request)).length,
+    ).toBeGreaterThan(0);
+    expect(JSON.stringify(activation)).not.toContain("privateKey");
+    expect(
+      continuityActivationResponseSchema.safeParse({
+        ...activation,
+        activations: [
+          {
+            ...activation.activations[0],
+            binding: { ...binding, site: "LINKEDIN" },
+          },
+        ],
       }).success,
     ).toBe(false);
   });

@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { SELF, applyD1Migrations } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  canonicalContinuityActivationRequestBytes,
   canonicalContinuityAcknowledgementBytes,
   canonicalContinuityFetchBytes,
   canonicalContinuityRecipientKeyEnrollmentBytes,
@@ -13,6 +14,7 @@ import {
 const principalId = "prn_01J00000000000000000000000";
 const otherPrincipalId = "prn_01J00000000000000000000009";
 const grantId = "cgr_01J00000000000000000000000";
+const activationGrantId = "cgr_01J00000000000000000000008";
 const sourceDeviceId = "dev_01J00000000000000000000001";
 const destinationDeviceId = "dev_01J00000000000000000000002";
 const sourceBrowserSessionId = "brs_01J00000000000000000000001";
@@ -39,6 +41,9 @@ beforeEach(async () => {
   await env.VILLAGE_DB.batch([
     env.VILLAGE_DB.prepare(
       "DELETE FROM continuity_grants WHERE principal_id = ?",
+    ).bind(principalId),
+    env.VILLAGE_DB.prepare(
+      "DELETE FROM continuity_recipient_keys WHERE principal_id = ?",
     ).bind(principalId),
     env.VILLAGE_DB.prepare(
       "DELETE FROM browser_sessions WHERE principal_id = ?",
@@ -69,6 +74,67 @@ beforeEach(async () => {
 });
 
 describe("Site Session continuity routes", () => {
+  it("returns active grant material only to its signed source and destination", async () => {
+    expect((await enrollDestinationKey()).status).toBe(201);
+    expect((await createGrant(activationGrantId)).status).toBe(201);
+
+    const sourceActivation = await activationPost(
+      await signedActivation(
+        sourceDeviceId,
+        sourceBrowserSessionId,
+        sourceKeys.privateKey,
+      ),
+    );
+    expect(sourceActivation.status).toBe(200);
+    await expect(sourceActivation.json()).resolves.toMatchObject({
+      ok: true,
+      activations: [
+        {
+          role: "SOURCE",
+          binding: bindingFor(activationGrantId),
+          destinationEncryptionPublicKey: {
+            kty: "OKP",
+            crv: "X25519",
+            x: "a".repeat(43),
+          },
+        },
+      ],
+    });
+
+    const destinationActivation = await activationPost(
+      await signedActivation(
+        destinationDeviceId,
+        destinationBrowserSessionId,
+        destinationKeys.privateKey,
+      ),
+    );
+    expect(destinationActivation.status).toBe(200);
+    const destinationBody = await destinationActivation.json();
+    expect(destinationBody).toMatchObject({
+      ok: true,
+      activations: [
+        {
+          role: "DESTINATION",
+          binding: bindingFor(activationGrantId),
+        },
+      ],
+    });
+    expect(JSON.stringify(destinationBody)).not.toContain(
+      "destinationEncryptionPublicKey",
+    );
+    expect(
+      (
+        await activationPost(
+          await signedActivation(
+            sourceDeviceId,
+            sourceBrowserSessionId,
+            sourceKeys.privateKey,
+          ),
+        )
+      ).status,
+    ).toBe(409);
+  });
+
   it("moves only signed ciphertext between an owner's paired Macs and keeps a deletion tombstone", async () => {
     const beforeEnrollment = await createGrant();
     expect(beforeEnrollment.status).toBe(409);
@@ -663,6 +729,46 @@ function devicePost(
   return SELF.fetch(
     new Request(
       `https://village.test/api/site-session-continuity/grants/${requestedGrantId}/${operation}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    ),
+  );
+}
+
+async function signedActivation(
+  deviceId: string,
+  browserSessionId: string,
+  privateKey: CryptoKey,
+) {
+  const unsigned = {
+    protocolVersion: 1 as const,
+    principalId,
+    deviceId,
+    browserSessionId,
+    site: "OWNED_FIXTURE" as const,
+    sequence: 1,
+    issuedAt,
+    expiresAt: requestExpiresAt,
+  };
+  return {
+    ...unsigned,
+    signature: Buffer.from(
+      await crypto.subtle.sign(
+        "Ed25519",
+        privateKey,
+        canonicalContinuityActivationRequestBytes(unsigned),
+      ),
+    ).toString("base64url"),
+  };
+}
+
+function activationPost(body: unknown) {
+  return SELF.fetch(
+    new Request(
+      "https://village.test/api/site-session-continuity/activations",
       {
         method: "POST",
         headers: { "content-type": "application/json" },

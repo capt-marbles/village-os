@@ -6,6 +6,7 @@ import {
   instantSchema,
   principalIdSchema,
 } from "./ids.js";
+import { deviceCredentialSchema } from "./hosts.js";
 
 export const continuityBindingSchema = z.strictObject({
   principalId: principalIdSchema,
@@ -202,6 +203,56 @@ export const continuityRecipientKeyEnrollmentSchema =
     signature: z.string().regex(/^[A-Za-z0-9_-]{86}$/),
   });
 
+const unsignedContinuityActivationRequestSchema = z
+  .strictObject({
+    protocolVersion: z.literal(1),
+    principalId: principalIdSchema,
+    deviceId: deviceIdSchema,
+    browserSessionId: browserSessionIdSchema,
+    site: z.literal("OWNED_FIXTURE"),
+    sequence: z.number().int().positive(),
+    issuedAt: instantSchema,
+    expiresAt: instantSchema,
+  })
+  .superRefine((request, context) => {
+    const lifetime =
+      Date.parse(request.expiresAt) - Date.parse(request.issuedAt);
+    if (lifetime <= 0 || lifetime > 60_000) {
+      context.addIssue({
+        code: "custom",
+        path: ["expiresAt"],
+        message: "Activation request lifetime must be between 1ms and 60s",
+      });
+    }
+  });
+
+export const continuityActivationRequestSchema =
+  unsignedContinuityActivationRequestSchema.safeExtend({
+    signature: z.string().regex(/^[A-Za-z0-9_-]{86}$/),
+  });
+
+const continuityActivationBase = {
+  binding: continuityBindingSchema,
+  peerSigningPublicKey: deviceCredentialSchema.shape.publicKey,
+};
+
+export const continuityActivationSchema = z.discriminatedUnion("role", [
+  z.strictObject({
+    role: z.literal("SOURCE"),
+    ...continuityActivationBase,
+    destinationEncryptionPublicKey: x25519PublicKeySchema,
+  }),
+  z.strictObject({
+    role: z.literal("DESTINATION"),
+    ...continuityActivationBase,
+  }),
+]);
+
+export const continuityActivationResponseSchema = z.strictObject({
+  ok: z.literal(true),
+  activations: z.array(continuityActivationSchema).max(20),
+});
+
 export type ContinuityBinding = z.infer<typeof continuityBindingSchema>;
 export type EncryptedContinuityRevision = z.infer<
   typeof encryptedContinuityRevisionSchema
@@ -218,6 +269,7 @@ export type UnsignedContinuityRevision = z.infer<
 export type ContinuityRecipientKeyEnrollment = z.infer<
   typeof continuityRecipientKeyEnrollmentSchema
 >;
+export type ContinuityActivation = z.infer<typeof continuityActivationSchema>;
 
 function canonicalBytes(values: readonly unknown[]): ArrayBuffer {
   const bytes = new TextEncoder().encode(JSON.stringify(values));
@@ -320,5 +372,20 @@ export function canonicalContinuityRecipientKeyEnrollmentBytes(
     enrollment.issuedAt,
     enrollment.expiresAt,
     enrollment.encryptionPublicKey,
+  ]);
+}
+
+export function canonicalContinuityActivationRequestBytes(
+  request: Omit<z.infer<typeof continuityActivationRequestSchema>, "signature">,
+): ArrayBuffer {
+  return canonicalBytes([
+    request.protocolVersion,
+    request.principalId,
+    request.deviceId,
+    request.browserSessionId,
+    request.site,
+    request.sequence,
+    request.issuedAt,
+    request.expiresAt,
   ]);
 }
