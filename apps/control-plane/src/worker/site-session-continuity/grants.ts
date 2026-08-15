@@ -232,6 +232,76 @@ export async function createContinuityGrant(
   };
 }
 
+export async function getContinuitySetup(
+  environment: Environment,
+  principalIdCandidate: unknown,
+  now: string,
+) {
+  const principalId = principalIdSchema.safeParse(principalIdCandidate);
+  if (!principalId.success) {
+    return { ok: false as const, code: "INVALID_PRINCIPAL" };
+  }
+  const [sessions, grants] = await Promise.all([
+    environment.VILLAGE_DB.prepare(
+      `SELECT s.device_id AS deviceId,
+              s.browser_session_id AS browserSessionId,
+              COALESCE(
+                (SELECT p.device_display_name FROM pairing_challenges p
+                 WHERE p.principal_id = s.principal_id
+                   AND p.device_id = s.device_id AND p.state = 'CONSUMED'
+                 ORDER BY p.consumed_at DESC LIMIT 1),
+                'Paired Mac'
+              ) AS deviceName,
+              s.connection_state AS connection,
+              CASE
+                WHEN r.encryption_public_key IS NULL THEN 'MISSING'
+                WHEN r.device_signing_public_key = d.public_key THEN 'READY'
+                ELSE 'STALE'
+              END AS recipientKeyState
+       FROM browser_sessions s
+       JOIN devices d ON d.principal_id = s.principal_id
+                     AND d.device_id = s.device_id
+       LEFT JOIN continuity_recipient_keys r
+         ON r.principal_id = s.principal_id
+        AND r.device_id = s.device_id
+        AND r.browser_session_id = s.browser_session_id
+        AND r.site = s.site
+       WHERE s.principal_id = ? AND s.site = 'OWNED_FIXTURE'
+         AND s.profile_state = 'PRESENT' AND d.credential_status = 'ACTIVE'
+         AND d.protocol_version = 1
+       ORDER BY deviceName, browserSessionId
+       LIMIT 50`,
+    )
+      .bind(principalId.data)
+      .all(),
+    environment.VILLAGE_DB.prepare(
+      `SELECT grant_id AS grantId, source_device_id AS sourceDeviceId,
+              destination_device_id AS destinationDeviceId,
+              source_browser_session_id AS sourceBrowserSessionId,
+              destination_browser_session_id AS destinationBrowserSessionId,
+              site,
+              CASE
+                WHEN state IN ('PENDING', 'ACTIVE') AND expires_at <= ?
+                  THEN 'EXPIRED'
+                ELSE state
+              END AS state,
+              created_at AS createdAt, expires_at AS expiresAt
+       FROM continuity_grants
+       WHERE principal_id = ?
+         AND state IN ('PENDING', 'ACTIVE', 'REVOKED', 'EXPIRED')
+       ORDER BY created_at DESC, grant_id
+       LIMIT 100`,
+    )
+      .bind(now, principalId.data)
+      .all(),
+  ]);
+  return {
+    ok: true as const,
+    sessions: sessions.results,
+    grants: grants.results,
+  };
+}
+
 export async function enrollContinuityRecipientKey(
   environment: Environment,
   candidate: unknown,
@@ -675,9 +745,6 @@ function publicGrant(row: GrantRow) {
     destinationBrowserSessionId: row.destination_browser_session_id,
     site: row.site,
     state: row.state,
-    destinationEncryptionPublicKey: row.destination_encryption_public_key
-      ? JSON.parse(row.destination_encryption_public_key)
-      : null,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
   };

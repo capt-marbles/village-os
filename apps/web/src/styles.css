@@ -2,6 +2,11 @@
   color: #ebf2ed;
   background: #101713;
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  --village-surface: #131a15;
+  --village-surface-raised: #182019;
+  --village-border: #334038;
+  --village-muted: #b8c2b9;
+  --village-success: #a8d48f;
 }
 
 * {
@@ -150,6 +155,136 @@ button:focus-visible {
   background: #a8d48f;
   font-weight: 750;
   text-decoration: none;
+}
+
+.continuity-card {
+  margin: clamp(1rem, 3vw, 2rem);
+  border: 1px solid var(--village-border);
+  border-radius: 20px;
+  padding: 1rem;
+  background: var(--village-surface);
+  box-shadow: 0 24px 70px rgb(0 0 0 / 18%);
+}
+.continuity-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.continuity-card h2,
+.continuity-card h3 {
+  margin: 0.4rem 0;
+}
+.continuity-card p,
+.continuity-card li {
+  color: var(--village-muted);
+  line-height: 1.55;
+}
+.continuity-card__summary,
+.continuity-card__step {
+  display: grid;
+  gap: 0.8rem;
+}
+.continuity-card__summary button,
+.continuity-card__actions button {
+  justify-self: start;
+}
+.continuity-card__quiet-action {
+  min-height: 44px;
+  border-color: transparent;
+  padding-inline: 0.8rem;
+  color: var(--village-muted);
+  background: transparent;
+}
+.continuity-card__progress {
+  margin: 0.25rem 0 0;
+  color: #8fb89e !important;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.continuity-card fieldset {
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+.continuity-card legend {
+  color: #ebf2ed;
+  font-size: 1.05rem;
+  font-weight: 750;
+}
+.continuity-card__choices {
+  display: grid;
+  gap: 0.65rem;
+}
+.continuity-card__choices label {
+  display: flex;
+  min-height: 60px;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid #4b584d;
+  border-radius: 14px;
+  padding: 0.75rem;
+  background: var(--village-surface-raised);
+  cursor: pointer;
+  transition:
+    border-color 180ms ease,
+    background-color 180ms ease;
+}
+.continuity-card__choices label:hover,
+.continuity-card__choices label:has(input:checked) {
+  border-color: var(--village-success);
+  background: #1c291e;
+}
+.continuity-card__choices input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--village-success);
+}
+.continuity-card__choices span {
+  display: grid;
+  gap: 0.2rem;
+}
+.continuity-card__choices small {
+  color: #9eaaa1;
+}
+.continuity-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+.continuity-card__route {
+  margin: 0;
+  color: #ebf2ed !important;
+  font-size: clamp(1.1rem, 3vw, 1.35rem);
+  font-weight: 800;
+}
+.continuity-card__agreement {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding-left: 1.25rem;
+}
+.continuity-card__boundary {
+  color: #9eaaa1 !important;
+  font-size: 0.9rem;
+}
+.continuity-card__success {
+  margin-bottom: 0;
+  color: var(--village-success) !important;
+  font-weight: 800;
+}
+.continuity-card__error {
+  border-left: 3px solid #e27b70;
+  padding-left: 0.75rem;
+  color: #ffd0cb !important;
+}
+.continuity-card button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .observer-card__actions button:disabled {

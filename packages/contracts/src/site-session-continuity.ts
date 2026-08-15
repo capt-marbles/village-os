@@ -56,6 +56,47 @@ export const continuityRecipientKeyRevocationSchema = z.strictObject({
   site: z.literal("OWNED_FIXTURE"),
 });
 
+export const continuitySetupSessionSchema = z.strictObject({
+  deviceId: deviceIdSchema,
+  browserSessionId: browserSessionIdSchema,
+  deviceName: z.string().trim().min(1).max(80),
+  connection: z.enum(["ONLINE", "OFFLINE", "ABSENT"]),
+  recipientKeyState: z.enum(["READY", "MISSING", "STALE"]),
+});
+
+export const continuitySetupGrantSchema = z.strictObject({
+  grantId: continuityGrantIdSchema,
+  sourceDeviceId: deviceIdSchema,
+  destinationDeviceId: deviceIdSchema,
+  sourceBrowserSessionId: browserSessionIdSchema,
+  destinationBrowserSessionId: browserSessionIdSchema,
+  site: z.literal("OWNED_FIXTURE"),
+  state: z.enum(["PENDING", "ACTIVE", "REVOKED", "EXPIRED"]),
+  createdAt: instantSchema,
+  expiresAt: instantSchema,
+});
+
+export const continuitySetupResponseSchema = z.strictObject({
+  ok: z.literal(true),
+  sessions: z.array(continuitySetupSessionSchema).max(50),
+  grants: z.array(continuitySetupGrantSchema).max(100),
+});
+
+export const continuityGrantCreationResponseSchema = z.strictObject({
+  ok: z.literal(true),
+  created: z.boolean(),
+  grant: continuitySetupGrantSchema,
+});
+
+export const continuityGrantRevocationResponseSchema = z.strictObject({
+  ok: z.literal(true),
+  revoked: z.literal(true),
+});
+
+export type ContinuitySetupResponse = z.infer<
+  typeof continuitySetupResponseSchema
+>;
+
 const unsignedContinuityRevisionSchema = z
   .strictObject({
     protocolVersion: z.literal(1),

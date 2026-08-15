@@ -38,7 +38,7 @@ function record(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function readCsrfCookie(): string | undefined {
+export function readVillageCsrfCookie(): string | undefined {
   if (typeof document === "undefined") return undefined;
   if (
     import.meta.env.DEV &&
@@ -114,7 +114,10 @@ export function parsePublicPairingRequest(text: string): PublicPairingRequest {
 
 const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
-function villageId(prefix: "brs" | "hst", now = Date.now()): string {
+export function createVillageId(
+  prefix: "brs" | "hst" | "cgr",
+  now = Date.now(),
+): string {
   let time = now;
   let suffix = "";
   for (let index = 0; index < 10; index += 1) {
@@ -132,7 +135,8 @@ export class PairingSetupClient {
   constructor(
     baseUrl: string | URL,
     private readonly request: typeof fetch = fetch.bind(globalThis),
-    private readonly csrfToken: () => string | undefined = readCsrfCookie,
+    private readonly csrfToken: () =>
+      string | undefined = readVillageCsrfCookie,
   ) {
     this.baseUrl = new URL(baseUrl);
   }
@@ -216,8 +220,10 @@ export class PairingSetupClient {
     const parsedDeviceId = deviceIdSchema.parse(deviceId);
     const jobBody = await this.json("/api/jobs", { method: "POST" }, true);
     const jobId = jobIdSchema.parse(jobBody.jobId);
-    const browserSessionId = browserSessionIdSchema.parse(villageId("brs"));
-    const hostId = hostIdSchema.parse(villageId("hst"));
+    const browserSessionId = browserSessionIdSchema.parse(
+      createVillageId("brs"),
+    );
+    const hostId = hostIdSchema.parse(createVillageId("hst"));
     await this.json(
       `/api/jobs/${jobId}/browser-sessions`,
       {
