@@ -1,5 +1,6 @@
 export interface BrowserDiagnosticEntry {
-  component: "SESSION_ERASURE" | "BROWSER_HOST" | "CONTROL_TRANSFER";
+  component:
+    "SESSION_ERASURE" | "BROWSER_HOST" | "CONTROL_TRANSFER" | "CONTINUITY";
   code: string;
   retriable: boolean;
 }

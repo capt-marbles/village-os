@@ -106,7 +106,7 @@ export async function createPairingWindow(
         }, 0);
         return;
       } catch {
-        publish("REJECTED");
+        publish("SESSION_REJECTED");
       }
     }
   })().catch((error: unknown) => {

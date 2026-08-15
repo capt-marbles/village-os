@@ -13,12 +13,36 @@ describe("pairing deep links", () => {
     ).toMatchObject({ type: "COMPLETE_PAIRING" });
     expect(
       parsePairingDeepLink(
-        "village-pair://session?principalId=prn_01J00000000000000000000000&deviceId=dev_01J00000000000000000000000&browserSessionId=brs_01J00000000000000000000000",
+        "village-pair://session?principalId=prn_01J00000000000000000000000&deviceId=dev_01J00000000000000000000000&browserSessionId=brs_01J00000000000000000000000&fixtureBrowserSessionId=brs_01J00000000000000000000001",
       ),
-    ).toMatchObject({ type: "ATTACH_SESSION" });
+    ).toMatchObject({
+      type: "ATTACH_SESSION",
+      browserSessionId: "brs_01J00000000000000000000000",
+      fixtureBrowserSessionId: "brs_01J00000000000000000000001",
+    });
     expect(parsePairingDeepLink("https://evil.example/")).toBeNull();
     expect(
       parsePairingDeepLink("village-pair://complete?pairingId=short"),
+    ).toBeNull();
+    expect(
+      parsePairingDeepLink(
+        "village-pair://session?principalId=prn_01J00000000000000000000000&deviceId=dev_01J00000000000000000000000&browserSessionId=brs_01J00000000000000000000000",
+      ),
+    ).toEqual({
+      type: "ATTACH_SESSION",
+      principalId: "prn_01J00000000000000000000000",
+      deviceId: "dev_01J00000000000000000000000",
+      browserSessionId: "brs_01J00000000000000000000000",
+    });
+    expect(
+      parsePairingDeepLink(
+        "village-pair://session?principalId=prn_01J00000000000000000000000&deviceId=dev_01J00000000000000000000000&browserSessionId=brs_01J00000000000000000000000&fixtureBrowserSessionId=brs_01J00000000000000000000000",
+      ),
+    ).toBeNull();
+    expect(
+      parsePairingDeepLink(
+        "village-pair://session?principalId=prn_01J00000000000000000000000&deviceId=dev_01J00000000000000000000000&browserSessionId=brs_01J00000000000000000000000&fixtureBrowserSessionId=",
+      ),
     ).toBeNull();
   });
 

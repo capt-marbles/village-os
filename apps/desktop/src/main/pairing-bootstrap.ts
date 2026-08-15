@@ -34,6 +34,7 @@ export interface PairingSessionAttachment {
   principalId: string;
   deviceId: string;
   browserSessionId: string;
+  fixtureBrowserSessionId?: string;
 }
 
 const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -146,10 +147,17 @@ export class PairingBootstrapService {
     const browserSessionId = browserSessionIdSchema.safeParse(
       candidate.browserSessionId,
     );
+    const fixtureBrowserSessionId =
+      candidate.fixtureBrowserSessionId === undefined
+        ? undefined
+        : browserSessionIdSchema.safeParse(candidate.fixtureBrowserSessionId);
     if (
       !principalId.success ||
       !deviceId.success ||
       !browserSessionId.success ||
+      (fixtureBrowserSessionId !== undefined &&
+        (!fixtureBrowserSessionId.success ||
+          browserSessionId.data === fixtureBrowserSessionId.data)) ||
       !this.pairedDevice ||
       principalId.data !== this.pairedDevice.principalId ||
       deviceId.data !== this.pairedDevice.deviceId
@@ -160,6 +168,9 @@ export class PairingBootstrapService {
       principalId: principalId.data,
       deviceId: deviceId.data,
       browserSessionId: browserSessionId.data,
+      ...(fixtureBrowserSessionId?.success
+        ? { fixtureBrowserSessionId: fixtureBrowserSessionId.data }
+        : {}),
       ...(this.controlPlaneOrigin
         ? { controlPlaneOrigin: this.controlPlaneOrigin }
         : {}),

@@ -49,4 +49,19 @@ describe("local diagnostics", () => {
       } as never),
     ).toThrow("DIAGNOSTIC_FIELD_DENIED");
   });
+
+  it("accepts a local continuity recovery diagnostic", () => {
+    const reporter = new CrashReporter();
+    expect(
+      reporter.capture({
+        component: "CONTINUITY",
+        code: "RECIPIENT_KEY_CONFLICT_OWNER_RECOVERY_REQUIRED",
+        retriable: false,
+      }).preview,
+    ).toEqual({
+      component: "CONTINUITY",
+      code: "RECIPIENT_KEY_CONFLICT_OWNER_RECOVERY_REQUIRED",
+      retriable: false,
+    });
+  });
 });

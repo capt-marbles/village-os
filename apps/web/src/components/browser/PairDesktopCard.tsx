@@ -2,13 +2,14 @@ import { useMemo, useState } from "react";
 import {
   PairingSetupClient,
   pairingCompletionUrl,
+  pairingLegacySessionUrl,
   pairingSessionUrl,
   parsePublicPairingRequest,
   type PairedBrowserSession,
   type PairingChallenge,
 } from "./pairing-setup-client.js";
 
-type Step = "ENTRY" | "CONFIRM" | "WAITING" | "READY";
+type Step = "ENTRY" | "CONFIRM" | "WAITING" | "RETRY_SESSION" | "READY";
 
 export function PairDesktopCard({ client }: { client?: PairingSetupClient }) {
   const activeClient = useMemo(
@@ -77,9 +78,16 @@ export function PairDesktopCard({ client }: { client?: PairingSetupClient }) {
       while (Date.now() < deadline) {
         const status = await activeClient.status(challenge.pairingId);
         if (status === "CONSUMED") {
-          const next = await activeClient.createSession(challenge.deviceId);
-          setSession(next);
-          setStep("READY");
+          try {
+            const next = await activeClient.createSession(challenge.deviceId);
+            setSession(next);
+            setStep("READY");
+          } catch {
+            setError(
+              "This desktop is paired, but browser setup is incomplete. Retry setup here; you do not need to pair the Mac again.",
+            );
+            setStep("RETRY_SESSION");
+          }
           return;
         }
         if (status === "EXPIRED" || status === "REJECTED")
@@ -92,6 +100,23 @@ export function PairDesktopCard({ client }: { client?: PairingSetupClient }) {
         "The desktop did not finish pairing. Copy a fresh request and try again.",
       );
       setStep("ENTRY");
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const retrySession = async () => {
+    if (!challenge || pending) return;
+    setPending(true);
+    setError(null);
+    try {
+      const next = await activeClient.createSession(challenge.deviceId);
+      setSession(next);
+      setStep("READY");
+    } catch {
+      setError(
+        "Browser setup is still incomplete. Retry when the service is available; this Mac remains paired.",
+      );
     } finally {
       setPending(false);
     }
@@ -158,6 +183,22 @@ export function PairDesktopCard({ client }: { client?: PairingSetupClient }) {
           {pending ? <p role="status">Waiting for Village Desktop...</p> : null}
         </>
       ) : null}
+      {step === "RETRY_SESSION" && challenge ? (
+        <>
+          <p>
+            The secure desktop pairing is complete. Village only needs to finish
+            assigning its browser sessions.
+          </p>
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => void retrySession()}
+          >
+            Retry browser setup
+          </button>
+          {pending ? <p role="status">Finishing browser setup...</p> : null}
+        </>
+      ) : null}
       {step === "READY" && challenge && session ? (
         <>
           <p>
@@ -168,6 +209,16 @@ export function PairDesktopCard({ client }: { client?: PairingSetupClient }) {
             href={pairingSessionUrl(challenge, session)}
           >
             Open assigned browser
+          </a>
+          <p>
+            Using an older Village Desktop? Continuity will remain off until you
+            upgrade.
+          </p>
+          <a
+            className="pair-desktop-card__link"
+            href={pairingLegacySessionUrl(challenge, session)}
+          >
+            Open without continuity
           </a>
         </>
       ) : null}

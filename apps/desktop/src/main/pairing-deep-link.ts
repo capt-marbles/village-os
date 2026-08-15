@@ -16,6 +16,7 @@ export type PairingDeepLink =
       principalId: string;
       deviceId: string;
       browserSessionId: string;
+      fixtureBrowserSessionId?: string;
     };
 
 export function parsePairingDeepLink(value: string): PairingDeepLink | null {
@@ -52,7 +53,13 @@ export function parsePairingDeepLink(value: string): PairingDeepLink | null {
   if (url.host === "session") {
     if (
       [...url.searchParams.keys()].some(
-        (key) => !["principalId", "deviceId", "browserSessionId"].includes(key),
+        (key) =>
+          ![
+            "principalId",
+            "deviceId",
+            "browserSessionId",
+            "fixtureBrowserSessionId",
+          ].includes(key),
       )
     ) {
       return null;
@@ -64,12 +71,28 @@ export function parsePairingDeepLink(value: string): PairingDeepLink | null {
     const browserSessionId = browserSessionIdSchema.safeParse(
       url.searchParams.get("browserSessionId"),
     );
-    return principalId.success && deviceId.success && browserSessionId.success
+    const hasFixtureBrowserSessionId = url.searchParams.has(
+      "fixtureBrowserSessionId",
+    );
+    const fixtureBrowserSessionId = hasFixtureBrowserSessionId
+      ? browserSessionIdSchema.safeParse(
+          url.searchParams.get("fixtureBrowserSessionId"),
+        )
+      : undefined;
+    return principalId.success &&
+      deviceId.success &&
+      browserSessionId.success &&
+      (fixtureBrowserSessionId === undefined ||
+        (fixtureBrowserSessionId.success &&
+          browserSessionId.data !== fixtureBrowserSessionId.data))
       ? {
           type: "ATTACH_SESSION",
           principalId: principalId.data,
           deviceId: deviceId.data,
           browserSessionId: browserSessionId.data,
+          ...(fixtureBrowserSessionId?.success
+            ? { fixtureBrowserSessionId: fixtureBrowserSessionId.data }
+            : {}),
         }
       : null;
   }

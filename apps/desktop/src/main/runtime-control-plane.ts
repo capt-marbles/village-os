@@ -108,6 +108,32 @@ export async function createRuntimeContinuityRecipient(
   return { ...enrollment, recipientKey, mailboxClient };
 }
 
+export async function createRuntimeFixtureContinuityRecipient(
+  options: RuntimeControlPlaneOptions & {
+    recipientKeySource: ContinuityRecipientKeySource;
+  },
+): Promise<
+  | { state: "NOT_CONFIGURED" }
+  | ({ state: "ENROLLED" } & Awaited<
+      ReturnType<typeof createRuntimeContinuityRecipient>
+    >)
+> {
+  const fixtureBrowserSessionId = options.identity.fixtureBrowserSessionId;
+  if (!fixtureBrowserSessionId) return { state: "NOT_CONFIGURED" };
+  assertDistinctBrowserSessionIdentity(
+    options.identity.browserSessionId,
+    fixtureBrowserSessionId,
+  );
+  const enrollment = await createRuntimeContinuityRecipient({
+    ...options,
+    identity: {
+      ...options.identity,
+      browserSessionId: fixtureBrowserSessionId,
+    },
+  });
+  return { state: "ENROLLED", ...enrollment };
+}
+
 export async function createRuntimeControlPlaneComposition(
   options: RuntimeControlPlaneOptions,
 ): Promise<{
