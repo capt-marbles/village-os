@@ -1,8 +1,10 @@
 import {
   canonicalContinuityAcknowledgementBytes,
   canonicalContinuityFetchBytes,
+  canonicalContinuityRecipientKeyEnrollmentBytes,
   continuityAcknowledgementEnvelopeSchema,
   continuityFetchEnvelopeSchema,
+  continuityRecipientKeyEnrollmentSchema,
 } from "@village/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { ContinuityMailboxClient } from "../src/main/continuity-mailbox-client.js";
@@ -18,6 +20,57 @@ const binding = {
 };
 
 describe("desktop encrypted continuity mailbox client", () => {
+  it("signs recipient-key enrollment for the paired destination session", async () => {
+    const keys = await crypto.subtle.generateKey("Ed25519", false, [
+      "sign",
+      "verify",
+    ]);
+    let candidate: unknown;
+    let sequence = 0;
+    const request = vi.fn<typeof fetch>(async (_input, init) => {
+      candidate = JSON.parse(String(init?.body));
+      return Response.json({
+        ok: true,
+        enrolled: true,
+        deviceId: binding.destinationDeviceId,
+        browserSessionId: binding.destinationBrowserSessionId,
+      });
+    });
+    const client = new ContinuityMailboxClient({
+      baseUrl: new URL("https://village.test"),
+      privateKey: keys.privateKey,
+      sequences: { reserveNext: async () => ++sequence },
+      request,
+      now: () => Date.parse("2026-08-15T20:00:00.000Z"),
+    });
+
+    await expect(
+      client.enrollRecipientKey(
+        {
+          principalId: binding.principalId,
+          deviceId: binding.destinationDeviceId,
+          browserSessionId: binding.destinationBrowserSessionId,
+          site: binding.site,
+        },
+        { kty: "OKP", crv: "X25519", x: "x".repeat(43) },
+      ),
+    ).resolves.toEqual({ enrolled: true });
+
+    const enrollment = continuityRecipientKeyEnrollmentSchema.parse(candidate);
+    const { signature, ...unsigned } = enrollment;
+    await expect(
+      crypto.subtle.verify(
+        "Ed25519",
+        keys.publicKey,
+        Buffer.from(signature, "base64url"),
+        canonicalContinuityRecipientKeyEnrollmentBytes(unsigned),
+      ),
+    ).resolves.toBe(true);
+    expect(String(request.mock.calls[0]![0])).toBe(
+      "https://village.test/api/site-session-continuity/recipient-keys",
+    );
+  });
+
   it("signs destination fetch and acknowledgement requests with monotonic sequences", async () => {
     const keys = await crypto.subtle.generateKey("Ed25519", false, [
       "sign",

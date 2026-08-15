@@ -13,6 +13,7 @@ import {
   assertDistinctBrowserSessionIdentity,
   createPairedWorkflowRuntimeComposition,
   createRuntimeContinuityMailboxClient,
+  createRuntimeContinuityRecipient,
   createRuntimeControlPlaneAutomationFence,
   createRuntimeControlPlaneComposition,
 } from "../src/main/runtime-control-plane.js";
@@ -177,6 +178,71 @@ describe("packaged runtime control-plane composition", () => {
     expect(String(request.mock.calls[0]![0])).toContain(
       "/api/site-session-continuity/grants/cgr_01J00000000000000000000000/fetch",
     );
+  });
+
+  it("creates and enrolls a protected recipient key for the paired fixture session", async () => {
+    const userDataPath = await mkdtemp(join(tmpdir(), "village-runtime-cp-"));
+    temporaryDirectories.push(userDataPath);
+    const signingKeys = await generateDeviceSigningKey();
+    const publicJwk = await exportPublicDeviceJwk(signingKeys.publicKey);
+    const identity = {
+      principalId: "prn_01J00000000000000000000000",
+      deviceId: await deviceIdForPublicKey(publicJwk),
+      browserSessionId: "brs_01J00000000000000000000002",
+    };
+    const recipientKeys = (await crypto.subtle.generateKey("X25519", true, [
+      "deriveBits",
+    ])) as CryptoKeyPair;
+    const exportedRecipient = await crypto.subtle.exportKey(
+      "jwk",
+      recipientKeys.publicKey,
+    );
+    const request = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        ok: true,
+        enrolled: true,
+        deviceId: identity.deviceId,
+        browserSessionId: identity.browserSessionId,
+      }),
+    );
+    const recipientKeySource = {
+      load: vi.fn(async () => {
+        const error = new Error("missing") as Error & { code: string };
+        error.code = "ENOENT";
+        throw error;
+      }),
+      create: vi.fn(async () => ({
+        privateKey: recipientKeys.privateKey,
+        publicKey: recipientKeys.publicKey,
+        publicJwk: {
+          kty: "OKP" as const,
+          crv: "X25519" as const,
+          x: exportedRecipient.x!,
+        },
+        protectionBackend: "keychain",
+      })),
+    };
+
+    const result = await createRuntimeContinuityRecipient({
+      controlPlaneUrl: new URL("https://village.test"),
+      userDataPath,
+      identity,
+      deviceIdentitySource: {
+        load: async () => ({
+          privateKey: signingKeys.privateKey,
+          publicKey: signingKeys.publicKey,
+          publicJwk,
+          protectionBackend: "keychain",
+        }),
+      },
+      recipientKeySource,
+      request,
+    });
+
+    expect(result.enrolled).toBe(true);
+    expect(result.recipientKey.publicJwk.x).toBe(exportedRecipient.x);
+    expect(recipientKeySource.create).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledOnce();
   });
 
   it("rejects a device key that does not belong to the paired identity", async () => {

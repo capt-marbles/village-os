@@ -146,6 +146,20 @@ async function seedContinuityMailbox() {
       now,
     ),
     env.VILLAGE_DB.prepare(
+      `INSERT INTO continuity_recipient_keys
+       (principal_id, device_id, browser_session_id, site,
+        encryption_public_key, device_signing_public_key,
+        last_accepted_sequence, enrolled_at)
+       VALUES (?, ?, ?, 'OWNED_FIXTURE', ?, ?, 1, ?)`,
+    ).bind(
+      principalId,
+      destinationDeviceId,
+      destinationSessionId,
+      JSON.stringify({ kty: "OKP", crv: "X25519", x: "b".repeat(43) }),
+      JSON.stringify(publicKey),
+      now,
+    ),
+    env.VILLAGE_DB.prepare(
       `INSERT INTO continuity_grants
        (principal_id, grant_id, source_device_id, destination_device_id,
         source_browser_session_id, destination_browser_session_id, site,
@@ -217,6 +231,9 @@ describe("principal data lifecycle", () => {
         WORKFLOW_ACTORS: expect.objectContaining({ scope: "PRINCIPAL" }),
         CANCELLATIONS: expect.objectContaining({ scope: "PRINCIPAL" }),
         CONTINUITY_GRANTS: expect.objectContaining({ scope: "PRINCIPAL" }),
+        CONTINUITY_RECIPIENT_KEYS: expect.objectContaining({
+          scope: "PRINCIPAL",
+        }),
       }),
     );
     for (const policy of Object.values(recordRetentionPolicies)) {
@@ -246,6 +263,7 @@ describe("principal data lifecycle", () => {
         ],
         cancellations: [expect.objectContaining({ jobId })],
         continuityGrants: [],
+        continuityRecipientKeys: [],
       }),
     );
     const exported = await exportPrincipalRecords(env.VILLAGE_DB, principalId);

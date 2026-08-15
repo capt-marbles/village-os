@@ -28,6 +28,7 @@ const deletionCountQueries = [
   "SELECT COUNT(*) AS count FROM workflow_last_effect_actor WHERE principal_id = ?",
   "SELECT COUNT(*) AS count FROM workflow_cancellations WHERE principal_id = ?",
   "SELECT COUNT(*) AS count FROM continuity_grants WHERE principal_id = ?",
+  "SELECT COUNT(*) AS count FROM continuity_recipient_keys WHERE principal_id = ?",
 ] as const;
 
 export async function exportPrincipalRecords(
@@ -44,6 +45,7 @@ export async function exportPrincipalRecords(
     workflowEffects,
     cancellations,
     continuityGrants,
+    continuityRecipientKeys,
   ] = await Promise.all([
     db
       .prepare(
@@ -127,6 +129,16 @@ export async function exportPrincipalRecords(
       )
       .bind(principal)
       .all(),
+    db
+      .prepare(
+        `SELECT device_id AS deviceId, browser_session_id AS browserSessionId,
+                site, last_accepted_sequence AS lastAcceptedSequence,
+                enrolled_at AS enrolledAt
+         FROM continuity_recipient_keys WHERE principal_id = ?
+         ORDER BY enrolled_at, device_id, browser_session_id`,
+      )
+      .bind(principal)
+      .all(),
   ]);
   return {
     principalId: principal,
@@ -138,6 +150,7 @@ export async function exportPrincipalRecords(
     workflowActors: workflowActors.results,
     cancellations: cancellations.results,
     continuityGrants: continuityGrants.results,
+    continuityRecipientKeys: continuityRecipientKeys.results,
   };
 }
 
