@@ -53,10 +53,15 @@ describe("RitualBuilderController", () => {
         completion: "A reviewable result is ready.",
       })),
       close: vi.fn(async () => undefined),
+      testRun: vi.fn(async () => {
+        throw new Error("not used");
+      }),
     };
     const repository = {
-      latest: vi.fn(async () => null),
+      latestSnapshot: vi.fn(async () => ({ approved: null, receipt: null })),
+      find: vi.fn(async () => null),
       save: vi.fn(async () => undefined),
+      saveReceipt: vi.fn(async () => undefined),
     };
     const controller = new RitualBuilderController(provider, repository);
 
@@ -83,9 +88,119 @@ describe("RitualBuilderController", () => {
     await expect(
       controller.approve({ ...approved, extra: true }),
     ).rejects.toThrow();
-    repository.latest.mockResolvedValue(approved);
-    await expect(controller.loadLatest()).resolves.toEqual(approved);
+    repository.latestSnapshot.mockResolvedValue({
+      approved,
+      receipt: null,
+    });
+    await expect(controller.loadLatestState()).resolves.toEqual({
+      approved,
+      receipt: null,
+    });
     await controller.close();
     expect(provider.close).toHaveBeenCalledOnce();
+  });
+
+  it("runs the exact approved Ritual against a sample and persists only a bounded Receipt", async () => {
+    const provider = {
+      draft: vi.fn(async () => {
+        throw new Error("not used");
+      }),
+      testRun: vi.fn(async (context) => ({
+        status: "result" as const,
+        runId: context.runId,
+        ritualId: context.ritual.ritualId,
+        ritualRevision: context.ritual.ritualRevision,
+        summary: "Customer A is the highest-priority response.",
+        evidence: ["The supplied deadline is Friday."],
+        uncertainties: ["Commercial impact was not supplied."],
+      })),
+      close: vi.fn(async () => undefined),
+    };
+    const repository = {
+      latestSnapshot: vi.fn(async () => ({ approved, receipt: null })),
+      find: vi.fn(async () => approved),
+      save: vi.fn(async () => undefined),
+      saveReceipt: vi.fn(async () => undefined),
+    };
+    const controller = new RitualBuilderController(provider, repository, {
+      createId: (prefix) =>
+        prefix === "rrn"
+          ? "rrn_01J00000000000000000000000"
+          : "rcp_01J00000000000000000000000",
+      now: () => "2026-08-15T18:03:00.000Z",
+    });
+    const sample = "Customer A needs an answer before Friday.";
+
+    const result = await controller.testRun({
+      schemaVersion: 1,
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      sample,
+    });
+
+    expect(result).toMatchObject({
+      status: "receipt",
+      receipt: {
+        outcome: "NEEDS_REVIEW",
+        sampleCharacterCount: sample.length,
+        externalEffects: [],
+      },
+    });
+    expect(provider.testRun).toHaveBeenCalledWith(
+      expect.objectContaining({ ritual: approved, sample }),
+    );
+    expect(repository.saveReceipt).toHaveBeenCalledOnce();
+    expect(
+      JSON.stringify(repository.saveReceipt.mock.calls[0]?.[0]),
+    ).not.toContain(sample);
+
+    await expect(
+      controller.testRun({
+        schemaVersion: 1,
+        ritualId: approved.ritualId,
+        ritualRevision: 2,
+        sample,
+      }),
+    ).rejects.toThrow("STALE_RITUAL_TEST_RUN");
+    expect(provider.testRun).toHaveBeenCalledOnce();
+  });
+
+  it("does not persist a Receipt when the provider cannot finish safely", async () => {
+    const provider = {
+      draft: vi.fn(async () => {
+        throw new Error("not used");
+      }),
+      testRun: vi.fn(async (context) => ({
+        status: "waiting" as const,
+        runId: context.runId,
+        ritualId: context.ritual.ritualId,
+        ritualRevision: context.ritual.ritualRevision,
+        reason: "MALFORMED_PROVIDER_OUTPUT" as const,
+      })),
+      close: vi.fn(async () => undefined),
+    };
+    const repository = {
+      latestSnapshot: vi.fn(async () => ({ approved, receipt: null })),
+      find: vi.fn(async () => approved),
+      save: vi.fn(async () => undefined),
+      saveReceipt: vi.fn(async () => undefined),
+    };
+    const controller = new RitualBuilderController(provider, repository, {
+      createId: () => "rrn_01J00000000000000000000000",
+      now: () => "2026-08-15T18:03:00.000Z",
+    });
+
+    await expect(
+      controller.testRun({
+        schemaVersion: 1,
+        ritualId: approved.ritualId,
+        ritualRevision: 1,
+        sample: "Representative sample",
+      }),
+    ).resolves.toMatchObject({
+      status: "waiting",
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    });
+    expect(repository.saveReceipt).not.toHaveBeenCalled();
   });
 });

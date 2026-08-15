@@ -1,8 +1,22 @@
 import { z } from "zod";
-import { instantSchema, ritualDraftIdSchema, ritualIdSchema } from "./ids.js";
+import {
+  instantSchema,
+  receiptIdSchema,
+  ritualDraftIdSchema,
+  ritualIdSchema,
+  ritualRunIdSchema,
+} from "./ids.js";
 
 const shortLabelSchema = z.string().trim().min(1).max(80);
 const sentenceSchema = z.string().trim().min(1).max(320);
+
+export const ritualProviderWaitingReasonSchema = z.enum([
+  "AUTHENTICATION_REQUIRED",
+  "PROVIDER_UNAVAILABLE",
+  "MALFORMED_PROVIDER_OUTPUT",
+  "TIME_BUDGET_EXHAUSTED",
+  "STALE_STEWARD_RESULT",
+]);
 
 export const ritualTriggerSchema = z.discriminatedUnion("kind", [
   z.strictObject({
@@ -80,6 +94,83 @@ export const approvedRitualStoreSchema = z.strictObject({
   rituals: z.array(approvedRitualRevisionSchema).max(100),
 });
 
+export const ritualTestRunRequestSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  ritualId: ritualIdSchema,
+  ritualRevision: z.number().int().positive(),
+  sample: z.string().trim().min(16).max(4_000),
+});
+
+export const ritualTestRunProviderContextSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  runId: ritualRunIdSchema,
+  ritual: approvedRitualRevisionSchema,
+  sample: ritualTestRunRequestSchema.shape.sample,
+});
+
+export const ritualTestRunResultContentSchema = z.strictObject({
+  summary: z.string().trim().min(1).max(2_000),
+  evidence: z.array(sentenceSchema).min(1).max(8),
+  uncertainties: z.array(sentenceSchema).max(8),
+});
+
+export const ritualTestRunResultContentJsonSchema = z.toJSONSchema(
+  ritualTestRunResultContentSchema,
+);
+
+const ritualTestRunBinding = {
+  runId: ritualRunIdSchema,
+  ritualId: ritualIdSchema,
+  ritualRevision: z.number().int().positive(),
+};
+
+export const ritualTestRunResultSchema = z.discriminatedUnion("status", [
+  z.strictObject({
+    status: z.literal("result"),
+    ...ritualTestRunBinding,
+    ...ritualTestRunResultContentSchema.shape,
+  }),
+  z.strictObject({
+    status: z.literal("waiting"),
+    ...ritualTestRunBinding,
+    reason: ritualProviderWaitingReasonSchema,
+  }),
+]);
+
+export const ritualTestReceiptSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  receiptId: receiptIdSchema,
+  runId: ritualRunIdSchema,
+  ritualId: ritualIdSchema,
+  ritualRevision: z.number().int().positive(),
+  mode: z.literal("TEST"),
+  outcome: z.enum(["COMPLETED", "NEEDS_REVIEW"]),
+  summary: ritualTestRunResultContentSchema.shape.summary,
+  evidence: ritualTestRunResultContentSchema.shape.evidence,
+  uncertainties: ritualTestRunResultContentSchema.shape.uncertainties,
+  sampleDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  sampleCharacterCount: z.number().int().positive().max(4_000),
+  externalEffects: z.tuple([]),
+  recordedAt: instantSchema,
+});
+
+export const ritualTestRunControllerResultSchema = z.discriminatedUnion(
+  "status",
+  [
+    z.strictObject({
+      status: z.literal("receipt"),
+      receipt: ritualTestReceiptSchema,
+    }),
+    ritualTestRunResultSchema.options[1],
+  ],
+);
+
+export const ritualStoreSchema = z.strictObject({
+  schemaVersion: z.literal(2),
+  rituals: z.array(approvedRitualRevisionSchema).max(100),
+  receipts: z.array(ritualTestReceiptSchema).max(100),
+});
+
 export const ritualStewardContextSchema = z.strictObject({
   schemaVersion: z.literal(1),
   draftId: ritualDraftIdSchema,
@@ -118,13 +209,7 @@ export const ritualStewardResultSchema = z.discriminatedUnion("status", [
     status: z.literal("waiting"),
     draftId: ritualDraftIdSchema,
     requestRevision: z.number().int().positive(),
-    reason: z.enum([
-      "AUTHENTICATION_REQUIRED",
-      "PROVIDER_UNAVAILABLE",
-      "MALFORMED_PROVIDER_OUTPUT",
-      "TIME_BUDGET_EXHAUSTED",
-      "STALE_STEWARD_RESULT",
-    ]),
+    reason: ritualProviderWaitingReasonSchema,
   }),
 ]);
 
@@ -137,6 +222,16 @@ export type ApprovedRitualStore = z.infer<typeof approvedRitualStoreSchema>;
 export type RitualStewardContext = z.infer<typeof ritualStewardContextSchema>;
 export type RitualStewardProposal = z.infer<typeof ritualStewardProposalSchema>;
 export type RitualStewardResult = z.infer<typeof ritualStewardResultSchema>;
+export type RitualTestRunRequest = z.infer<typeof ritualTestRunRequestSchema>;
+export type RitualTestRunProviderContext = z.infer<
+  typeof ritualTestRunProviderContextSchema
+>;
+export type RitualTestRunResult = z.infer<typeof ritualTestRunResultSchema>;
+export type RitualTestReceipt = z.infer<typeof ritualTestReceiptSchema>;
+export type RitualTestRunControllerResult = z.infer<
+  typeof ritualTestRunControllerResultSchema
+>;
+export type RitualStore = z.infer<typeof ritualStoreSchema>;
 
 export function validateRitualStewardResult(
   contextCandidate: unknown,
@@ -204,4 +299,95 @@ export function approveRitualDraft(
     reviewPolicy: draft.reviewPolicy,
     approvedAt: request.approvedAt,
   });
+}
+
+export function createRitualTestReceipt(input: {
+  approved: ApprovedRitualRevision;
+  request: RitualTestRunRequest;
+  result: Extract<RitualTestRunResult, { status: "result" }>;
+  receiptId: z.infer<typeof receiptIdSchema>;
+  sampleDigest: string;
+  recordedAt: string;
+}): RitualTestReceipt {
+  const approved = approvedRitualRevisionSchema.parse(input.approved);
+  const request = ritualTestRunRequestSchema.parse(input.request);
+  const result = ritualTestRunResultSchema.parse(input.result);
+  if (result.status !== "result") throw new Error("RITUAL_TEST_RUN_INCOMPLETE");
+  if (
+    request.ritualId !== approved.ritualId ||
+    request.ritualRevision !== approved.ritualRevision ||
+    result.ritualId !== approved.ritualId ||
+    result.ritualRevision !== approved.ritualRevision
+  ) {
+    throw new Error("STALE_RITUAL_TEST_RUN");
+  }
+  return ritualTestReceiptSchema.parse({
+    schemaVersion: 1,
+    receiptId: input.receiptId,
+    runId: result.runId,
+    ritualId: approved.ritualId,
+    ritualRevision: approved.ritualRevision,
+    mode: "TEST",
+    outcome: result.uncertainties.length === 0 ? "COMPLETED" : "NEEDS_REVIEW",
+    summary: result.summary,
+    evidence: result.evidence,
+    uncertainties: result.uncertainties,
+    sampleDigest: input.sampleDigest,
+    sampleCharacterCount: request.sample.length,
+    externalEffects: [],
+    recordedAt: input.recordedAt,
+  });
+}
+
+export function validateRitualTestRunResult(
+  contextCandidate: unknown,
+  resultCandidate: unknown,
+): RitualTestRunResult {
+  const context = ritualTestRunProviderContextSchema.parse(contextCandidate);
+  const result = ritualTestRunResultSchema.safeParse(resultCandidate);
+  if (!result.success) {
+    return testRunWaiting(context, "MALFORMED_PROVIDER_OUTPUT");
+  }
+  if (
+    result.data.runId !== context.runId ||
+    result.data.ritualId !== context.ritual.ritualId ||
+    result.data.ritualRevision !== context.ritual.ritualRevision
+  ) {
+    return testRunWaiting(context, "STALE_STEWARD_RESULT");
+  }
+  if (
+    result.data.status === "result" &&
+    containsRawTestSample(context.sample, [
+      result.data.summary,
+      ...result.data.evidence,
+      ...result.data.uncertainties,
+    ])
+  ) {
+    return testRunWaiting(context, "MALFORMED_PROVIDER_OUTPUT");
+  }
+  return result.data;
+}
+
+function containsRawTestSample(
+  sample: string,
+  persistedFields: readonly string[],
+): boolean {
+  const normalizedSample = sample.trim().replace(/\s+/g, " ").toLowerCase();
+  return persistedFields.some((field) => {
+    const normalizedField = field.trim().replace(/\s+/g, " ").toLowerCase();
+    return normalizedField.includes(normalizedSample);
+  });
+}
+
+function testRunWaiting(
+  context: RitualTestRunProviderContext,
+  reason: Extract<RitualTestRunResult, { status: "waiting" }>["reason"],
+): RitualTestRunResult {
+  return {
+    status: "waiting",
+    runId: context.runId,
+    ritualId: context.ritual.ritualId,
+    ritualRevision: context.ritual.ritualRevision,
+    reason,
+  };
 }

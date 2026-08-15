@@ -7,6 +7,7 @@ import {
 } from "electron";
 import { isTrustedVillageSender, trustedWebPreferences } from "./security.js";
 import type { RitualBuilderController } from "./ritual-builder-controller.js";
+import { createVillageId } from "./local-village-id.js";
 
 export interface RitualBuilderWindow {
   window: BaseWindow;
@@ -50,6 +51,7 @@ export async function createRitualBuilderWindow(options: {
     "village:ritual-builder:create-draft-identity";
   const draftChannel = "village:ritual-builder:draft";
   const approveChannel = "village:ritual-builder:approve";
+  const testRunChannel = "village:ritual-builder:test-run";
   const assertSender = (event: IpcMainInvokeEvent) => {
     if (
       event.sender !== appView.webContents ||
@@ -60,7 +62,7 @@ export async function createRitualBuilderWindow(options: {
   };
   ipcMain.handle(initializeChannel, async (event) => {
     assertSender(event);
-    return { identity, approved: await options.controller.loadLatest() };
+    return { identity, ...(await options.controller.loadLatestState()) };
   });
   ipcMain.handle(createDraftIdentityChannel, async (event) => {
     assertSender(event);
@@ -81,6 +83,10 @@ export async function createRitualBuilderWindow(options: {
     }
     return options.controller.approve(candidate);
   });
+  ipcMain.handle(testRunChannel, async (event, candidate) => {
+    assertSender(event);
+    return options.controller.testRun(candidate);
+  });
   const cleanup = () => {
     if (closed) return;
     closed = true;
@@ -88,6 +94,7 @@ export async function createRitualBuilderWindow(options: {
     ipcMain.removeHandler(createDraftIdentityChannel);
     ipcMain.removeHandler(draftChannel);
     ipcMain.removeHandler(approveChannel);
+    ipcMain.removeHandler(testRunChannel);
     void options.controller.close();
     disposeView();
   };
@@ -103,19 +110,10 @@ export async function createRitualBuilderWindow(options: {
   return { window, trustedRenderer: appView.webContents };
 }
 
-const villageIdAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-
-function villageId(prefix: "rtd" | "rtl"): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(26));
-  return `${prefix}_${[...bytes]
-    .map((byte) => villageIdAlphabet[byte & 31])
-    .join("")}`;
-}
-
 function createRitualBuilderIdentity() {
   return {
-    draftId: villageId("rtd"),
-    ritualId: villageId("rtl"),
+    draftId: createVillageId("rtd"),
+    ritualId: createVillageId("rtl"),
   };
 }
 

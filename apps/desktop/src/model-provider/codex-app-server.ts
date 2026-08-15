@@ -86,7 +86,10 @@ export interface AppServerTurnOptions {
 }
 
 export type AppServerToolName =
-  "village_browser_action" | "village_setup_action" | "village_ritual_draft";
+  | "village_browser_action"
+  | "village_setup_action"
+  | "village_ritual_draft"
+  | "village_ritual_test_result";
 
 export interface AppServerTransport {
   request(method: string, params: unknown): Promise<unknown>;

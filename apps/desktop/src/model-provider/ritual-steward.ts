@@ -1,15 +1,22 @@
 import {
+  ritualTestRunProviderContextSchema,
+  ritualTestRunResultContentJsonSchema,
+  ritualTestRunResultContentSchema,
+  ritualTestRunResultSchema,
   ritualStewardContextSchema,
   ritualStewardProposalContentJsonSchema,
   ritualStewardProposalContentSchema,
   ritualStewardResultSchema,
   type RitualStewardContext,
   type RitualStewardResult,
+  type RitualTestRunProviderContext,
+  type RitualTestRunResult,
 } from "@village/contracts";
 import type { AppServerTransport } from "./codex-app-server.js";
 
 export interface RitualStewardProvider {
   draft(context: RitualStewardContext): Promise<RitualStewardResult>;
+  testRun(context: RitualTestRunProviderContext): Promise<RitualTestRunResult>;
   close(): Promise<void>;
 }
 
@@ -33,6 +40,12 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
     return this.enqueue(() => this.draftExclusive(candidate));
   }
 
+  testRun(
+    candidate: RitualTestRunProviderContext,
+  ): Promise<RitualTestRunResult> {
+    return this.enqueue(() => this.testRunExclusive(candidate));
+  }
+
   private async draftExclusive(
     candidate: RitualStewardContext,
   ): Promise<RitualStewardResult> {
@@ -41,18 +54,7 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
     const transport = this.transport ?? this.transportFactory();
     this.transport = transport;
     try {
-      if (!this.initialized) {
-        await transport.request("initialize", {
-          clientInfo: {
-            name: "village-ritual-steward",
-            title: "Village Ritual Steward",
-            version: "0.0.0",
-          },
-          capabilities: { experimentalApi: true, requestAttestation: false },
-        });
-        transport.notify("initialized");
-        this.initialized = true;
-      }
+      await this.ensureInitialized(transport);
       const account = (await transport.request("account/read", {
         refreshToken: false,
       })) as { account?: { type?: unknown } | null };
@@ -98,6 +100,69 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
     }
   }
 
+  private async testRunExclusive(
+    candidate: RitualTestRunProviderContext,
+  ): Promise<RitualTestRunResult> {
+    const context = ritualTestRunProviderContextSchema.parse(candidate);
+    if (this.closed) return testRunWaiting(context, "PROVIDER_UNAVAILABLE");
+    const transport = this.transport ?? this.transportFactory();
+    this.transport = transport;
+    try {
+      await this.ensureInitialized(transport);
+      const account = (await transport.request("account/read", {
+        refreshToken: false,
+      })) as { account?: { type?: unknown } | null };
+      if (account.account?.type !== "chatgpt") {
+        return testRunWaiting(context, "AUTHENTICATION_REQUIRED");
+      }
+      const testThreadId = await this.startTestThread();
+      if (!testThreadId) {
+        return testRunWaiting(context, "PROVIDER_UNAVAILABLE");
+      }
+      const raw = await transport.runToolTurn(
+        testThreadId,
+        {
+          schemaVersion: 1,
+          ritual: {
+            name: context.ritual.name,
+            purpose: context.ritual.purpose,
+            steps: context.ritual.steps,
+            permissions: context.ritual.permissions,
+            completion: context.ritual.completion,
+            reviewPolicy: context.ritual.reviewPolicy,
+          },
+          sample: context.sample,
+          constraints: {
+            source: "SUPPLIED_SAMPLE_ONLY",
+            externalEffects: "NONE",
+            learning: "NO_CHANGE",
+          },
+        },
+        { toolName: "village_ritual_test_result", timeoutMs: 30_000 },
+      );
+      const content = ritualTestRunResultContentSchema.safeParse(raw);
+      if (!content.success) {
+        return testRunWaiting(context, "MALFORMED_PROVIDER_OUTPUT");
+      }
+      return ritualTestRunResultSchema.parse({
+        status: "result",
+        runId: context.runId,
+        ritualId: context.ritual.ritualId,
+        ritualRevision: context.ritual.ritualRevision,
+        ...content.data,
+      });
+    } catch (error) {
+      const timeout =
+        error instanceof Error &&
+        error.message === "CODEX_APP_SERVER_TURN_TIMEOUT";
+      if (!timeout) await this.invalidateTransport();
+      return testRunWaiting(
+        context,
+        timeout ? "TIME_BUDGET_EXHAUSTED" : "PROVIDER_UNAVAILABLE",
+      );
+    }
+  }
+
   async close(): Promise<void> {
     this.closed = true;
     await this.invalidateTransport();
@@ -125,6 +190,45 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
       this.threadId = created.thread.id;
   }
 
+  private async startTestThread(): Promise<string | undefined> {
+    if (!this.transport) return undefined;
+    const created = (await this.transport.request("thread/start", {
+      ephemeral: true,
+      experimentalRawEvents: false,
+      environments: [],
+      baseInstructions:
+        "You are the Village Steward running one safe test of an approved Ritual. Use only the supplied sample. Call village_ritual_test_result exactly once with a concise result, evidence grounded in that sample, and honest uncertainties. Do not take external actions, browse, use tools, request credentials, repeat the entire sample, or change the Ritual.",
+      dynamicTools: [
+        {
+          type: "function",
+          name: "village_ritual_test_result",
+          description:
+            "Return the bounded result of a sample-only Ritual test. Village binds and records it locally.",
+          inputSchema: ritualTestRunResultContentJsonSchema,
+        },
+      ],
+    })) as { thread?: { id?: unknown } };
+    return typeof created.thread?.id === "string"
+      ? created.thread.id
+      : undefined;
+  }
+
+  private async ensureInitialized(
+    transport: AppServerTransport,
+  ): Promise<void> {
+    if (this.initialized) return;
+    await transport.request("initialize", {
+      clientInfo: {
+        name: "village-ritual-steward",
+        title: "Village Ritual Steward",
+        version: "0.0.0",
+      },
+      capabilities: { experimentalApi: true, requestAttestation: false },
+    });
+    transport.notify("initialized");
+    this.initialized = true;
+  }
+
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.operationTail.then(operation, operation);
     this.operationTail = result.then(
@@ -141,6 +245,19 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
     this.threadId = undefined;
     await transport?.close().catch(() => undefined);
   }
+}
+
+function testRunWaiting(
+  context: RitualTestRunProviderContext,
+  reason: Extract<RitualTestRunResult, { status: "waiting" }>["reason"],
+): RitualTestRunResult {
+  return {
+    status: "waiting",
+    runId: context.runId,
+    ritualId: context.ritual.ritualId,
+    ritualRevision: context.ritual.ritualRevision,
+    reason,
+  };
 }
 
 function normalizeProposalStepKeys(candidate: unknown): unknown {

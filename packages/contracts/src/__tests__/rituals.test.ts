@@ -6,7 +6,11 @@ import {
   ritualDraftSchema,
   ritualStewardContextSchema,
   ritualStewardProposalSchema,
+  ritualTestRunRequestSchema,
+  ritualTestRunResultSchema,
+  createRitualTestReceipt,
   validateRitualStewardResult,
+  validateRitualTestRunResult,
 } from "../index.js";
 
 const draft = {
@@ -137,5 +141,109 @@ describe("Ritual contracts", () => {
         "RITUAL_DRAFT_ID_MISMATCH",
       );
     }
+  });
+
+  it("binds a sample-only Test Run Receipt to the exact approved Ritual", () => {
+    const approved = approveRitualDraft(draft, {
+      schemaVersion: 1,
+      draftId: draft.draftId,
+      expectedRevision: draft.revision,
+      ritualId: "rtl_01J00000000000000000000000",
+      approvedAt: "2026-08-15T15:01:00.000Z",
+    });
+    const request = ritualTestRunRequestSchema.parse({
+      schemaVersion: 1,
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      sample: "Customer A needs an answer before Friday.",
+    });
+    const result = ritualTestRunResultSchema.parse({
+      status: "result",
+      runId: "rrn_01J00000000000000000000000",
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      summary: "Customer A is the highest-priority response.",
+      evidence: ["The supplied deadline is Friday."],
+      uncertainties: ["The commercial impact was not supplied."],
+    });
+    if (result.status !== "result") throw new Error("expected test result");
+
+    const receipt = createRitualTestReceipt({
+      approved,
+      request,
+      result,
+      receiptId: "rcp_01J00000000000000000000000",
+      sampleDigest: "a".repeat(64),
+      recordedAt: "2026-08-15T15:02:00.000Z",
+    });
+
+    expect(receipt).toMatchObject({
+      mode: "TEST",
+      outcome: "NEEDS_REVIEW",
+      externalEffects: [],
+      sampleCharacterCount: request.sample.length,
+    });
+    expect(JSON.stringify(receipt)).not.toContain(request.sample);
+    expect(
+      ritualTestRunRequestSchema.safeParse({
+        ...request,
+        rawCredentials: "must not cross the boundary",
+      }).success,
+    ).toBe(false);
+    expect(() =>
+      createRitualTestReceipt({
+        approved,
+        request,
+        result: { ...result, ritualRevision: 2 },
+        receiptId: "rcp_01J00000000000000000000000",
+        sampleDigest: "a".repeat(64),
+        recordedAt: "2026-08-15T15:02:00.000Z",
+      }),
+    ).toThrow("STALE_RITUAL_TEST_RUN");
+
+    expect(
+      ritualTestRunResultSchema.safeParse({
+        ...result,
+        evidence: [],
+        uncertainties: [],
+      }).success,
+    ).toBe(false);
+
+    expect(
+      validateRitualTestRunResult(
+        {
+          schemaVersion: 1,
+          runId: result.runId,
+          ritual: approved,
+          sample: request.sample,
+        },
+        {
+          ...result,
+          summary: `Highest priority: ${request.sample}`,
+        },
+      ),
+    ).toMatchObject({
+      status: "waiting",
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    });
+
+    const shortSample = "Deadline is Friday";
+    expect(
+      validateRitualTestRunResult(
+        {
+          schemaVersion: 1,
+          runId: result.runId,
+          ritual: approved,
+          sample: shortSample,
+        },
+        {
+          ...result,
+          summary: `Highest priority: ${shortSample}`,
+        },
+      ),
+    ).toMatchObject({
+      status: "waiting",
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    });
   });
 });
