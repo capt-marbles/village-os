@@ -67,9 +67,9 @@ describe("restart-safe fixture Site Session transfer", () => {
       now: () => Date.parse("2026-08-15T20:00:00.000Z"),
     };
 
-    await expect(new FixtureContinuitySource(options).publishCurrent()).rejects.toThrow(
-      "SIMULATED_RESPONSE_LOSS",
-    );
+    await expect(
+      new FixtureContinuitySource(options).publishCurrent(),
+    ).rejects.toThrow("SIMULATED_RESPONSE_LOSS");
     const pending = JSON.parse(await readFile(options.journalPath, "utf8"));
     expect(JSON.stringify(pending)).not.toContain(sessionCookie.value);
 
@@ -114,7 +114,9 @@ describe("restart-safe fixture Site Session transfer", () => {
     };
 
     await new FixtureContinuitySource(sourceOptions).publishCurrent();
-    const firstDestination = new FixtureContinuityDestination(destinationOptions);
+    const firstDestination = new FixtureContinuityDestination(
+      destinationOptions,
+    );
     const firstRevision = await relay.fetchAfter(binding, 0);
     const firstAck = await firstDestination.apply(firstRevision);
     await relay.acknowledge(firstAck);

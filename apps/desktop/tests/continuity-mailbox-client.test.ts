@@ -52,7 +52,9 @@ describe("desktop encrypted continuity mailbox client", () => {
       }),
     ).resolves.toEqual({ acknowledged: true });
 
-    const fetchEnvelope = continuityFetchEnvelopeSchema.parse(requests[0]!.body);
+    const fetchEnvelope = continuityFetchEnvelopeSchema.parse(
+      requests[0]!.body,
+    );
     const { signature: fetchSignature, ...unsignedFetch } = fetchEnvelope;
     await expect(
       crypto.subtle.verify(
