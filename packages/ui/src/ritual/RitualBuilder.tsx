@@ -85,6 +85,13 @@ export function RitualBuilder({
           </div>
         ) : null}
 
+        {state.phase === "STARTING_NEW_RITUAL" ? (
+          <div className="ritual-drafting" role="status">
+            <span aria-hidden="true" />
+            <p>Preparing another Ritual…</p>
+          </div>
+        ) : null}
+
         {state.phase === "CHOOSE_TRIGGER" ? (
           <DecisionGroup
             label="Choose how the Ritual begins"
@@ -185,7 +192,9 @@ export function RitualBuilder({
               value={state.draft.name}
               maxLength={80}
               disabled={
-                state.phase === "APPROVED" || state.phase === "SAVING_APPROVAL"
+                state.phase === "APPROVED" ||
+                state.phase === "SAVING_APPROVAL" ||
+                state.phase === "STARTING_NEW_RITUAL"
               }
               onCommit={(value) => edit("name", value)}
             />
@@ -197,7 +206,9 @@ export function RitualBuilder({
               maxLength={320}
               rows={3}
               disabled={
-                state.phase === "APPROVED" || state.phase === "SAVING_APPROVAL"
+                state.phase === "APPROVED" ||
+                state.phase === "SAVING_APPROVAL" ||
+                state.phase === "STARTING_NEW_RITUAL"
               }
               onCommit={(value) => edit("purpose", value)}
             />
@@ -237,7 +248,9 @@ export function RitualBuilder({
               maxLength={320}
               rows={2}
               disabled={
-                state.phase === "APPROVED" || state.phase === "SAVING_APPROVAL"
+                state.phase === "APPROVED" ||
+                state.phase === "SAVING_APPROVAL" ||
+                state.phase === "STARTING_NEW_RITUAL"
               }
               onCommit={(value) => edit("completion", value)}
             />
@@ -300,9 +313,19 @@ export function RitualBuilder({
             ) : null}
 
             {state.phase === "APPROVED" ? (
-              <div className="ritual-approved" role="status">
-                <strong>Ritual approved</strong>
-                <p>No Run has started. Your Steward will offer a test next.</p>
+              <div className="ritual-approved">
+                <div role="status">
+                  <strong>Ritual approved</strong>
+                  <p>
+                    No Run has started. Your Steward will offer a test next.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onEvent({ type: "START_NEW_RITUAL" })}
+                >
+                  Shape another Ritual
+                </button>
               </div>
             ) : null}
           </div>

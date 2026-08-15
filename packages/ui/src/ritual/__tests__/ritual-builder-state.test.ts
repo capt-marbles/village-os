@@ -138,6 +138,53 @@ describe("Ritual Builder state", () => {
     expect(JSON.stringify(state)).not.toContain("RUN_RITUAL");
   });
 
+  it("returns an approved Ritual to a clean purpose prompt for another Ritual", () => {
+    const approved = {
+      schemaVersion: 1 as const,
+      ritualId,
+      ritualRevision: 1 as const,
+      status: "APPROVED" as const,
+      approvedDraftId: draftId,
+      approvedDraftRevision: 3,
+      name: "Pipeline review",
+      purpose: "Prepare a weekday pipeline review.",
+      trigger: { kind: "ON_DEMAND" as const, summary: "Whenever I ask" },
+      steps: [
+        {
+          stepKey: "prepare-review",
+          title: "Prepare the review",
+          description: "Gather the bounded information needed for the review.",
+          actor: { kind: "STEWARD" as const, role: "Steward" },
+          approval: "OWNER_REQUIRED" as const,
+        },
+      ],
+      permissions: ["Read only connected records"],
+      completion: "A reviewable result is ready.",
+      reviewPolicy: {
+        ownerReview: "EVERY_RUN" as const,
+        learning: "PROPOSE_ONLY" as const,
+      },
+      approvedAt: "2026-08-15T16:03:00.000Z",
+    };
+    let state = reduceRitualBuilder(createRitualBuilderState(), {
+      type: "RESTORE_APPROVED",
+      approved,
+    });
+
+    state = reduceRitualBuilder(state, { type: "START_NEW_RITUAL" });
+    expect(state.phase).toBe("STARTING_NEW_RITUAL");
+    state = reduceRitualBuilder(state, { type: "NEW_RITUAL_READY" });
+
+    expect(state).toMatchObject({
+      phase: "DESCRIBE_PURPOSE",
+      draft: null,
+      approved: null,
+      requestRevision: 0,
+    });
+    expect(state.messages[0]?.text).toContain("Pipeline review remains saved");
+    expect(state.messages.at(-1)?.speaker).toBe("STEWARD");
+  });
+
   it("returns a failed local save to the exact draft for retry", () => {
     let state = applyStewardProposal(createRitualBuilderState());
     state = reduceRitualBuilder(state, {

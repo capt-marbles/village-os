@@ -133,15 +133,55 @@ describe("Ritual Builder window", () => {
     const initialize = electron.handlers.get(
       "village:ritual-builder:initialize",
     )!;
+    const createDraftIdentity = electron.handlers.get(
+      "village:ritual-builder:create-draft-identity",
+    )!;
     const draft = electron.handlers.get("village:ritual-builder:draft")!;
     const approve = electron.handlers.get("village:ritual-builder:approve")!;
 
-    await initialize(event);
-    await draft(event, { request: "bounded" });
-    await approve(event, { approval: "bounded" });
+    const initialized = (await initialize(event)) as {
+      identity: { draftId: string; ritualId: string };
+    };
+    await draft(event, { draftId: initialized.identity.draftId });
+    await approve(event, {
+      ritualId: initialized.identity.ritualId,
+      approvedDraftId: initialized.identity.draftId,
+    });
     expect(controller.loadLatest).toHaveBeenCalledOnce();
-    expect(controller.draft).toHaveBeenCalledWith({ request: "bounded" });
-    expect(controller.approve).toHaveBeenCalledWith({ approval: "bounded" });
+    expect(controller.draft).toHaveBeenCalledWith({
+      draftId: initialized.identity.draftId,
+    });
+    expect(controller.approve).toHaveBeenCalledWith({
+      ritualId: initialized.identity.ritualId,
+      approvedDraftId: initialized.identity.draftId,
+    });
+
+    const nextIdentity = (await createDraftIdentity(event)) as {
+      draftId: string;
+      ritualId: string;
+    };
+    expect(nextIdentity).not.toEqual(initialized.identity);
+    await expect(
+      draft(event, { draftId: initialized.identity.draftId }),
+    ).rejects.toThrow("STALE_RITUAL_BUILDER_IDENTITY");
+    await expect(
+      approve(event, {
+        ritualId: initialized.identity.ritualId,
+        approvedDraftId: initialized.identity.draftId,
+      }),
+    ).rejects.toThrow("STALE_RITUAL_BUILDER_IDENTITY");
+    await expect(
+      draft(event, { draftId: nextIdentity.draftId }),
+    ).resolves.toEqual({ status: "waiting" });
+    await expect(
+      approve(event, {
+        ritualId: nextIdentity.ritualId,
+        approvedDraftId: nextIdentity.draftId,
+      }),
+    ).resolves.toEqual({
+      ritualId: nextIdentity.ritualId,
+      approvedDraftId: nextIdentity.draftId,
+    });
     await expect(initialize({ sender: {} })).rejects.toThrow(
       "UNTRUSTED_RITUAL_BUILDER_SENDER",
     );

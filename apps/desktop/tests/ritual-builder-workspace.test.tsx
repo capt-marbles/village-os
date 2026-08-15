@@ -17,10 +17,43 @@ const identity = {
   draftId: "rtd_01J00000000000000000000000",
   ritualId: "rtl_01J00000000000000000000000",
 };
+const nextIdentity = {
+  draftId: "rtd_01J00000000000000000000001",
+  ritualId: "rtl_01J00000000000000000000001",
+};
+
+const approved = {
+  schemaVersion: 1 as const,
+  ritualId: identity.ritualId,
+  ritualRevision: 1 as const,
+  status: "APPROVED" as const,
+  approvedDraftId: identity.draftId,
+  approvedDraftRevision: 3,
+  name: "Pipeline review",
+  purpose: "Prepare my pipeline review.",
+  trigger: { kind: "ON_DEMAND" as const, summary: "Whenever I ask" },
+  steps: [
+    {
+      stepKey: "prepare-review",
+      title: "Prepare the review",
+      description: "Gather the bounded information needed for the review.",
+      actor: { kind: "STEWARD" as const, role: "Steward" },
+      approval: "OWNER_REQUIRED" as const,
+    },
+  ],
+  permissions: ["Read only connected records"],
+  completion: "A reviewable result is ready.",
+  reviewPolicy: {
+    ownerReview: "EVERY_RUN" as const,
+    learning: "PROPOSE_ONLY" as const,
+  },
+  approvedAt: "2026-08-15T16:03:00.000Z",
+};
 
 function bridge() {
   return {
     initialize: vi.fn(async () => ({ identity, approved: null })),
+    createDraftIdentity: vi.fn(async () => nextIdentity),
     draft: vi.fn(async (context) => ({
       status: "proposal" as const,
       draftId: context.draftId,
@@ -130,5 +163,53 @@ describe("RitualBuilderWorkspace", () => {
     expect(screen.getByRole("status").textContent).toContain(
       "No Run has started",
     );
+  });
+
+  it("starts another Ritual with a fresh identity while preserving the approval", async () => {
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({ identity, approved });
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+    await screen.findByText("Ritual approved");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Shape another Ritual" }),
+    );
+    await screen.findByLabelText("What should become repeatable?");
+    expect(activeBridge.createDraftIdentity).toHaveBeenCalledOnce();
+
+    fireEvent.change(screen.getByLabelText("What should become repeatable?"), {
+      target: { value: "Review new support requests." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start the draft" }));
+    await waitFor(() => expect(activeBridge.draft).toHaveBeenCalledOnce());
+    expect(activeBridge.draft).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      draftId: nextIdentity.draftId,
+      requestRevision: 1,
+      ownerPurpose: "Review new support requests.",
+    });
+    expect(screen.getByText(/Pipeline review remains saved/u)).toBeTruthy();
+  });
+
+  it("keeps the approved Ritual available when fresh identity creation fails", async () => {
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({ identity, approved });
+    activeBridge.createDraftIdentity.mockRejectedValueOnce(
+      new Error("IDENTITY_UNAVAILABLE"),
+    );
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+    await screen.findByText("Ritual approved");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Shape another Ritual" }),
+    );
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "could not prepare another Ritual",
+    );
+    expect(screen.getByText("Pipeline review")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Shape another Ritual" }),
+    ).toBeTruthy();
   });
 });

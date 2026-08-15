@@ -18,6 +18,7 @@ export interface RitualBuilderBridge {
     identity: RitualBuilderIdentity;
     approved: ApprovedRitualRevision | null;
   }>;
+  createDraftIdentity(): Promise<RitualBuilderIdentity>;
   draft(context: RitualStewardContext): Promise<RitualStewardResult>;
   approve(ritual: ApprovedRitualRevision): Promise<ApprovedRitualRevision>;
 }
@@ -71,6 +72,28 @@ export function RitualBuilderWorkspace({
 
   const onEvent = (event: RitualBuilderEvent) => {
     if (!bridge || !identity) return;
+    if (event.type === "START_NEW_RITUAL") {
+      const next = reduceRitualBuilder(state, event);
+      setState(next);
+      if (next.phase !== "STARTING_NEW_RITUAL") return;
+      const requestGeneration = ++generation.current;
+      void bridge
+        .createDraftIdentity()
+        .then((nextIdentity) => {
+          if (generation.current !== requestGeneration) return;
+          setIdentity(nextIdentity);
+          setState((current) =>
+            reduceRitualBuilder(current, { type: "NEW_RITUAL_READY" }),
+          );
+        })
+        .catch(() => {
+          if (generation.current !== requestGeneration) return;
+          setState((current) =>
+            reduceRitualBuilder(current, { type: "NEW_RITUAL_FAILED" }),
+          );
+        });
+      return;
+    }
     if (event.type === "SUBMIT_PURPOSE") {
       const next = reduceRitualBuilder(state, event);
       setState(next);

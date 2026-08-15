@@ -3,7 +3,7 @@ import vm from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 
 describe("Ritual Builder preload", () => {
-  it("exposes only the three fixed Ritual operations", async () => {
+  it("exposes only the four fixed Ritual operations", async () => {
     const source = await readFile(
       new URL("../src/preload/ritual-builder-bridge.cjs", import.meta.url),
       "utf8",
@@ -23,21 +23,27 @@ describe("Ritual Builder preload", () => {
     });
     expect(Object.keys(bridge).sort()).toEqual([
       "approve",
+      "createDraftIdentity",
       "draft",
       "initialize",
     ]);
     await bridge.initialize!();
+    await bridge.createDraftIdentity!();
     await bridge.draft!({ purpose: "bounded" });
     await bridge.approve!({ ritualId: "bounded" });
     expect(invoke).toHaveBeenNthCalledWith(
       1,
       "village:ritual-builder:initialize",
     );
-    expect(invoke).toHaveBeenNthCalledWith(2, "village:ritual-builder:draft", {
+    expect(invoke).toHaveBeenNthCalledWith(
+      2,
+      "village:ritual-builder:create-draft-identity",
+    );
+    expect(invoke).toHaveBeenNthCalledWith(3, "village:ritual-builder:draft", {
       purpose: "bounded",
     });
     expect(invoke).toHaveBeenNthCalledWith(
-      3,
+      4,
       "village:ritual-builder:approve",
       { ritualId: "bounded" },
     );
