@@ -12,6 +12,7 @@ import { deviceIdForPublicKey } from "../src/main/pairing-bootstrap.js";
 import {
   assertDistinctBrowserSessionIdentity,
   createPairedWorkflowRuntimeComposition,
+  createRuntimeContinuityMailboxClient,
   createRuntimeControlPlaneAutomationFence,
   createRuntimeControlPlaneComposition,
 } from "../src/main/runtime-control-plane.js";
@@ -132,6 +133,50 @@ describe("packaged runtime control-plane composition", () => {
         ),
       ),
     ).toEqual({ [identity.browserSessionId]: 6 });
+  });
+
+  it("binds the continuity mailbox client to the paired device identity", async () => {
+    const userDataPath = await mkdtemp(join(tmpdir(), "village-runtime-cp-"));
+    temporaryDirectories.push(userDataPath);
+    const keys = await generateDeviceSigningKey();
+    const publicJwk = await exportPublicDeviceJwk(keys.publicKey);
+    const identity = {
+      principalId: "prn_01J00000000000000000000000",
+      deviceId: await deviceIdForPublicKey(publicJwk),
+      browserSessionId: "brs_01J00000000000000000000002",
+    };
+    const request = vi.fn<typeof fetch>(async () =>
+      Response.json({ ok: true, revision: null }),
+    );
+    const client = await createRuntimeContinuityMailboxClient({
+      controlPlaneUrl: new URL("https://village.test"),
+      userDataPath,
+      identity,
+      deviceIdentitySource: {
+        load: async () => ({
+          privateKey: keys.privateKey,
+          publicKey: keys.publicKey,
+          publicJwk,
+          protectionBackend: "keychain",
+        }),
+      },
+      request,
+    });
+    await client.fetchAfter(
+      {
+        principalId: identity.principalId,
+        grantId: "cgr_01J00000000000000000000000",
+        sourceDeviceId: "dev_01J00000000000000000000001",
+        destinationDeviceId: identity.deviceId,
+        sourceBrowserSessionId: "brs_01J00000000000000000000001",
+        destinationBrowserSessionId: identity.browserSessionId,
+        site: "OWNED_FIXTURE",
+      },
+      0,
+    );
+    expect(String(request.mock.calls[0]![0])).toContain(
+      "/api/site-session-continuity/grants/cgr_01J00000000000000000000000/fetch",
+    );
   });
 
   it("rejects a device key that does not belong to the paired identity", async () => {
