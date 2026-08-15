@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { instantSchema, principalIdSchema } from "@village/contracts";
+import type { Environment } from "../../env.js";
 
 const deletionRequestSchema = z.strictObject({
   principalId: principalIdSchema,
@@ -26,6 +27,7 @@ const deletionCountQueries = [
   "SELECT COUNT(*) AS count FROM workflow_effect_projections WHERE principal_id = ?",
   "SELECT COUNT(*) AS count FROM workflow_last_effect_actor WHERE principal_id = ?",
   "SELECT COUNT(*) AS count FROM workflow_cancellations WHERE principal_id = ?",
+  "SELECT COUNT(*) AS count FROM continuity_grants WHERE principal_id = ?",
 ] as const;
 
 export async function exportPrincipalRecords(
@@ -41,6 +43,7 @@ export async function exportPrincipalRecords(
     receipts,
     workflowEffects,
     cancellations,
+    continuityGrants,
   ] = await Promise.all([
     db
       .prepare(
@@ -111,6 +114,19 @@ export async function exportPrincipalRecords(
       )
       .bind(principal)
       .all(),
+    db
+      .prepare(
+        `SELECT grant_id AS grantId, source_device_id AS sourceDeviceId,
+                destination_device_id AS destinationDeviceId,
+                source_browser_session_id AS sourceBrowserSessionId,
+                destination_browser_session_id AS destinationBrowserSessionId,
+                site, state, created_at AS createdAt, expires_at AS expiresAt,
+                revoked_at AS revokedAt, deleted_at AS deletedAt
+         FROM continuity_grants WHERE principal_id = ?
+         ORDER BY created_at, grant_id`,
+      )
+      .bind(principal)
+      .all(),
   ]);
   return {
     principalId: principal,
@@ -121,6 +137,7 @@ export async function exportPrincipalRecords(
     workflowEffects: workflowEffects.results,
     workflowActors: workflowActors.results,
     cancellations: cancellations.results,
+    continuityGrants: continuityGrants.results,
   };
 }
 
@@ -153,10 +170,11 @@ export async function planPrincipalDeletion(
 }
 
 export async function executePrincipalDeletion(
-  db: D1Database,
+  environment: Environment,
   candidate: unknown,
   executedAtCandidate: unknown = new Date().toISOString(),
 ) {
+  const db = environment.VILLAGE_DB;
   const request = deletionRequestSchema.safeParse(candidate);
   const executedAt = instantSchema.safeParse(executedAtCandidate);
   if (!request.success || !executedAt.success)
@@ -170,6 +188,28 @@ export async function executePrincipalDeletion(
     .first<{ status: "PLANNED" | "COMPLETED" | "VERIFICATION_FAILED" }>();
   if (!plan) return { ok: false as const, code: "DELETION_PLAN_NOT_FOUND" };
   if (plan.status !== "COMPLETED") {
+    const grants = await db
+      .prepare(
+        `SELECT grant_id FROM continuity_grants
+         WHERE principal_id = ? AND state != 'DELETED'`,
+      )
+      .bind(request.data.principalId)
+      .all<{ grant_id: string }>();
+    for (const grant of grants.results) {
+      const destroyed = await environment.SITE_SESSION_MAILBOX.getByName(
+        `${request.data.principalId}:${grant.grant_id}`,
+      ).destroy(request.data.principalId);
+      if (!destroyed.ok && destroyed.code !== "MAILBOX_NOT_FOUND") {
+        return {
+          ok: false as const,
+          code: "CONTINUITY_MAILBOX_DELETION_FAILED",
+        };
+      }
+    }
+    await db
+      .prepare("DELETE FROM continuity_grants WHERE principal_id = ?")
+      .bind(request.data.principalId)
+      .run();
     await db
       .prepare("DELETE FROM principals WHERE principal_id = ?")
       .bind(request.data.principalId)

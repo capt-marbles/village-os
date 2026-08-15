@@ -27,4 +27,5 @@ export * from "./redaction.js";
 export * from "./rituals.js";
 export * from "./secrets.js";
 export * from "./signatures.js";
+export * from "./site-session-continuity.js";
 export * from "./workflow-operations.js";

@@ -13,10 +13,18 @@
         "name": "BROWSER_SESSION_COORDINATOR",
         "class_name": "BrowserSessionCoordinator",
       },
+      {
+        "name": "SITE_SESSION_MAILBOX",
+        "class_name": "SiteSessionMailbox",
+      },
     ],
   },
   "exports": {
     "BrowserSessionCoordinator": {
+      "type": "durable-object",
+      "storage": "sqlite",
+    },
+    "SiteSessionMailbox": {
       "type": "durable-object",
       "storage": "sqlite",
     },
