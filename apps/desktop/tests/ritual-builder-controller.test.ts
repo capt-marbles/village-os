@@ -1,3 +1,8 @@
+import {
+  createRitualRun,
+  reduceRitualRun,
+  type RitualRun,
+} from "@village/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { RitualBuilderController } from "../src/main/ritual-builder-controller.js";
 
@@ -30,6 +35,61 @@ const approved = {
   approvedAt: "2026-08-15T16:03:00.000Z",
 };
 
+const automaticApproved = {
+  ...approved,
+  steps: [{ ...approved.steps[0]!, approval: "NONE" as const }],
+};
+
+function unusedRunPersistence() {
+  return {
+    findRunWithApprovedRevision: vi.fn(async () => null),
+    findNonterminalRun: vi.fn(async () => null),
+    saveRun: vi.fn(async () => undefined),
+    completeRun: vi.fn(async () => undefined),
+  };
+}
+
+function unavailableProvider() {
+  return {
+    draft: vi.fn(async () => {
+      throw new Error("not used");
+    }),
+    testRun: vi.fn(async () => {
+      throw new Error("not used");
+    }),
+    learn: vi.fn(async () => {
+      throw new Error("not used");
+    }),
+    close: vi.fn(async () => undefined),
+  };
+}
+
+function createQueuedRun(
+  ritual = approved,
+  runId = "rrn_01J00000000000000000000001",
+): RitualRun {
+  return createRitualRun({
+    approved: ritual,
+    request: {
+      schemaVersion: 1,
+      ritualId: ritual.ritualId,
+      ritualRevision: ritual.ritualRevision,
+    },
+    runId,
+    createdAt: "2026-08-16T12:00:00.000Z",
+  });
+}
+
+function createRunningRun(
+  ritual = approved,
+  runId = "rrn_01J00000000000000000000001",
+): RitualRun {
+  return reduceRitualRun(createQueuedRun(ritual, runId), ritual, {
+    type: "START",
+    occurredAt: "2026-08-16T12:00:01.000Z",
+  });
+}
+
 describe("RitualBuilderController", () => {
   it("passes a strict drafting request to the Steward and persists only approved Rituals", async () => {
     const provider = {
@@ -58,10 +118,16 @@ describe("RitualBuilderController", () => {
       }),
     };
     const repository = {
-      latestSnapshot: vi.fn(async () => ({ approved: null, receipt: null })),
+      latestSnapshot: vi.fn(async () => ({
+        approved: null,
+        receipt: null,
+        run: null,
+        runReceipt: null,
+      })),
       find: vi.fn(async () => null),
       save: vi.fn(async () => undefined),
       saveReceipt: vi.fn(async () => undefined),
+      ...unusedRunPersistence(),
     };
     const controller = new RitualBuilderController(provider, repository);
 
@@ -91,10 +157,14 @@ describe("RitualBuilderController", () => {
     repository.latestSnapshot.mockResolvedValue({
       approved,
       receipt: null,
+      run: null,
+      runReceipt: null,
     });
     await expect(controller.loadLatestState()).resolves.toEqual({
       approved,
       receipt: null,
+      run: null,
+      runReceipt: null,
     });
     await controller.close();
     expect(provider.close).toHaveBeenCalledOnce();
@@ -117,10 +187,16 @@ describe("RitualBuilderController", () => {
       close: vi.fn(async () => undefined),
     };
     const repository = {
-      latestSnapshot: vi.fn(async () => ({ approved, receipt: null })),
+      latestSnapshot: vi.fn(async () => ({
+        approved,
+        receipt: null,
+        run: null,
+        runReceipt: null,
+      })),
       find: vi.fn(async () => approved),
       save: vi.fn(async () => undefined),
       saveReceipt: vi.fn(async () => undefined),
+      ...unusedRunPersistence(),
     };
     const controller = new RitualBuilderController(provider, repository, {
       createId: (prefix) =>
@@ -180,10 +256,16 @@ describe("RitualBuilderController", () => {
       close: vi.fn(async () => undefined),
     };
     const repository = {
-      latestSnapshot: vi.fn(async () => ({ approved, receipt: null })),
+      latestSnapshot: vi.fn(async () => ({
+        approved,
+        receipt: null,
+        run: null,
+        runReceipt: null,
+      })),
       find: vi.fn(async () => approved),
       save: vi.fn(async () => undefined),
       saveReceipt: vi.fn(async () => undefined),
+      ...unusedRunPersistence(),
     };
     const controller = new RitualBuilderController(provider, repository, {
       createId: () => "rrn_01J00000000000000000000000",
@@ -202,6 +284,376 @@ describe("RitualBuilderController", () => {
       reason: "MALFORMED_PROVIDER_OUTPUT",
     });
     expect(repository.saveReceipt).not.toHaveBeenCalled();
+  });
+
+  it("persists, gates, resumes, and receipts a manual fixture Run", async () => {
+    const provider = {
+      draft: vi.fn(async () => {
+        throw new Error("not used");
+      }),
+      testRun: vi.fn(async () => {
+        throw new Error("not used");
+      }),
+      close: vi.fn(async () => undefined),
+    };
+    let currentRun: RitualRun | null = null;
+    const repository = {
+      latestSnapshot: vi.fn(async () => ({
+        approved,
+        receipt: null,
+        run: currentRun,
+        runReceipt: null,
+      })),
+      find: vi.fn(async () => approved),
+      findReceipt: vi.fn(async () => null),
+      findLearningProposal: vi.fn(async () => null),
+      save: vi.fn(async () => undefined),
+      saveReceipt: vi.fn(async () => undefined),
+      saveLearningProposal: vi.fn(async () => undefined),
+      findRunWithApprovedRevision: vi.fn(async () =>
+        currentRun ? { run: currentRun, approved } : null,
+      ),
+      findNonterminalRun: vi.fn(async () => null),
+      saveRun: vi.fn(async (run) => {
+        currentRun = run;
+      }),
+      completeRun: vi.fn(async (run) => {
+        currentRun = run;
+      }),
+    };
+    let tick = 0;
+    const controller = new RitualBuilderController(provider, repository, {
+      createId: (prefix) =>
+        prefix === "rrn"
+          ? "rrn_01J00000000000000000000001"
+          : "rcp_01J00000000000000000000001",
+      now: () => `2026-08-16T12:00:0${tick++}.000Z`,
+    });
+
+    const waiting = await controller.startRun({
+      schemaVersion: 1,
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+    });
+    expect(waiting).toMatchObject({
+      status: "run",
+      run: {
+        status: "WAITING_FOR_OWNER",
+        currentStepKey: "prepare-review",
+      },
+    });
+    expect(repository.saveRun).toHaveBeenCalledTimes(2);
+
+    const completed = await controller.approveRunStep({
+      schemaVersion: 1,
+      runId: "rrn_01J00000000000000000000001",
+      stepKey: "prepare-review",
+    });
+    expect(completed).toMatchObject({
+      status: "receipt",
+      run: { status: "NEEDS_REVIEW", currentStepKey: null },
+      receipt: {
+        mode: "RUN",
+        executionProvider: "DETERMINISTIC_FIXTURE",
+        externalEffects: [],
+      },
+    });
+    expect(repository.completeRun).toHaveBeenCalledOnce();
+    expect(provider.testRun).not.toHaveBeenCalled();
+  });
+
+  it("records EXECUTOR_FAILED when the fixture executor throws", async () => {
+    let currentRun: RitualRun | null = null;
+    const repository = {
+      latestSnapshot: vi.fn(async () => ({
+        approved: automaticApproved,
+        receipt: null,
+        run: currentRun,
+        runReceipt: null,
+      })),
+      find: vi.fn(async () => automaticApproved),
+      findNonterminalRun: vi.fn(async () => null),
+      saveRun: vi.fn(async (run: RitualRun) => {
+        currentRun = run;
+      }),
+      completeRun: vi.fn(async () => undefined),
+    };
+    const controller = new RitualBuilderController(
+      unavailableProvider(),
+      repository,
+      {
+        createId: () => "rrn_01J00000000000000000000002",
+        now: () => "2026-08-16T12:01:00.000Z",
+        runExecutor: {
+          completeCurrentStep: async () => {
+            throw new Error("fixture failed");
+          },
+        },
+      },
+    );
+
+    await expect(
+      controller.startRun({
+        schemaVersion: 1,
+        ritualId: automaticApproved.ritualId,
+        ritualRevision: automaticApproved.ritualRevision,
+      }),
+    ).resolves.toMatchObject({
+      status: "run",
+      run: { status: "FAILED", failureCode: "EXECUTOR_FAILED" },
+    });
+    expect(currentRun).toMatchObject({
+      status: "FAILED",
+      failureCode: "EXECUTOR_FAILED",
+    });
+  });
+
+  it("records POLICY_DENIED when a fixture reports external effects", async () => {
+    let currentRun: RitualRun | null = null;
+    const repository = {
+      latestSnapshot: vi.fn(async () => ({
+        approved: automaticApproved,
+        receipt: null,
+        run: currentRun,
+        runReceipt: null,
+      })),
+      find: vi.fn(async () => automaticApproved),
+      findNonterminalRun: vi.fn(async () => null),
+      saveRun: vi.fn(async (run: RitualRun) => {
+        currentRun = run;
+      }),
+      completeRun: vi.fn(async () => undefined),
+    };
+    const controller = new RitualBuilderController(
+      unavailableProvider(),
+      repository,
+      {
+        createId: () => "rrn_01J00000000000000000000003",
+        now: () => "2026-08-16T12:02:00.000Z",
+        runExecutor: {
+          completeCurrentStep: async () => ({
+            stepKey: "prepare-review",
+            externalEffects: ["unexpected effect"] as unknown as readonly [],
+          }),
+        },
+      },
+    );
+
+    await expect(
+      controller.startRun({
+        schemaVersion: 1,
+        ritualId: automaticApproved.ritualId,
+        ritualRevision: automaticApproved.ritualRevision,
+      }),
+    ).resolves.toMatchObject({
+      status: "run",
+      run: { status: "FAILED", failureCode: "POLICY_DENIED" },
+    });
+    expect(currentRun).toMatchObject({
+      status: "FAILED",
+      failureCode: "POLICY_DENIED",
+    });
+  });
+
+  it("fails from the immediately durable checkpoint when checkpoint persistence rejects", async () => {
+    const twoStepRitual = {
+      ...automaticApproved,
+      steps: [
+        automaticApproved.steps[0]!,
+        {
+          stepKey: "summarize-review",
+          title: "Summarize the review",
+          description: "Prepare the bounded review summary.",
+          actor: { kind: "STEWARD" as const, role: "Steward" },
+          approval: "NONE" as const,
+        },
+      ],
+    };
+    let currentRun: RitualRun | null = null;
+    let writes = 0;
+    const repository = {
+      latestSnapshot: vi.fn(async () => ({
+        approved: twoStepRitual,
+        receipt: null,
+        run: currentRun,
+        runReceipt: null,
+      })),
+      find: vi.fn(async () => twoStepRitual),
+      findNonterminalRun: vi.fn(async () => null),
+      saveRun: vi.fn(async (run: RitualRun) => {
+        writes += 1;
+        if (writes === 3) throw new Error("CHECKPOINT_WRITE_FAILED");
+        currentRun = run;
+      }),
+      completeRun: vi.fn(async () => undefined),
+    };
+    const controller = new RitualBuilderController(
+      unavailableProvider(),
+      repository,
+      {
+        createId: () => "rrn_01J00000000000000000000004",
+        now: () => "2026-08-16T12:03:00.000Z",
+      },
+    );
+
+    await expect(
+      controller.startRun({
+        schemaVersion: 1,
+        ritualId: twoStepRitual.ritualId,
+        ritualRevision: twoStepRitual.ritualRevision,
+      }),
+    ).resolves.toMatchObject({
+      status: "run",
+      run: {
+        status: "FAILED",
+        failureCode: "EXECUTOR_FAILED",
+        steps: [
+          { stepKey: "prepare-review", status: "FAILED" },
+          { stepKey: "summarize-review", status: "CANCELED" },
+        ],
+      },
+    });
+    expect(currentRun).toMatchObject({
+      revision: 3,
+      status: "FAILED",
+      steps: [
+        { stepKey: "prepare-review", status: "FAILED" },
+        { stepKey: "summarize-review", status: "CANCELED" },
+      ],
+    });
+  });
+
+  it("marks persisted queued and running Runs interrupted on load", async () => {
+    const queued = createQueuedRun();
+    const running = createRunningRun(automaticApproved);
+    const saveRun = vi.fn(async () => undefined);
+    const repository = {
+      latestSnapshot: vi
+        .fn()
+        .mockResolvedValueOnce({
+          approved,
+          receipt: null,
+          run: queued,
+          runReceipt: null,
+        })
+        .mockResolvedValueOnce({
+          approved: automaticApproved,
+          receipt: null,
+          run: running,
+          runReceipt: null,
+        }),
+      saveRun,
+    };
+    const controller = new RitualBuilderController(
+      unavailableProvider(),
+      repository,
+      {
+        createId: () => "rrn_01J00000000000000000000005",
+        now: () => "2026-08-16T12:04:00.000Z",
+      },
+    );
+
+    await expect(controller.loadLatestState()).resolves.toMatchObject({
+      run: { status: "FAILED", failureCode: "INTERRUPTED" },
+    });
+    await expect(controller.loadLatestState()).resolves.toMatchObject({
+      run: { status: "FAILED", failureCode: "INTERRUPTED" },
+    });
+    expect(saveRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: queued.runId,
+        status: "FAILED",
+        failureCode: "INTERRUPTED",
+      }),
+    );
+    expect(saveRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: running.runId,
+        status: "FAILED",
+        failureCode: "INTERRUPTED",
+      }),
+    );
+  });
+
+  it("returns an existing nonterminal Run instead of minting another", async () => {
+    const existing = createRunningRun(automaticApproved);
+    const repository = {
+      find: vi.fn(async () => automaticApproved),
+      findNonterminalRun: vi.fn(async () => existing),
+      saveRun: vi.fn(async () => undefined),
+      completeRun: vi.fn(async () => undefined),
+    };
+    const controller = new RitualBuilderController(
+      unavailableProvider(),
+      repository,
+      {
+        createId: vi.fn(() => "rrn_01J00000000000000000000006"),
+        now: () => "2026-08-16T12:05:00.000Z",
+      },
+    );
+
+    await expect(
+      controller.startRun({
+        schemaVersion: 1,
+        ritualId: automaticApproved.ritualId,
+        ritualRevision: automaticApproved.ritualRevision,
+      }),
+    ).resolves.toEqual({ status: "run", run: existing });
+    expect(repository.saveRun).not.toHaveBeenCalled();
+  });
+
+  it("recovers a rejected terminal write without replaying the completed fixture", async () => {
+    let currentRun: RitualRun | null = null;
+    const repository = {
+      latestSnapshot: vi.fn(async () => ({
+        approved: automaticApproved,
+        receipt: null,
+        run: currentRun,
+        runReceipt: null,
+      })),
+      find: vi.fn(async () => automaticApproved),
+      findNonterminalRun: vi.fn(async () => null),
+      saveRun: vi.fn(async (run: RitualRun) => {
+        currentRun = run;
+      }),
+      completeRun: vi.fn(async () => {
+        throw new Error("ATOMIC_TERMINAL_WRITE_FAILED");
+      }),
+    };
+    const controller = new RitualBuilderController(
+      unavailableProvider(),
+      repository,
+      {
+        createId: (prefix) =>
+          prefix === "rrn"
+            ? "rrn_01J00000000000000000000007"
+            : "rcp_01J00000000000000000000007",
+        now: () => "2026-08-16T12:06:00.000Z",
+      },
+    );
+
+    await expect(
+      controller.startRun({
+        schemaVersion: 1,
+        ritualId: automaticApproved.ritualId,
+        ritualRevision: automaticApproved.ritualRevision,
+      }),
+    ).rejects.toThrow("ATOMIC_TERMINAL_WRITE_FAILED");
+    expect(currentRun).toMatchObject({
+      status: "RUNNING",
+      currentStepKey: null,
+      steps: [{ status: "COMPLETED" }],
+    });
+
+    await expect(controller.loadLatestState()).resolves.toMatchObject({
+      run: {
+        status: "FAILED",
+        failureCode: "INTERRUPTED",
+        currentStepKey: null,
+      },
+      runReceipt: null,
+    });
+    expect(repository.completeRun).toHaveBeenCalledOnce();
   });
 
   it("persists a Receipt-bound learning proposal and approves only its current revision", async () => {
@@ -251,13 +703,19 @@ describe("RitualBuilderController", () => {
       close: vi.fn(async () => undefined),
     };
     const repository = {
-      latestSnapshot: vi.fn(async () => ({ approved, receipt })),
+      latestSnapshot: vi.fn(async () => ({
+        approved,
+        receipt,
+        run: null,
+        runReceipt: null,
+      })),
       find: vi.fn(async () => approved),
       findReceipt: vi.fn(async () => receipt),
       findLearningProposal: vi.fn(async () => proposal),
       save: vi.fn(async () => undefined),
       saveReceipt: vi.fn(async () => undefined),
       saveLearningProposal: vi.fn(async () => undefined),
+      ...unusedRunPersistence(),
     };
     const controller = new RitualBuilderController(provider, repository, {
       createId: () => "rlp_01J00000000000000000000000",

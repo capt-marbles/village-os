@@ -186,6 +186,198 @@ export const ritualTestRunControllerResultSchema = z.discriminatedUnion(
   ],
 );
 
+export const ritualRunRequestSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  ritualId: ritualIdSchema,
+  ritualRevision: z.number().int().positive(),
+});
+
+export const ritualRunStepApprovalRequestSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  runId: ritualRunIdSchema,
+  stepKey: ritualStepSchema.shape.stepKey,
+});
+
+export const ritualRunCancelRequestSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  runId: ritualRunIdSchema,
+});
+
+export const ritualRunStepStateSchema = z.strictObject({
+  stepKey: ritualStepSchema.shape.stepKey,
+  title: ritualStepSchema.shape.title,
+  actor: ritualActorSchema,
+  approval: ritualStepSchema.shape.approval,
+  status: z.enum([
+    "PENDING",
+    "WAITING_FOR_OWNER",
+    "RUNNING",
+    "COMPLETED",
+    "FAILED",
+    "CANCELED",
+  ]),
+  startedAt: instantSchema.nullable(),
+  approvedAt: instantSchema.nullable(),
+  completedAt: instantSchema.nullable(),
+});
+
+export const ritualRunSchema = z
+  .strictObject({
+    schemaVersion: z.literal(1),
+    runId: ritualRunIdSchema,
+    revision: z.number().int().positive(),
+    ritualId: ritualIdSchema,
+    ritualRevision: z.number().int().positive(),
+    executionProvider: z.literal("DETERMINISTIC_FIXTURE"),
+    status: z.enum([
+      "QUEUED",
+      "RUNNING",
+      "WAITING_FOR_OWNER",
+      "COMPLETED",
+      "NEEDS_REVIEW",
+      "FAILED",
+      "CANCELED",
+    ]),
+    currentStepKey: ritualStepSchema.shape.stepKey.nullable(),
+    steps: z.array(ritualRunStepStateSchema).min(1).max(12),
+    permissions: z.array(shortLabelSchema).max(12),
+    externalEffects: z.tuple([]),
+    failureCode: z
+      .enum(["EXECUTOR_FAILED", "INTERRUPTED", "POLICY_DENIED"])
+      .nullable(),
+    createdAt: instantSchema,
+    startedAt: instantSchema.nullable(),
+    updatedAt: instantSchema,
+    completedAt: instantSchema.nullable(),
+  })
+  .superRefine((run, context) => {
+    if (
+      new Set(run.steps.map((step) => step.stepKey)).size !== run.steps.length
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["steps"],
+        message: "Run step keys must be unique",
+      });
+    }
+    const terminal = [
+      "COMPLETED",
+      "NEEDS_REVIEW",
+      "FAILED",
+      "CANCELED",
+    ].includes(run.status);
+    if (terminal !== Boolean(run.completedAt)) {
+      context.addIssue({
+        code: "custom",
+        path: ["completedAt"],
+        message: "Only terminal Runs have a completion time",
+      });
+    }
+    if (run.status === "QUEUED" && run.startedAt !== null) {
+      context.addIssue({
+        code: "custom",
+        path: ["startedAt"],
+        message: "Queued Runs have not started",
+      });
+    }
+    if (
+      run.status !== "QUEUED" &&
+      run.startedAt === null &&
+      run.status !== "CANCELED"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["startedAt"],
+        message: "Started Runs require a start time",
+      });
+    }
+    const active = run.steps.filter((step) =>
+      ["WAITING_FOR_OWNER", "RUNNING"].includes(step.status),
+    );
+    if (
+      active.length > 1 ||
+      (active[0]?.stepKey ?? null) !== run.currentStepKey
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["currentStepKey"],
+        message: "Current step must identify the only active step",
+      });
+    }
+    if ((run.status === "RUNNING") !== (active[0]?.status === "RUNNING")) {
+      if (!(run.status === "RUNNING" && active.length === 0)) {
+        context.addIssue({
+          code: "custom",
+          path: ["status"],
+          message: "Run and step state must agree",
+        });
+      }
+    }
+    if (
+      (run.status === "WAITING_FOR_OWNER") !==
+      (active[0]?.status === "WAITING_FOR_OWNER")
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["status"],
+        message: "Owner gate and step state must agree",
+      });
+    }
+    if (
+      (run.status === "COMPLETED" || run.status === "NEEDS_REVIEW") &&
+      (run.currentStepKey !== null ||
+        run.steps.some((step) => step.status !== "COMPLETED"))
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["steps"],
+        message: "Successful terminal Runs complete every step",
+      });
+    }
+    if ((run.status === "FAILED") !== Boolean(run.failureCode)) {
+      context.addIssue({
+        code: "custom",
+        path: ["failureCode"],
+        message: "Only failed Runs carry a failure code",
+      });
+    }
+  });
+
+export const ritualRunReceiptSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  receiptId: receiptIdSchema,
+  runId: ritualRunIdSchema,
+  ritualId: ritualIdSchema,
+  ritualRevision: z.number().int().positive(),
+  mode: z.literal("RUN"),
+  executionProvider: z.literal("DETERMINISTIC_FIXTURE"),
+  outcome: z.enum(["COMPLETED", "NEEDS_REVIEW"]),
+  summary: z.string().trim().min(1).max(2_000),
+  stepEvidence: z
+    .array(
+      z.strictObject({
+        stepKey: ritualStepSchema.shape.stepKey,
+        title: ritualStepSchema.shape.title,
+        actor: ritualActorSchema,
+      }),
+    )
+    .min(1)
+    .max(12),
+  uncertainties: z.array(sentenceSchema).max(8),
+  externalEffects: z.tuple([]),
+  startedAt: instantSchema,
+  recordedAt: instantSchema,
+});
+
+export const ritualRunControllerResultSchema = z.discriminatedUnion("status", [
+  z.strictObject({ status: z.literal("run"), run: ritualRunSchema }),
+  z.strictObject({
+    status: z.literal("receipt"),
+    run: ritualRunSchema,
+    receipt: ritualRunReceiptSchema,
+  }),
+]);
+
 export const ritualLearningFeedbackRequestSchema = z.strictObject({
   schemaVersion: z.literal(1),
   ritualId: ritualIdSchema,
@@ -249,11 +441,20 @@ export const ritualStoreV2Schema = z.strictObject({
   receipts: z.array(ritualTestReceiptSchema).max(100),
 });
 
-export const ritualStoreSchema = z.strictObject({
+export const ritualStoreV3Schema = z.strictObject({
   schemaVersion: z.literal(3),
   rituals: z.array(approvedRitualRevisionSchema).max(100),
   receipts: z.array(ritualTestReceiptSchema).max(100),
   learningProposals: z.array(ritualLearningProposalSchema).max(100),
+});
+
+export const ritualStoreSchema = z.strictObject({
+  schemaVersion: z.literal(4),
+  rituals: z.array(approvedRitualRevisionSchema).max(100),
+  receipts: z.array(ritualTestReceiptSchema).max(100),
+  learningProposals: z.array(ritualLearningProposalSchema).max(100),
+  runs: z.array(ritualRunSchema).max(100),
+  runReceipts: z.array(ritualRunReceiptSchema).max(100),
 });
 
 export const ritualStewardContextSchema = z.strictObject({
@@ -316,6 +517,19 @@ export type RitualTestReceipt = z.infer<typeof ritualTestReceiptSchema>;
 export type RitualTestRunControllerResult = z.infer<
   typeof ritualTestRunControllerResultSchema
 >;
+export type RitualRunRequest = z.infer<typeof ritualRunRequestSchema>;
+export type RitualRunStepApprovalRequest = z.infer<
+  typeof ritualRunStepApprovalRequestSchema
+>;
+export type RitualRunCancelRequest = z.infer<
+  typeof ritualRunCancelRequestSchema
+>;
+export type RitualRunStepState = z.infer<typeof ritualRunStepStateSchema>;
+export type RitualRun = z.infer<typeof ritualRunSchema>;
+export type RitualRunReceipt = z.infer<typeof ritualRunReceiptSchema>;
+export type RitualRunControllerResult = z.infer<
+  typeof ritualRunControllerResultSchema
+>;
 export type RitualStore = z.infer<typeof ritualStoreSchema>;
 export type RitualLearningFeedbackRequest = z.infer<
   typeof ritualLearningFeedbackRequestSchema
@@ -355,6 +569,279 @@ export function validateRitualStewardResult(
     };
   }
   return result.data;
+}
+
+export function createRitualRun(input: {
+  approved: ApprovedRitualRevision;
+  request: RitualRunRequest;
+  runId: z.infer<typeof ritualRunIdSchema>;
+  createdAt: string;
+}): RitualRun {
+  const approved = approvedRitualRevisionSchema.parse(input.approved);
+  const request = ritualRunRequestSchema.parse(input.request);
+  if (
+    request.ritualId !== approved.ritualId ||
+    request.ritualRevision !== approved.ritualRevision
+  ) {
+    throw new Error("STALE_RITUAL_RUN");
+  }
+  return ritualRunSchema.parse({
+    schemaVersion: 1,
+    runId: input.runId,
+    revision: 1,
+    ritualId: approved.ritualId,
+    ritualRevision: approved.ritualRevision,
+    executionProvider: "DETERMINISTIC_FIXTURE",
+    status: "QUEUED",
+    currentStepKey: null,
+    steps: approved.steps.map((step) => ({
+      stepKey: step.stepKey,
+      title: step.title,
+      actor: step.actor,
+      approval: step.approval,
+      status: "PENDING",
+      startedAt: null,
+      approvedAt: null,
+      completedAt: null,
+    })),
+    permissions: approved.permissions,
+    externalEffects: [],
+    failureCode: null,
+    createdAt: input.createdAt,
+    startedAt: null,
+    updatedAt: input.createdAt,
+    completedAt: null,
+  });
+}
+
+export type RitualRunEvent =
+  | { type: "START"; occurredAt: string }
+  | { type: "APPROVE_STEP"; stepKey: string; occurredAt: string }
+  | { type: "COMPLETE_STEP"; stepKey: string; occurredAt: string }
+  | {
+      type: "COMPLETE_RUN";
+      outcome: "COMPLETED" | "NEEDS_REVIEW";
+      occurredAt: string;
+    }
+  | {
+      type: "FAIL";
+      failureCode: "EXECUTOR_FAILED" | "INTERRUPTED" | "POLICY_DENIED";
+      occurredAt: string;
+    }
+  | { type: "CANCEL"; occurredAt: string };
+
+export function reduceRitualRun(
+  currentCandidate: unknown,
+  approvedCandidate: unknown,
+  event: RitualRunEvent,
+): RitualRun {
+  const current = ritualRunSchema.parse(currentCandidate);
+  const approved = approvedRitualRevisionSchema.parse(approvedCandidate);
+  assertRunDefinition(current, approved);
+  instantSchema.parse(event.occurredAt);
+
+  if (event.type === "START") {
+    if (current.status !== "QUEUED") return illegalRunTransition();
+    const steps = activateStep(current.steps, 0, event.occurredAt);
+    const active = steps[0]!;
+    return parseRun({
+      ...current,
+      revision: current.revision + 1,
+      status:
+        active.status === "WAITING_FOR_OWNER" ? "WAITING_FOR_OWNER" : "RUNNING",
+      currentStepKey: active.stepKey,
+      steps,
+      startedAt: event.occurredAt,
+      updatedAt: event.occurredAt,
+    });
+  }
+
+  if (event.type === "APPROVE_STEP") {
+    const index = current.steps.findIndex(
+      (step) =>
+        step.stepKey === event.stepKey && step.status === "WAITING_FOR_OWNER",
+    );
+    if (
+      current.status !== "WAITING_FOR_OWNER" ||
+      current.currentStepKey !== event.stepKey ||
+      index < 0
+    ) {
+      return illegalRunTransition();
+    }
+    const steps = current.steps.map((step, stepIndex) =>
+      stepIndex === index
+        ? {
+            ...step,
+            status: "RUNNING" as const,
+            approvedAt: event.occurredAt,
+            startedAt: event.occurredAt,
+          }
+        : step,
+    );
+    return parseRun({
+      ...current,
+      revision: current.revision + 1,
+      status: "RUNNING",
+      steps,
+      updatedAt: event.occurredAt,
+    });
+  }
+
+  if (event.type === "COMPLETE_STEP") {
+    const index = current.steps.findIndex(
+      (step) => step.stepKey === event.stepKey && step.status === "RUNNING",
+    );
+    if (
+      current.status !== "RUNNING" ||
+      current.currentStepKey !== event.stepKey ||
+      index < 0
+    ) {
+      return illegalRunTransition();
+    }
+    const completed = current.steps.map((step, stepIndex) =>
+      stepIndex === index
+        ? {
+            ...step,
+            status: "COMPLETED" as const,
+            completedAt: event.occurredAt,
+          }
+        : step,
+    );
+    const nextIndex = index + 1;
+    if (nextIndex >= completed.length) {
+      return parseRun({
+        ...current,
+        revision: current.revision + 1,
+        steps: completed,
+        currentStepKey: null,
+        updatedAt: event.occurredAt,
+      });
+    }
+    const steps = activateStep(completed, nextIndex, event.occurredAt);
+    const active = steps[nextIndex]!;
+    return parseRun({
+      ...current,
+      revision: current.revision + 1,
+      status:
+        active.status === "WAITING_FOR_OWNER" ? "WAITING_FOR_OWNER" : "RUNNING",
+      currentStepKey: active.stepKey,
+      steps,
+      updatedAt: event.occurredAt,
+    });
+  }
+
+  if (event.type === "COMPLETE_RUN") {
+    if (
+      current.status !== "RUNNING" ||
+      current.currentStepKey !== null ||
+      current.steps.some((step) => step.status !== "COMPLETED")
+    ) {
+      return illegalRunTransition();
+    }
+    return parseRun({
+      ...current,
+      revision: current.revision + 1,
+      status: event.outcome,
+      updatedAt: event.occurredAt,
+      completedAt: event.occurredAt,
+    });
+  }
+
+  if (event.type === "FAIL") {
+    if (!canStopRun(current.status)) return illegalRunTransition();
+    return parseRun({
+      ...current,
+      revision: current.revision + 1,
+      status: "FAILED",
+      currentStepKey: null,
+      steps: stopOpenSteps(current.steps, "FAILED", event.occurredAt),
+      failureCode: event.failureCode,
+      startedAt: current.startedAt ?? event.occurredAt,
+      updatedAt: event.occurredAt,
+      completedAt: event.occurredAt,
+    });
+  }
+
+  if (!canStopRun(current.status)) return illegalRunTransition();
+  return parseRun({
+    ...current,
+    revision: current.revision + 1,
+    status: "CANCELED",
+    currentStepKey: null,
+    steps: stopOpenSteps(current.steps, "CANCELED", event.occurredAt),
+    updatedAt: event.occurredAt,
+    completedAt: event.occurredAt,
+  });
+}
+
+export function createRitualRunReceipt(input: {
+  approved: ApprovedRitualRevision;
+  run: RitualRun;
+  receiptId: z.infer<typeof receiptIdSchema>;
+  summary: string;
+  recordedAt: string;
+}): RitualRunReceipt {
+  const approved = approvedRitualRevisionSchema.parse(input.approved);
+  const run = ritualRunSchema.parse(input.run);
+  assertRunDefinition(run, approved);
+  if (
+    (run.status !== "COMPLETED" && run.status !== "NEEDS_REVIEW") ||
+    !run.startedAt
+  ) {
+    throw new Error("RITUAL_RUN_INCOMPLETE");
+  }
+  return validateRitualRunReceipt(run, {
+    schemaVersion: 1,
+    receiptId: input.receiptId,
+    runId: run.runId,
+    ritualId: run.ritualId,
+    ritualRevision: run.ritualRevision,
+    mode: "RUN",
+    executionProvider: run.executionProvider,
+    outcome: run.status,
+    summary: input.summary,
+    stepEvidence: run.steps.map((step) => ({
+      stepKey: step.stepKey,
+      title: step.title,
+      actor: step.actor,
+    })),
+    uncertainties: [
+      "No external provider was invoked; this Receipt proves orchestration only.",
+    ],
+    externalEffects: [],
+    startedAt: run.startedAt,
+    recordedAt: input.recordedAt,
+  });
+}
+
+export function validateRitualRunReceipt(
+  runCandidate: unknown,
+  receiptCandidate: unknown,
+): RitualRunReceipt {
+  const run = ritualRunSchema.parse(runCandidate);
+  const receipt = ritualRunReceiptSchema.parse(receiptCandidate);
+  if (
+    (run.status !== "COMPLETED" && run.status !== "NEEDS_REVIEW") ||
+    receipt.runId !== run.runId ||
+    receipt.ritualId !== run.ritualId ||
+    receipt.ritualRevision !== run.ritualRevision ||
+    receipt.executionProvider !== run.executionProvider ||
+    receipt.outcome !== run.status ||
+    receipt.stepEvidence.length !== run.steps.length ||
+    receipt.stepEvidence.some((evidence, index) => {
+      const step = run.steps[index];
+      return (
+        !step ||
+        evidence.stepKey !== step.stepKey ||
+        evidence.title !== step.title ||
+        evidence.actor.kind !== step.actor.kind ||
+        evidence.actor.role !== step.actor.role
+      );
+    })
+  ) {
+    throw new Error("RITUAL_RUN_RECEIPT_MISMATCH");
+  }
+  return receipt;
 }
 
 export type RitualApprovalErrorCode =
@@ -563,4 +1050,70 @@ function testRunWaiting(
     ritualRevision: context.ritual.ritualRevision,
     reason,
   };
+}
+
+function assertRunDefinition(
+  run: RitualRun,
+  approved: ApprovedRitualRevision,
+): void {
+  if (
+    run.ritualId !== approved.ritualId ||
+    run.ritualRevision !== approved.ritualRevision ||
+    JSON.stringify(run.permissions) !== JSON.stringify(approved.permissions) ||
+    run.steps.length !== approved.steps.length ||
+    run.steps.some((step, index) => {
+      const definition = approved.steps[index];
+      return (
+        !definition ||
+        step.stepKey !== definition.stepKey ||
+        step.title !== definition.title ||
+        step.approval !== definition.approval ||
+        JSON.stringify(step.actor) !== JSON.stringify(definition.actor)
+      );
+    })
+  ) {
+    throw new Error("STALE_RITUAL_RUN");
+  }
+}
+
+function activateStep(
+  steps: readonly RitualRunStepState[],
+  index: number,
+  occurredAt: string,
+): RitualRunStepState[] {
+  return steps.map((step, stepIndex) => {
+    if (stepIndex !== index) return step;
+    if (step.status !== "PENDING") return illegalRunTransition();
+    return step.approval === "OWNER_REQUIRED"
+      ? { ...step, status: "WAITING_FOR_OWNER" }
+      : { ...step, status: "RUNNING", startedAt: occurredAt };
+  });
+}
+
+function canStopRun(status: RitualRun["status"]): boolean {
+  return ["QUEUED", "RUNNING", "WAITING_FOR_OWNER"].includes(status);
+}
+
+function stopOpenSteps(
+  steps: readonly RitualRunStepState[],
+  activeStatus: "FAILED" | "CANCELED",
+  occurredAt: string,
+): RitualRunStepState[] {
+  return steps.map((step) => {
+    if (step.status === "COMPLETED") return step;
+    const status =
+      activeStatus === "FAILED" &&
+      (step.status === "RUNNING" || step.status === "WAITING_FOR_OWNER")
+        ? "FAILED"
+        : "CANCELED";
+    return { ...step, status, completedAt: occurredAt };
+  });
+}
+
+function parseRun(candidate: unknown): RitualRun {
+  return ritualRunSchema.parse(candidate);
+}
+
+function illegalRunTransition(): never {
+  throw new Error("ILLEGAL_RITUAL_RUN_TRANSITION");
 }

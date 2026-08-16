@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import type { RitualRun } from "@village/contracts";
 import type {
   RitualBuilderEvent,
   RitualBuilderIdentity,
@@ -401,6 +402,12 @@ export function RitualBuilder({
                 </div>
                 <button
                   type="button"
+                  onClick={() => onEvent({ type: "START_RUN" })}
+                >
+                  Run fixture proof
+                </button>
+                <button
+                  type="button"
                   onClick={() => onEvent({ type: "START_TEST" })}
                 >
                   Test this Ritual
@@ -412,6 +419,118 @@ export function RitualBuilder({
                   Shape another Ritual
                 </button>
               </div>
+            ) : null}
+
+            {state.phase === "STARTING_RUN" ||
+            state.phase === "RUNNING_RITUAL" ? (
+              <section className="ritual-receipt" role="status">
+                <p className="ritual-eyebrow">Local fixture Run</p>
+                <h3>Run in progress</h3>
+                <p>
+                  This deterministic fixture proves durable orchestration. It
+                  cannot browse, contact anyone, or create external effects.
+                </p>
+                {state.run ? <RunStepProgress run={state.run} /> : null}
+                {state.phase === "RUNNING_RITUAL" ? (
+                  <button
+                    type="button"
+                    onClick={() => onEvent({ type: "CANCEL_RUN" })}
+                  >
+                    Cancel Run
+                  </button>
+                ) : null}
+              </section>
+            ) : null}
+
+            {state.phase === "RUN_WAITING_FOR_OWNER" ? (
+              <section className="ritual-receipt" role="status">
+                <p className="ritual-eyebrow">Human gate</p>
+                <h3>Owner approval required</h3>
+                <p>
+                  Approve only this fixture step. No external action will be
+                  taken.
+                </p>
+                <RunStepProgress run={state.run} />
+                <button
+                  type="button"
+                  onClick={() => onEvent({ type: "APPROVE_RUN_STEP" })}
+                >
+                  Approve fixture step
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onEvent({ type: "CANCEL_RUN" })}
+                >
+                  Cancel Run
+                </button>
+              </section>
+            ) : null}
+
+            {state.phase === "RUN_FAILED" || state.phase === "RUN_CANCELED" ? (
+              <section className="ritual-receipt" role="status">
+                <p className="ritual-eyebrow">Local fixture Run</p>
+                <h3>
+                  {state.phase === "RUN_FAILED"
+                    ? "Run stopped"
+                    : "Run canceled"}
+                </h3>
+                <p>
+                  The approved Ritual is unchanged and no external effects
+                  occurred.
+                </p>
+                <RunStepProgress run={state.run} />
+                <button
+                  type="button"
+                  onClick={() => onEvent({ type: "START_RUN" })}
+                >
+                  Run fixture proof again
+                </button>
+              </section>
+            ) : null}
+
+            {state.phase === "REVIEW_RUN" ? (
+              <section
+                className="ritual-receipt"
+                aria-labelledby="run-receipt-title"
+              >
+                <header>
+                  <div>
+                    <p className="ritual-eyebrow">Proof of orchestration</p>
+                    <h3 id="run-receipt-title">Run Receipt</h3>
+                  </div>
+                  <span>Needs review</span>
+                </header>
+                <p className="ritual-receipt__summary">
+                  {state.runReceipt.summary}
+                </p>
+                <div className="ritual-receipt__proof">
+                  <span>Run</span>
+                  <code>{state.run.runId.slice(-8)}</code>
+                  <span>Executor</span>
+                  <strong>Deterministic local fixture</strong>
+                  <span>Safety</span>
+                  <strong>No external effects</strong>
+                </div>
+                <RunStepProgress run={state.run} />
+                <div className="ritual-receipt__uncertainty">
+                  <h4>Boundary</h4>
+                  <p>{state.runReceipt.uncertainties[0]}</p>
+                </div>
+                <footer>
+                  <button
+                    type="button"
+                    onClick={() => onEvent({ type: "START_RUN" })}
+                  >
+                    Run fixture proof again
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onEvent({ type: "START_NEW_RITUAL" })}
+                  >
+                    Shape another Ritual
+                  </button>
+                </footer>
+              </section>
             ) : null}
 
             {state.phase === "REVIEW_TEST" ? (
@@ -469,6 +588,12 @@ export function RitualBuilder({
                     onClick={() => onEvent({ type: "START_FEEDBACK" })}
                   >
                     Give feedback
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onEvent({ type: "START_RUN" })}
+                  >
+                    Run fixture proof
                   </button>
                   <button
                     type="button"
@@ -653,6 +778,23 @@ function ComparisonColumn({
 
 function reviewLabel(review: "EVERY_RUN" | "EXCEPTIONS_ONLY"): string {
   return review === "EVERY_RUN" ? "Review every Run" : "Review exceptions";
+}
+
+function RunStepProgress({ run }: { run: RitualRun }) {
+  return (
+    <ol className="ritual-step-list" aria-label="Run progress">
+      {run.steps.map((step, index) => (
+        <li key={step.stepKey}>
+          <span>{String(index + 1).padStart(2, "0")}</span>
+          <div>
+            <strong>{step.title}</strong>
+            <p>{step.status.toLowerCase().replaceAll("_", " ")}</p>
+            <small>{step.actor.role}</small>
+          </div>
+        </li>
+      ))}
+    </ol>
+  );
 }
 
 function EditableRitualField({

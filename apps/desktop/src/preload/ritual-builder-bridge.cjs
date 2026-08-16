@@ -12,6 +12,12 @@ contextBridge.exposeInMainWorld(
       ipcRenderer.invoke("village:ritual-builder:approve", ritual),
     testRun: (request) =>
       ipcRenderer.invoke("village:ritual-builder:test-run", request),
+    startRun: (request) =>
+      ipcRenderer.invoke("village:ritual-builder:start-run", request),
+    approveRunStep: (request) =>
+      ipcRenderer.invoke("village:ritual-builder:approve-run-step", request),
+    cancelRun: (request) =>
+      ipcRenderer.invoke("village:ritual-builder:cancel-run", request),
     proposeLearning: (request) =>
       ipcRenderer.invoke("village:ritual-builder:propose-learning", request),
     approveLearning: (request) =>

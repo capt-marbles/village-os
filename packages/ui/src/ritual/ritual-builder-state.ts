@@ -5,6 +5,8 @@ import {
   ritualDraftSchema,
   ritualLearningFeedbackRequestSchema,
   ritualLearningProposalSchema,
+  ritualRunReceiptSchema,
+  ritualRunSchema,
   ritualStewardContextSchema,
   ritualTestReceiptSchema,
   ritualTestRunRequestSchema,
@@ -12,6 +14,8 @@ import {
   type RitualDraft,
   type RitualStewardProposal,
   type RitualLearningProposal,
+  type RitualRun,
+  type RitualRunReceipt,
   type RitualTestReceipt,
 } from "@village/contracts";
 
@@ -61,6 +65,32 @@ export type RitualBuilderState =
       draft: RitualDraft;
       approved: ApprovedRitualRevision;
       receipt: null;
+    })
+  | (RitualBuilderStateBase & {
+      phase: "STARTING_RUN";
+      draft: RitualDraft;
+      approved: ApprovedRitualRevision;
+      receipt: RitualTestReceipt | null;
+      run: null;
+    })
+  | (RitualBuilderStateBase & {
+      phase:
+        | "RUNNING_RITUAL"
+        | "RUN_WAITING_FOR_OWNER"
+        | "RUN_FAILED"
+        | "RUN_CANCELED";
+      draft: RitualDraft;
+      approved: ApprovedRitualRevision;
+      receipt: RitualTestReceipt | null;
+      run: RitualRun;
+    })
+  | (RitualBuilderStateBase & {
+      phase: "REVIEW_RUN";
+      draft: RitualDraft;
+      approved: ApprovedRitualRevision;
+      receipt: RitualTestReceipt | null;
+      run: RitualRun;
+      runReceipt: RitualRunReceipt;
     })
   | (RitualBuilderStateBase & {
       phase: "PREPARING_TEST" | "RUNNING_TEST";
@@ -122,6 +152,8 @@ export type RitualBuilderEvent =
   | { type: "STEWARD_FAILED"; message: string }
   | { type: "RESTORE_APPROVED"; approved: ApprovedRitualRevision }
   | { type: "RESTORE_RECEIPT"; receipt: RitualTestReceipt }
+  | { type: "RESTORE_RUN"; run: RitualRun }
+  | { type: "RESTORE_RUN_RECEIPT"; receipt: RitualRunReceipt }
   | { type: "APPROVAL_SAVED" }
   | { type: "APPROVAL_SAVE_FAILED" }
   | { type: "START_NEW_RITUAL" }
@@ -131,6 +163,12 @@ export type RitualBuilderEvent =
   | { type: "SUBMIT_TEST_SAMPLE"; sample: string }
   | { type: "TEST_RUN_RECEIPT"; receipt: RitualTestReceipt }
   | { type: "TEST_RUN_FAILED"; message: string }
+  | { type: "START_RUN" }
+  | { type: "RUN_UPDATED"; run: RitualRun }
+  | { type: "APPROVE_RUN_STEP" }
+  | { type: "CANCEL_RUN" }
+  | { type: "RUN_RECEIPT"; run: RitualRun; receipt: RitualRunReceipt }
+  | { type: "RUN_COMMAND_FAILED"; message: string }
   | { type: "START_FEEDBACK" }
   | { type: "SUBMIT_FEEDBACK"; feedback: string }
   | { type: "LEARNING_PROPOSED"; proposal: RitualLearningProposal }
@@ -409,6 +447,70 @@ export function reduceRitualBuilder(
         error: null,
       };
     }
+    case "RESTORE_RUN": {
+      if (
+        state.phase !== "APPROVED" &&
+        state.phase !== "REVIEW_TEST" &&
+        state.phase !== "REVIEW_RUN"
+      ) {
+        return state;
+      }
+      const run = ritualRunSchema.safeParse(event.run);
+      if (
+        !run.success ||
+        run.data.ritualId !== state.approved.ritualId ||
+        run.data.ritualRevision !== state.approved.ritualRevision
+      ) {
+        return { ...state, error: "The saved Run did not match this Ritual." };
+      }
+      return {
+        phase: phaseForRun(run.data),
+        draft: state.draft,
+        approved: state.approved,
+        receipt: state.phase === "REVIEW_TEST" ? state.receipt : null,
+        run: run.data,
+        messages: message(
+          state.messages,
+          "SYSTEM",
+          `Restored Run ${run.data.runId.slice(-8)} in ${run.data.status.toLowerCase().replaceAll("_", " ")} state.`,
+        ),
+        error:
+          run.data.status === "COMPLETED" || run.data.status === "NEEDS_REVIEW"
+            ? "The completed Run is missing its Receipt. Start a new Run; no external effects occurred."
+            : null,
+        requestRevision: state.requestRevision,
+      };
+    }
+    case "RESTORE_RUN_RECEIPT": {
+      if (
+        state.phase !== "RUNNING_RITUAL" &&
+        state.phase !== "RUN_FAILED" &&
+        state.phase !== "RUN_CANCELED"
+      ) {
+        return state;
+      }
+      const receipt = ritualRunReceiptSchema.safeParse(event.receipt);
+      if (
+        !receipt.success ||
+        receipt.data.runId !== state.run.runId ||
+        receipt.data.ritualId !== state.approved.ritualId ||
+        receipt.data.ritualRevision !== state.approved.ritualRevision ||
+        receipt.data.outcome !== state.run.status
+      ) {
+        return { ...state, error: "The saved Run Receipt did not match." };
+      }
+      return {
+        ...state,
+        phase: "REVIEW_RUN",
+        runReceipt: receipt.data,
+        messages: message(
+          state.messages,
+          "SYSTEM",
+          "Restored the latest Run Receipt for Review.",
+        ),
+        error: null,
+      };
+    }
     case "APPROVAL_SAVE_FAILED": {
       if (state.phase !== "SAVING_APPROVAL") return state;
       return {
@@ -441,7 +543,13 @@ export function reduceRitualBuilder(
       };
     }
     case "START_NEW_RITUAL": {
-      if (state.phase !== "APPROVED" && state.phase !== "REVIEW_TEST") {
+      if (
+        state.phase !== "APPROVED" &&
+        state.phase !== "REVIEW_TEST" &&
+        state.phase !== "REVIEW_RUN" &&
+        state.phase !== "RUN_FAILED" &&
+        state.phase !== "RUN_CANCELED"
+      ) {
         return state;
       }
       return {
@@ -497,7 +605,7 @@ export function reduceRitualBuilder(
       return {
         ...state,
         phase: "PREPARING_TEST",
-        receipt: state.phase === "REVIEW_TEST" ? state.receipt : null,
+        receipt: state.phase === "APPROVED" ? null : state.receipt,
         messages: message(
           state.messages,
           "STEWARD",
@@ -570,6 +678,151 @@ export function reduceRitualBuilder(
         messages: message(state.messages, "SYSTEM", event.message),
         error: event.message,
       };
+    }
+    case "START_RUN": {
+      if (
+        state.phase !== "APPROVED" &&
+        state.phase !== "REVIEW_TEST" &&
+        state.phase !== "REVIEW_RUN" &&
+        state.phase !== "RUN_FAILED" &&
+        state.phase !== "RUN_CANCELED"
+      ) {
+        return state;
+      }
+      return {
+        phase: "STARTING_RUN",
+        draft: state.draft,
+        approved: state.approved,
+        receipt: state.phase === "APPROVED" ? null : state.receipt,
+        run: null,
+        messages: message(
+          state.messages,
+          "STEWARD",
+          "I’m starting a durable local fixture Run. It proves orchestration only and cannot create external effects.",
+        ),
+        error: null,
+        requestRevision: state.requestRevision,
+      };
+    }
+    case "RUN_UPDATED": {
+      if (
+        state.phase !== "STARTING_RUN" &&
+        state.phase !== "RUNNING_RITUAL" &&
+        state.phase !== "RUN_WAITING_FOR_OWNER"
+      ) {
+        return state;
+      }
+      const run = ritualRunSchema.safeParse(event.run);
+      if (
+        !run.success ||
+        run.data.ritualId !== state.approved.ritualId ||
+        run.data.ritualRevision !== state.approved.ritualRevision
+      ) {
+        return { ...state, error: "Village rejected a mismatched Run." };
+      }
+      return {
+        phase: phaseForRun(run.data),
+        draft: state.draft,
+        approved: state.approved,
+        receipt: state.receipt,
+        run: run.data,
+        messages: message(state.messages, "SYSTEM", runStatusMessage(run.data)),
+        error: null,
+        requestRevision: state.requestRevision,
+      };
+    }
+    case "APPROVE_RUN_STEP": {
+      if (state.phase !== "RUN_WAITING_FOR_OWNER") return state;
+      return {
+        ...state,
+        messages: message(
+          state.messages,
+          "OWNER",
+          `Approve fixture step: ${currentRunStepTitle(state.run)}.`,
+        ),
+        error: null,
+      };
+    }
+    case "CANCEL_RUN": {
+      if (
+        state.phase !== "RUNNING_RITUAL" &&
+        state.phase !== "RUN_WAITING_FOR_OWNER"
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        messages: message(
+          state.messages,
+          "SYSTEM",
+          "Canceling this Run. The approved Ritual remains available.",
+        ),
+        error: null,
+      };
+    }
+    case "RUN_RECEIPT": {
+      if (
+        state.phase !== "STARTING_RUN" &&
+        state.phase !== "RUNNING_RITUAL" &&
+        state.phase !== "RUN_WAITING_FOR_OWNER"
+      ) {
+        return state;
+      }
+      const run = ritualRunSchema.safeParse(event.run);
+      const receipt = ritualRunReceiptSchema.safeParse(event.receipt);
+      if (
+        !run.success ||
+        !receipt.success ||
+        run.data.ritualId !== state.approved.ritualId ||
+        run.data.ritualRevision !== state.approved.ritualRevision ||
+        receipt.data.runId !== run.data.runId ||
+        receipt.data.outcome !== run.data.status
+      ) {
+        return {
+          ...state,
+          error: "Village rejected a mismatched Run Receipt.",
+        };
+      }
+      return {
+        phase: "REVIEW_RUN",
+        draft: state.draft,
+        approved: state.approved,
+        receipt: state.receipt,
+        run: run.data,
+        runReceipt: receipt.data,
+        messages: message(
+          state.messages,
+          "STEWARD",
+          "The fixture Run is complete. Review its bounded Receipt.",
+        ),
+        error: null,
+        requestRevision: state.requestRevision,
+      };
+    }
+    case "RUN_COMMAND_FAILED": {
+      if (state.phase === "STARTING_RUN") {
+        if (state.receipt) {
+          return {
+            phase: "REVIEW_TEST",
+            draft: state.draft,
+            approved: state.approved,
+            receipt: state.receipt,
+            messages: message(state.messages, "SYSTEM", event.message),
+            error: event.message,
+            requestRevision: state.requestRevision,
+          };
+        }
+        return {
+          phase: "APPROVED",
+          draft: state.draft,
+          approved: state.approved,
+          receipt: null,
+          messages: message(state.messages, "SYSTEM", event.message),
+          error: event.message,
+          requestRevision: state.requestRevision,
+        };
+      }
+      return { ...state, error: event.message };
     }
     case "START_FEEDBACK": {
       if (state.phase !== "REVIEW_TEST") return state;
@@ -901,4 +1154,48 @@ function draftFromApproved(approved: ApprovedRitualRevision): RitualDraft {
     reviewPolicy: approved.reviewPolicy,
     updatedAt: approved.approvedAt,
   });
+}
+
+function phaseForRun(
+  run: RitualRun,
+): "RUNNING_RITUAL" | "RUN_WAITING_FOR_OWNER" | "RUN_FAILED" | "RUN_CANCELED" {
+  switch (run.status) {
+    case "WAITING_FOR_OWNER":
+      return "RUN_WAITING_FOR_OWNER";
+    case "FAILED":
+      return "RUN_FAILED";
+    case "CANCELED":
+      return "RUN_CANCELED";
+    case "QUEUED":
+    case "RUNNING":
+      return "RUNNING_RITUAL";
+    case "COMPLETED":
+    case "NEEDS_REVIEW":
+      return "RUN_FAILED";
+  }
+}
+
+function currentRunStepTitle(run: RitualRun): string {
+  return (
+    run.steps.find((step) => step.stepKey === run.currentStepKey)?.title ??
+    "current step"
+  );
+}
+
+function runStatusMessage(run: RitualRun): string {
+  switch (run.status) {
+    case "QUEUED":
+      return "The Run is queued locally.";
+    case "RUNNING":
+      return `Running fixture step: ${currentRunStepTitle(run)}.`;
+    case "WAITING_FOR_OWNER":
+      return `Your approval is required before the fixture can continue: ${currentRunStepTitle(run)}.`;
+    case "COMPLETED":
+    case "NEEDS_REVIEW":
+      return "The Run finished and its Receipt is being restored.";
+    case "FAILED":
+      return "The Run stopped safely. Review the failure before trying again.";
+    case "CANCELED":
+      return "The Run was canceled. The approved Ritual is unchanged.";
+  }
 }

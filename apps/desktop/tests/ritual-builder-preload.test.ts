@@ -3,7 +3,7 @@ import vm from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 
 describe("Ritual Builder preload", () => {
-  it("exposes only the seven fixed Ritual operations", async () => {
+  it("exposes only the ten fixed Ritual operations", async () => {
     const source = await readFile(
       new URL("../src/preload/ritual-builder-bridge.cjs", import.meta.url),
       "utf8",
@@ -24,10 +24,13 @@ describe("Ritual Builder preload", () => {
     expect(Object.keys(bridge).sort()).toEqual([
       "approve",
       "approveLearning",
+      "approveRunStep",
+      "cancelRun",
       "createDraftIdentity",
       "draft",
       "initialize",
       "proposeLearning",
+      "startRun",
       "testRun",
     ]);
     await bridge.initialize!();
@@ -35,6 +38,9 @@ describe("Ritual Builder preload", () => {
     await bridge.draft!({ purpose: "bounded" });
     await bridge.approve!({ ritualId: "bounded" });
     await bridge.testRun!({ ritualId: "bounded", sample: "bounded" });
+    await bridge.startRun!({ ritualId: "bounded" });
+    await bridge.approveRunStep!({ runId: "bounded" });
+    await bridge.cancelRun!({ runId: "bounded" });
     await bridge.proposeLearning!({ ritualId: "bounded", feedback: "bounded" });
     await bridge.approveLearning!({ ritualId: "bounded" });
     expect(invoke).toHaveBeenNthCalledWith(
@@ -60,11 +66,26 @@ describe("Ritual Builder preload", () => {
     );
     expect(invoke).toHaveBeenNthCalledWith(
       6,
+      "village:ritual-builder:start-run",
+      { ritualId: "bounded" },
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      7,
+      "village:ritual-builder:approve-run-step",
+      { runId: "bounded" },
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      8,
+      "village:ritual-builder:cancel-run",
+      { runId: "bounded" },
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      9,
       "village:ritual-builder:propose-learning",
       { ritualId: "bounded", feedback: "bounded" },
     );
     expect(invoke).toHaveBeenNthCalledWith(
-      7,
+      10,
       "village:ritual-builder:approve-learning",
       { ritualId: "bounded" },
     );

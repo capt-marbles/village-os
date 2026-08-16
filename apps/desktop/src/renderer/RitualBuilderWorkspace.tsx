@@ -5,6 +5,12 @@ import type {
   RitualLearningApprovalRequest,
   RitualLearningFeedbackRequest,
   RitualLearningResult,
+  RitualRun,
+  RitualRunCancelRequest,
+  RitualRunControllerResult,
+  RitualRunReceipt,
+  RitualRunRequest,
+  RitualRunStepApprovalRequest,
   RitualTestReceipt,
   RitualTestRunControllerResult,
   RitualTestRunRequest,
@@ -17,13 +23,21 @@ import {
   type RitualBuilderIdentity,
   type RitualBuilderState,
 } from "@village/ui";
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 
 export interface RitualBuilderBridge {
   initialize(): Promise<{
     identity: RitualBuilderIdentity;
     approved: ApprovedRitualRevision | null;
     receipt: RitualTestReceipt | null;
+    run: RitualRun | null;
+    runReceipt: RitualRunReceipt | null;
   }>;
   createDraftIdentity(): Promise<RitualBuilderIdentity>;
   draft(context: RitualStewardContext): Promise<RitualStewardResult>;
@@ -31,6 +45,13 @@ export interface RitualBuilderBridge {
   testRun(
     request: RitualTestRunRequest,
   ): Promise<RitualTestRunControllerResult>;
+  startRun(request: RitualRunRequest): Promise<RitualRunControllerResult>;
+  approveRunStep(
+    request: RitualRunStepApprovalRequest,
+  ): Promise<RitualRunControllerResult>;
+  cancelRun(
+    request: RitualRunCancelRequest,
+  ): Promise<RitualRunControllerResult>;
   proposeLearning(
     request: RitualLearningFeedbackRequest,
   ): Promise<RitualLearningResult>;
@@ -58,6 +79,7 @@ export function RitualBuilderWorkspace({
   const generation = useRef(0);
   const testRunInFlight = useRef(false);
   const learningInFlight = useRef(false);
+  const runInFlight = useRef(false);
 
   useEffect(() => {
     if (!bridge) {
@@ -76,12 +98,24 @@ export function RitualBuilderWorkspace({
               type: "RESTORE_APPROVED",
               approved: initialized.approved!,
             });
-            return initialized.receipt
+            const withTestReceipt = initialized.receipt
               ? reduceRitualBuilder(restored, {
                   type: "RESTORE_RECEIPT",
                   receipt: initialized.receipt,
                 })
               : restored;
+            const withRun = initialized.run
+              ? reduceRitualBuilder(withTestReceipt, {
+                  type: "RESTORE_RUN",
+                  run: initialized.run,
+                })
+              : withTestReceipt;
+            return initialized.runReceipt
+              ? reduceRitualBuilder(withRun, {
+                  type: "RESTORE_RUN_RECEIPT",
+                  receipt: initialized.runReceipt,
+                })
+              : withRun;
           });
         }
       })
@@ -93,6 +127,7 @@ export function RitualBuilderWorkspace({
       generation.current += 1;
       testRunInFlight.current = false;
       learningInFlight.current = false;
+      runInFlight.current = false;
     };
   }, [bridge]);
 
@@ -220,6 +255,107 @@ export function RitualBuilderWorkspace({
         });
       return;
     }
+    if (event.type === "START_RUN") {
+      if (runInFlight.current) return;
+      const next = reduceRitualBuilder(state, event);
+      setState(next);
+      if (next.phase !== "STARTING_RUN") return;
+      runInFlight.current = true;
+      const requestGeneration = ++generation.current;
+      void bridge
+        .startRun({
+          schemaVersion: 1,
+          ritualId: next.approved.ritualId,
+          ritualRevision: next.approved.ritualRevision,
+        })
+        .then((result) => {
+          if (generation.current !== requestGeneration) return;
+          publishRunResult(setState, result);
+        })
+        .catch(() => {
+          if (generation.current !== requestGeneration) return;
+          setState((current) =>
+            reduceRitualBuilder(current, {
+              type: "RUN_COMMAND_FAILED",
+              message:
+                "Village could not confirm the local fixture Run. A local Run record may already exist and will be restored when you reopen this window.",
+            }),
+          );
+        })
+        .finally(() => {
+          runInFlight.current = false;
+        });
+      return;
+    }
+    if (event.type === "APPROVE_RUN_STEP") {
+      if (runInFlight.current || state.phase !== "RUN_WAITING_FOR_OWNER") {
+        return;
+      }
+      const stepKey = state.run.currentStepKey;
+      if (!stepKey) return;
+      const next = reduceRitualBuilder(state, event);
+      setState(next);
+      runInFlight.current = true;
+      const requestGeneration = ++generation.current;
+      void bridge
+        .approveRunStep({
+          schemaVersion: 1,
+          runId: state.run.runId,
+          stepKey,
+        })
+        .then((result) => {
+          if (generation.current !== requestGeneration) return;
+          publishRunResult(setState, result);
+        })
+        .catch(() => {
+          if (generation.current !== requestGeneration) return;
+          setState((current) =>
+            reduceRitualBuilder(current, {
+              type: "RUN_COMMAND_FAILED",
+              message:
+                "Village could not record that approval. The Run did not advance.",
+            }),
+          );
+        })
+        .finally(() => {
+          runInFlight.current = false;
+        });
+      return;
+    }
+    if (event.type === "CANCEL_RUN") {
+      if (
+        runInFlight.current ||
+        (state.phase !== "RUNNING_RITUAL" &&
+          state.phase !== "RUN_WAITING_FOR_OWNER")
+      ) {
+        return;
+      }
+      const runId = state.run.runId;
+      const next = reduceRitualBuilder(state, event);
+      setState(next);
+      runInFlight.current = true;
+      const requestGeneration = ++generation.current;
+      void bridge
+        .cancelRun({ schemaVersion: 1, runId })
+        .then((result) => {
+          if (generation.current !== requestGeneration) return;
+          publishRunResult(setState, result);
+        })
+        .catch(() => {
+          if (generation.current !== requestGeneration) return;
+          setState((current) =>
+            reduceRitualBuilder(current, {
+              type: "RUN_COMMAND_FAILED",
+              message:
+                "Village could not confirm cancellation. Review the restored Run state before retrying.",
+            }),
+          );
+        })
+        .finally(() => {
+          runInFlight.current = false;
+        });
+      return;
+    }
     if (event.type === "SUBMIT_FEEDBACK") {
       if (learningInFlight.current || state.phase !== "GIVE_FEEDBACK") return;
       const next = reduceRitualBuilder(state, event);
@@ -299,6 +435,24 @@ export function RitualBuilderWorkspace({
   if (startupError) return <p role="alert">{startupError}</p>;
   if (!identity) return <p role="status">Opening the Steward’s workroom…</p>;
   return <RitualBuilder identity={identity} state={state} onEvent={onEvent} />;
+}
+
+function publishRunResult(
+  setState: Dispatch<SetStateAction<RitualBuilderState>>,
+  result: RitualRunControllerResult,
+): void {
+  setState((current) =>
+    result.status === "receipt"
+      ? reduceRitualBuilder(current, {
+          type: "RUN_RECEIPT",
+          run: result.run,
+          receipt: result.receipt,
+        })
+      : reduceRitualBuilder(current, {
+          type: "RUN_UPDATED",
+          run: result.run,
+        }),
+  );
 }
 
 function learningFailureCopy(

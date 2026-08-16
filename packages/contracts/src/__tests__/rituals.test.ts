@@ -12,6 +12,13 @@ import {
   ritualStewardProposalSchema,
   ritualTestRunRequestSchema,
   ritualTestRunResultSchema,
+  createRitualRun,
+  createRitualRunReceipt,
+  reduceRitualRun,
+  validateRitualRunReceipt,
+  ritualRunReceiptSchema,
+  ritualRunRequestSchema,
+  ritualRunSchema,
   createRitualTestReceipt,
   validateRitualStewardResult,
   validateRitualLearningResult,
@@ -250,6 +257,191 @@ describe("Ritual contracts", () => {
       status: "waiting",
       reason: "MALFORMED_PROVIDER_OUTPUT",
     });
+  });
+
+  it("runs only an exact approved revision through a strict durable lifecycle", () => {
+    const approved = approveRitualDraft(draft, {
+      schemaVersion: 1,
+      draftId: draft.draftId,
+      expectedRevision: draft.revision,
+      ritualId: "rtl_01J00000000000000000000000",
+      approvedAt: "2026-08-15T15:01:00.000Z",
+    });
+    const request = ritualRunRequestSchema.parse({
+      schemaVersion: 1,
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+    });
+    let run = createRitualRun({
+      approved,
+      request,
+      runId: "rrn_01J00000000000000000000001",
+      createdAt: "2026-08-16T12:00:00.000Z",
+    });
+    expect(run).toMatchObject({
+      status: "QUEUED",
+      executionProvider: "DETERMINISTIC_FIXTURE",
+      permissions: approved.permissions,
+      externalEffects: [],
+    });
+    expect(run.steps.map((step) => step.status)).toEqual([
+      "PENDING",
+      "PENDING",
+    ]);
+
+    run = reduceRitualRun(run, approved, {
+      type: "START",
+      occurredAt: "2026-08-16T12:00:01.000Z",
+    });
+    expect(run).toMatchObject({
+      status: "RUNNING",
+      currentStepKey: draft.steps[0]?.stepKey,
+    });
+    run = reduceRitualRun(run, approved, {
+      type: "COMPLETE_STEP",
+      stepKey: draft.steps[0]!.stepKey,
+      occurredAt: "2026-08-16T12:00:02.000Z",
+    });
+    expect(run).toMatchObject({
+      status: "WAITING_FOR_OWNER",
+      currentStepKey: draft.steps[1]?.stepKey,
+    });
+    run = reduceRitualRun(run, approved, {
+      type: "APPROVE_STEP",
+      stepKey: draft.steps[1]!.stepKey,
+      occurredAt: "2026-08-16T12:00:03.000Z",
+    });
+    run = reduceRitualRun(run, approved, {
+      type: "COMPLETE_STEP",
+      stepKey: draft.steps[1]!.stepKey,
+      occurredAt: "2026-08-16T12:00:04.000Z",
+    });
+    run = reduceRitualRun(run, approved, {
+      type: "COMPLETE_RUN",
+      outcome: "NEEDS_REVIEW",
+      occurredAt: "2026-08-16T12:00:05.000Z",
+    });
+    expect(ritualRunSchema.parse(run)).toMatchObject({
+      status: "NEEDS_REVIEW",
+      currentStepKey: null,
+    });
+
+    const receipt = createRitualRunReceipt({
+      approved,
+      run,
+      receiptId: "rcp_01J00000000000000000000001",
+      summary:
+        "The deterministic fixture completed every approved orchestration step.",
+      recordedAt: "2026-08-16T12:00:05.000Z",
+    });
+    expect(ritualRunReceiptSchema.parse(receipt)).toMatchObject({
+      mode: "RUN",
+      executionProvider: "DETERMINISTIC_FIXTURE",
+      outcome: "NEEDS_REVIEW",
+      externalEffects: [],
+    });
+    expect(receipt.stepEvidence).toHaveLength(2);
+    expect(() =>
+      validateRitualRunReceipt(run, {
+        ...receipt,
+        stepEvidence: [...receipt.stepEvidence].reverse(),
+      }),
+    ).toThrow("RITUAL_RUN_RECEIPT_MISMATCH");
+
+    expect(() =>
+      createRitualRun({
+        approved,
+        request: { ...request, ritualRevision: 2 },
+        runId: "rrn_01J00000000000000000000002",
+        createdAt: "2026-08-16T12:00:00.000Z",
+      }),
+    ).toThrow("STALE_RITUAL_RUN");
+    expect(() =>
+      reduceRitualRun(run, approved, {
+        type: "COMPLETE_STEP",
+        stepKey: draft.steps[0]!.stepKey,
+        occurredAt: "2026-08-16T12:00:06.000Z",
+      }),
+    ).toThrow("ILLEGAL_RITUAL_RUN_TRANSITION");
+    expect(
+      ritualRunRequestSchema.safeParse({ ...request, arbitraryTool: "shell" })
+        .success,
+    ).toBe(false);
+  });
+
+  it("rejects successful terminal Runs with an incomplete step", () => {
+    const approved = approveRitualDraft(draft, {
+      schemaVersion: 1,
+      draftId: draft.draftId,
+      expectedRevision: draft.revision,
+      ritualId: "rtl_01J00000000000000000000000",
+      approvedAt: "2026-08-15T15:01:00.000Z",
+    });
+    const started = reduceRitualRun(
+      createRitualRun({
+        approved,
+        request: {
+          schemaVersion: 1,
+          ritualId: approved.ritualId,
+          ritualRevision: approved.ritualRevision,
+        },
+        runId: "rrn_01J00000000000000000000004",
+        createdAt: "2026-08-16T12:00:00.000Z",
+      }),
+      approved,
+      { type: "START", occurredAt: "2026-08-16T12:00:01.000Z" },
+    );
+
+    expect(
+      ritualRunSchema.safeParse({
+        ...started,
+        revision: started.revision + 1,
+        status: "NEEDS_REVIEW",
+        currentStepKey: null,
+        steps: started.steps.map((step, index) =>
+          index === 0
+            ? {
+                ...step,
+                status: "COMPLETED",
+                completedAt: "2026-08-16T12:00:02.000Z",
+              }
+            : step,
+        ),
+        updatedAt: "2026-08-16T12:00:02.000Z",
+        completedAt: "2026-08-16T12:00:02.000Z",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("cancels a pending or active Run without executing another step", () => {
+    const approved = approveRitualDraft(draft, {
+      schemaVersion: 1,
+      draftId: draft.draftId,
+      expectedRevision: draft.revision,
+      ritualId: "rtl_01J00000000000000000000000",
+      approvedAt: "2026-08-15T15:01:00.000Z",
+    });
+    const queued = createRitualRun({
+      approved,
+      request: {
+        schemaVersion: 1,
+        ritualId: approved.ritualId,
+        ritualRevision: approved.ritualRevision,
+      },
+      runId: "rrn_01J00000000000000000000003",
+      createdAt: "2026-08-16T12:00:00.000Z",
+    });
+    const canceled = reduceRitualRun(queued, approved, {
+      type: "CANCEL",
+      occurredAt: "2026-08-16T12:00:01.000Z",
+    });
+    expect(canceled).toMatchObject({
+      status: "CANCELED",
+      completedAt: "2026-08-16T12:00:01.000Z",
+    });
+    expect(canceled.steps.every((step) => step.status === "CANCELED")).toBe(
+      true,
+    );
   });
 
   it("turns owner feedback into an exact, reviewable Ritual revision", () => {

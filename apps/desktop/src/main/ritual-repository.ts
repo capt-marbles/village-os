@@ -12,19 +12,30 @@ import {
   approvedRitualRevisionSchema,
   approvedRitualStoreSchema,
   ritualLearningProposalSchema,
+  ritualRunReceiptSchema,
+  ritualRunSchema,
   ritualStoreSchema,
   ritualStoreV2Schema,
+  ritualStoreV3Schema,
   ritualTestReceiptSchema,
+  validateRitualRunReceipt,
   type ApprovedRitualRevision,
   type RitualStore,
   type RitualLearningProposal,
+  type RitualRun,
+  type RitualRunReceipt,
   type RitualTestReceipt,
 } from "@village/contracts";
 
 export class RitualRepository {
   private operationTail: Promise<void> = Promise.resolve();
 
-  constructor(private readonly path: string) {}
+  constructor(
+    private readonly path: string,
+    private readonly dependencies: {
+      write?(store: RitualStore): Promise<void>;
+    } = {},
+  ) {}
 
   list(): Promise<readonly ApprovedRitualRevision[]> {
     return this.enqueue(async () => (await this.read()).rituals);
@@ -33,20 +44,31 @@ export class RitualRepository {
   latestSnapshot(): Promise<{
     approved: ApprovedRitualRevision | null;
     receipt: RitualTestReceipt | null;
+    run: RitualRun | null;
+    runReceipt: RitualRunReceipt | null;
   }> {
     return this.enqueue(async () => {
       const store = await this.read();
       const approved = store.rituals.at(-1) ?? null;
-      return {
-        approved,
-        receipt: approved
-          ? (store.receipts.findLast(
-              (receipt) =>
-                receipt.ritualId === approved.ritualId &&
-                receipt.ritualRevision === approved.ritualRevision,
-            ) ?? null)
-          : null,
-      };
+      const receipt = approved
+        ? (store.receipts.findLast(
+            (entry) =>
+              entry.ritualId === approved.ritualId &&
+              entry.ritualRevision === approved.ritualRevision,
+          ) ?? null)
+        : null;
+      const run = approved
+        ? (store.runs.findLast(
+            (entry) =>
+              entry.ritualId === approved.ritualId &&
+              entry.ritualRevision === approved.ritualRevision,
+          ) ?? null)
+        : null;
+      const runReceipt = run
+        ? (store.runReceipts.findLast((entry) => entry.runId === run.runId) ??
+          null)
+        : null;
+      return { approved, receipt, run, runReceipt };
     });
   }
 
@@ -169,6 +191,124 @@ export class RitualRepository {
     });
   }
 
+  findRunWithApprovedRevision(runId: string): Promise<{
+    run: RitualRun;
+    approved: ApprovedRitualRevision;
+  } | null> {
+    return this.enqueue(async () => {
+      const store = await this.read();
+      const run = store.runs.find((entry) => entry.runId === runId);
+      if (!run) return null;
+      const approved = store.rituals.find(
+        (entry) =>
+          entry.ritualId === run.ritualId &&
+          entry.ritualRevision === run.ritualRevision,
+      );
+      return approved ? { run, approved } : null;
+    });
+  }
+
+  findNonterminalRun(
+    ritualId: string,
+    ritualRevision: number,
+  ): Promise<RitualRun | null> {
+    return this.enqueue(async () => {
+      return (
+        (await this.read()).runs.findLast(
+          (run) =>
+            run.ritualId === ritualId &&
+            run.ritualRevision === ritualRevision &&
+            !isTerminalRun(run),
+        ) ?? null
+      );
+    });
+  }
+
+  saveRun(candidate: RitualRun): Promise<void> {
+    return this.enqueue(async () => {
+      const run = ritualRunSchema.parse(candidate);
+      if (run.status === "COMPLETED" || run.status === "NEEDS_REVIEW") {
+        throw new Error("RITUAL_RUN_ATOMIC_COMPLETION_REQUIRED");
+      }
+      const current = await this.read();
+      const ritual = current.rituals.find(
+        (entry) =>
+          entry.ritualId === run.ritualId &&
+          entry.ritualRevision === run.ritualRevision,
+      );
+      if (!ritual) throw new Error("STALE_RITUAL_RUN");
+      const index = current.runs.findIndex(
+        (entry) => entry.runId === run.runId,
+      );
+      const stored = current.runs[index];
+      if (stored && JSON.stringify(stored) === JSON.stringify(run)) return;
+      if (stored) {
+        assertRunSuccessor(stored, run);
+        const runs = [...current.runs];
+        runs[index] = run;
+        await this.write({ ...current, runs });
+        return;
+      }
+      const retained = evictTerminalRunsForNewRun(current);
+      if (!retained) throw new Error("RITUAL_RUN_STORE_FULL");
+      await this.write({
+        ...current,
+        runs: [...retained.runs, run],
+        runReceipts: retained.runReceipts,
+      });
+    });
+  }
+
+  completeRun(
+    candidateRun: RitualRun,
+    candidateReceipt: RitualRunReceipt,
+  ): Promise<void> {
+    return this.enqueue(async () => {
+      const run = ritualRunSchema.parse(candidateRun);
+      const receipt = ritualRunReceiptSchema.parse(candidateReceipt);
+      validateRitualRunReceipt(run, receipt);
+      const current = await this.read();
+      const ritual = current.rituals.find(
+        (entry) =>
+          entry.ritualId === run.ritualId &&
+          entry.ritualRevision === run.ritualRevision,
+      );
+      const runIndex = current.runs.findIndex(
+        (entry) => entry.runId === run.runId,
+      );
+      const storedRun = current.runs[runIndex];
+      if (!ritual || !storedRun) {
+        throw new Error("STALE_RITUAL_RUN_RECEIPT");
+      }
+      const stored = current.runReceipts.find(
+        (entry) => entry.receiptId === receipt.receiptId,
+      );
+      const storedForRun = current.runReceipts.find(
+        (entry) => entry.runId === run.runId,
+      );
+      if (
+        JSON.stringify(storedRun) === JSON.stringify(run) &&
+        stored &&
+        JSON.stringify(stored) === JSON.stringify(receipt)
+      ) {
+        return;
+      }
+      if (storedForRun) throw new Error("RITUAL_RUN_RECEIPT_CONFLICT");
+      assertRunSuccessor(storedRun, run);
+      if (stored) throw new Error("RITUAL_RUN_RECEIPT_CONFLICT");
+      if (current.runReceipts.length >= 100) {
+        throw new Error("RITUAL_RUN_RECEIPT_STORE_FULL");
+      }
+      const runs = [...current.runs];
+      runs[runIndex] = run;
+      await this.write({
+        ...current,
+        runs,
+        runReceipts: [...current.runReceipts, receipt],
+      });
+    });
+  }
+
   private async read(): Promise<RitualStore> {
     try {
       const metadata = await lstat(this.path);
@@ -183,22 +323,35 @@ export class RitualRepository {
       const raw = JSON.parse(await readFile(this.path, "utf8"));
       const current = ritualStoreSchema.safeParse(raw);
       if (current.success) return current.data;
+      const versionThree = ritualStoreV3Schema.safeParse(raw);
+      if (versionThree.success) {
+        return {
+          ...versionThree.data,
+          schemaVersion: 4,
+          runs: [],
+          runReceipts: [],
+        };
+      }
       const versionTwo = ritualStoreV2Schema.safeParse(raw);
       if (versionTwo.success) {
         return {
-          schemaVersion: 3,
+          schemaVersion: 4,
           rituals: versionTwo.data.rituals,
           receipts: versionTwo.data.receipts,
           learningProposals: [],
+          runs: [],
+          runReceipts: [],
         };
       }
       const legacy = approvedRitualStoreSchema.safeParse(raw);
       if (!legacy.success) throw new Error("RITUAL_STORE_CORRUPT");
       return {
-        schemaVersion: 3,
+        schemaVersion: 4,
         rituals: legacy.data.rituals,
         receipts: [],
         learningProposals: [],
+        runs: [],
+        runReceipts: [],
       };
     } catch (error) {
       if (error instanceof Error && error.message === "RITUAL_STORE_CORRUPT") {
@@ -210,10 +363,12 @@ export class RitualRepository {
         error.code === "ENOENT"
       ) {
         return {
-          schemaVersion: 3,
+          schemaVersion: 4,
           rituals: [],
           receipts: [],
           learningProposals: [],
+          runs: [],
+          runReceipts: [],
         };
       }
       throw new Error("RITUAL_STORE_CORRUPT", { cause: error });
@@ -221,6 +376,10 @@ export class RitualRepository {
   }
 
   private async write(store: RitualStore): Promise<void> {
+    if (this.dependencies.write) {
+      await this.dependencies.write(ritualStoreSchema.parse(store));
+      return;
+    }
     const directory = dirname(this.path);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const directoryMetadata = await lstat(directory);
@@ -257,5 +416,72 @@ export class RitualRepository {
       () => undefined,
     );
     return result;
+  }
+}
+
+function isTerminalRun(run: RitualRun): boolean {
+  return ["COMPLETED", "NEEDS_REVIEW", "FAILED", "CANCELED"].includes(
+    run.status,
+  );
+}
+
+function evictTerminalRunsForNewRun(store: RitualStore): {
+  runs: RitualRun[];
+  runReceipts: RitualRunReceipt[];
+} | null {
+  let runs = [...store.runs];
+  let runReceipts = [...store.runReceipts];
+  const currentApproved = store.rituals.at(-1);
+  const protectedRunId = currentApproved
+    ? runs.findLast(
+        (run) =>
+          run.ritualId === currentApproved.ritualId &&
+          run.ritualRevision === currentApproved.ritualRevision,
+      )?.runId
+    : undefined;
+
+  while (runs.length >= 100) {
+    const index = runs.findIndex(
+      (run) => isTerminalRun(run) && run.runId !== protectedRunId,
+    );
+    if (index < 0) return null;
+    const [evicted] = runs.splice(index, 1);
+    runReceipts = runReceipts.filter(
+      (receipt) => receipt.runId !== evicted!.runId,
+    );
+  }
+  return { runs, runReceipts };
+}
+
+function assertRunSuccessor(stored: RitualRun, candidate: RitualRun): void {
+  if (
+    ["COMPLETED", "NEEDS_REVIEW", "FAILED", "CANCELED"].includes(
+      stored.status,
+    ) ||
+    candidate.revision !== stored.revision + 1 ||
+    candidate.createdAt !== stored.createdAt ||
+    candidate.ritualId !== stored.ritualId ||
+    candidate.ritualRevision !== stored.ritualRevision ||
+    candidate.executionProvider !== stored.executionProvider ||
+    JSON.stringify(candidate.permissions) !==
+      JSON.stringify(stored.permissions) ||
+    JSON.stringify(
+      candidate.steps.map(({ stepKey, title, actor, approval }) => ({
+        stepKey,
+        title,
+        actor,
+        approval,
+      })),
+    ) !==
+      JSON.stringify(
+        stored.steps.map(({ stepKey, title, actor, approval }) => ({
+          stepKey,
+          title,
+          actor,
+          approval,
+        })),
+      )
+  ) {
+    throw new Error("RITUAL_RUN_CONFLICT");
   }
 }
