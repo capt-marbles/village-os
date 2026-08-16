@@ -73,10 +73,18 @@ import { createRitualBuilderWindow } from "../src/main/ritual-builder-window.js"
 
 describe("Ritual Builder window", () => {
   const controller = {
-    loadLatestState: vi.fn(async () => ({ approved: null, receipt: null })),
+    loadLatestState: vi.fn(async () => ({
+      approved: null,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+    })),
     draft: vi.fn(async () => ({ status: "waiting" })),
     approve: vi.fn(async (ritual) => ritual),
     testRun: vi.fn(async () => ({ status: "waiting" })),
+    startRun: vi.fn(async () => ({ status: "run" })),
+    approveRunStep: vi.fn(async () => ({ status: "run" })),
+    cancelRun: vi.fn(async () => ({ status: "run" })),
     proposeLearning: vi.fn(async () => ({ status: "waiting" })),
     approveLearning: vi.fn(async (ritual) => ritual),
     close: vi.fn(async () => undefined),
@@ -142,6 +150,13 @@ describe("Ritual Builder window", () => {
     const draft = electron.handlers.get("village:ritual-builder:draft")!;
     const approve = electron.handlers.get("village:ritual-builder:approve")!;
     const testRun = electron.handlers.get("village:ritual-builder:test-run")!;
+    const startRun = electron.handlers.get("village:ritual-builder:start-run")!;
+    const approveRunStep = electron.handlers.get(
+      "village:ritual-builder:approve-run-step",
+    )!;
+    const cancelRun = electron.handlers.get(
+      "village:ritual-builder:cancel-run",
+    )!;
     const proposeLearning = electron.handlers.get(
       "village:ritual-builder:propose-learning",
     )!;
@@ -158,6 +173,9 @@ describe("Ritual Builder window", () => {
       approvedDraftId: initialized.identity.draftId,
     });
     await testRun(event, { ritualId: initialized.identity.ritualId });
+    await startRun(event, { ritualId: initialized.identity.ritualId });
+    await approveRunStep(event, { runId: "bounded" });
+    await cancelRun(event, { runId: "bounded" });
     await proposeLearning(event, { ritualId: initialized.identity.ritualId });
     await approveLearning(event, { ritualId: initialized.identity.ritualId });
     expect(controller.loadLatestState).toHaveBeenCalledOnce();
@@ -171,6 +189,13 @@ describe("Ritual Builder window", () => {
     expect(controller.testRun).toHaveBeenCalledWith({
       ritualId: initialized.identity.ritualId,
     });
+    expect(controller.startRun).toHaveBeenCalledWith({
+      ritualId: initialized.identity.ritualId,
+    });
+    expect(controller.approveRunStep).toHaveBeenCalledWith({
+      runId: "bounded",
+    });
+    expect(controller.cancelRun).toHaveBeenCalledWith({ runId: "bounded" });
     expect(controller.proposeLearning).toHaveBeenCalledWith({
       ritualId: initialized.identity.ritualId,
     });
@@ -215,6 +240,8 @@ describe("Ritual Builder window", () => {
     controller.loadLatestState.mockResolvedValueOnce({
       approved: approved as never,
       receipt: receipt as never,
+      run: null,
+      runReceipt: null,
     });
     await createRitualBuilderWindow({
       preloadPath: "/app/ritual-builder-bridge.cjs",

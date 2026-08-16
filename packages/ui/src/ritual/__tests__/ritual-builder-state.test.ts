@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  createRitualRun,
+  createRitualRunReceipt,
+  reduceRitualRun,
+} from "@village/contracts";
+import {
   createRitualBuilderState,
   reduceRitualBuilder,
 } from "../ritual-builder-state.js";
@@ -102,7 +107,7 @@ describe("Ritual Builder state", () => {
     expect(state.draft?.reviewPolicy.learning).toBe("PROPOSE_ONLY");
   });
 
-  it("restores an approved Ritual without exposing a Run action", () => {
+  it("restores an approved Ritual ready for an explicit Run", () => {
     const approved = {
       schemaVersion: 1 as const,
       ritualId,
@@ -135,7 +140,131 @@ describe("Ritual Builder state", () => {
       approved,
     });
     expect(state).toMatchObject({ phase: "APPROVED", approved });
-    expect(JSON.stringify(state)).not.toContain("RUN_RITUAL");
+    expect(JSON.stringify(state)).not.toContain("RUNNING_RITUAL");
+  });
+
+  it("presents durable Run progress, an owner gate, and a Run Receipt", () => {
+    const approved = {
+      schemaVersion: 1 as const,
+      ritualId,
+      ritualRevision: 1 as const,
+      status: "APPROVED" as const,
+      approvedDraftId: draftId,
+      approvedDraftRevision: 3,
+      name: "Pipeline review",
+      purpose: "Prepare a weekday pipeline review.",
+      trigger: { kind: "ON_DEMAND" as const, summary: "Whenever I ask" },
+      steps: [
+        {
+          stepKey: "prepare-review",
+          title: "Prepare the review",
+          description: "Gather bounded fixture data for the review.",
+          actor: { kind: "STEWARD" as const, role: "Steward" },
+          approval: "OWNER_REQUIRED" as const,
+        },
+      ],
+      permissions: ["Read only connected records"],
+      completion: "A reviewable result is ready.",
+      reviewPolicy: {
+        ownerReview: "EVERY_RUN" as const,
+        learning: "PROPOSE_ONLY" as const,
+      },
+      approvedAt: "2026-08-15T16:03:00.000Z",
+    };
+    let state = reduceRitualBuilder(createRitualBuilderState(), {
+      type: "RESTORE_APPROVED",
+      approved,
+    });
+    state = reduceRitualBuilder(state, { type: "START_RUN" });
+    expect(state.phase).toBe("STARTING_RUN");
+
+    let run = createRitualRun({
+      approved,
+      request: {
+        schemaVersion: 1,
+        ritualId,
+        ritualRevision: 1,
+      },
+      runId: "rrn_01J00000000000000000000001",
+      createdAt: "2026-08-16T12:00:00.000Z",
+    });
+    run = reduceRitualRun(run, approved, {
+      type: "START",
+      occurredAt: "2026-08-16T12:00:01.000Z",
+    });
+    state = reduceRitualBuilder(state, { type: "RUN_UPDATED", run });
+    expect(state).toMatchObject({
+      phase: "RUN_WAITING_FOR_OWNER",
+      run: { currentStepKey: "prepare-review" },
+    });
+
+    state = reduceRitualBuilder(state, { type: "APPROVE_RUN_STEP" });
+    expect(state.phase).toBe("RUN_WAITING_FOR_OWNER");
+    state = reduceRitualBuilder(state, {
+      type: "RUN_COMMAND_FAILED",
+      message: "The approval was not recorded.",
+    });
+    expect(state).toMatchObject({
+      phase: "RUN_WAITING_FOR_OWNER",
+      error: "The approval was not recorded.",
+    });
+    state = reduceRitualBuilder(state, { type: "CANCEL_RUN" });
+    expect(state.phase).toBe("RUN_WAITING_FOR_OWNER");
+    state = reduceRitualBuilder(state, {
+      type: "RUN_COMMAND_FAILED",
+      message: "The cancellation was not recorded.",
+    });
+    expect(state).toMatchObject({
+      phase: "RUN_WAITING_FOR_OWNER",
+      error: "The cancellation was not recorded.",
+    });
+    state = reduceRitualBuilder(state, { type: "APPROVE_RUN_STEP" });
+    run = reduceRitualRun(run, approved, {
+      type: "APPROVE_STEP",
+      stepKey: "prepare-review",
+      occurredAt: "2026-08-16T12:00:02.000Z",
+    });
+    run = reduceRitualRun(run, approved, {
+      type: "COMPLETE_STEP",
+      stepKey: "prepare-review",
+      occurredAt: "2026-08-16T12:00:03.000Z",
+    });
+    run = reduceRitualRun(run, approved, {
+      type: "COMPLETE_RUN",
+      outcome: "NEEDS_REVIEW",
+      occurredAt: "2026-08-16T12:00:04.000Z",
+    });
+    const runReceipt = createRitualRunReceipt({
+      approved,
+      run,
+      receiptId: "rcp_01J00000000000000000000001",
+      summary: "The fixture completed the approved orchestration step.",
+      recordedAt: "2026-08-16T12:00:04.000Z",
+    });
+    let restored = reduceRitualBuilder(createRitualBuilderState(), {
+      type: "RESTORE_APPROVED",
+      approved,
+    });
+    restored = reduceRitualBuilder(restored, { type: "RESTORE_RUN", run });
+    expect(restored).toMatchObject({
+      phase: "RUN_FAILED",
+      error: expect.stringContaining("missing its Receipt"),
+    });
+    restored = reduceRitualBuilder(restored, {
+      type: "RESTORE_RUN_RECEIPT",
+      receipt: runReceipt,
+    });
+    expect(restored.phase).toBe("REVIEW_RUN");
+    state = reduceRitualBuilder(state, {
+      type: "RUN_RECEIPT",
+      run,
+      receipt: runReceipt,
+    });
+    expect(state).toMatchObject({
+      phase: "REVIEW_RUN",
+      run: { status: "NEEDS_REVIEW" },
+      runReceipt: { mode: "RUN", externalEffects: [] },
+    });
   });
 
   it("returns an approved Ritual to a clean purpose prompt for another Ritual", () => {

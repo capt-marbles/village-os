@@ -52,6 +52,9 @@ export async function createRitualBuilderWindow(options: {
   const draftChannel = "village:ritual-builder:draft";
   const approveChannel = "village:ritual-builder:approve";
   const testRunChannel = "village:ritual-builder:test-run";
+  const startRunChannel = "village:ritual-builder:start-run";
+  const approveRunStepChannel = "village:ritual-builder:approve-run-step";
+  const cancelRunChannel = "village:ritual-builder:cancel-run";
   const proposeLearningChannel = "village:ritual-builder:propose-learning";
   const approveLearningChannel = "village:ritual-builder:approve-learning";
   const assertSender = (event: IpcMainInvokeEvent) => {
@@ -89,6 +92,18 @@ export async function createRitualBuilderWindow(options: {
     assertSender(event);
     return options.controller.testRun(candidate);
   });
+  ipcMain.handle(startRunChannel, async (event, candidate) => {
+    assertSender(event);
+    return options.controller.startRun(candidate);
+  });
+  ipcMain.handle(approveRunStepChannel, async (event, candidate) => {
+    assertSender(event);
+    return options.controller.approveRunStep(candidate);
+  });
+  ipcMain.handle(cancelRunChannel, async (event, candidate) => {
+    assertSender(event);
+    return options.controller.cancelRun(candidate);
+  });
   ipcMain.handle(proposeLearningChannel, async (event, candidate) => {
     assertSender(event);
     return options.controller.proposeLearning(candidate);
@@ -105,6 +120,9 @@ export async function createRitualBuilderWindow(options: {
     ipcMain.removeHandler(draftChannel);
     ipcMain.removeHandler(approveChannel);
     ipcMain.removeHandler(testRunChannel);
+    ipcMain.removeHandler(startRunChannel);
+    ipcMain.removeHandler(approveRunStepChannel);
+    ipcMain.removeHandler(cancelRunChannel);
     ipcMain.removeHandler(proposeLearningChannel);
     ipcMain.removeHandler(approveLearningChannel);
     void options.controller.close();

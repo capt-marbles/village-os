@@ -8,6 +8,11 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import {
+  createRitualRun,
+  createRitualRunReceipt,
+  reduceRitualRun,
+} from "@village/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RitualBuilderWorkspace } from "../src/renderer/RitualBuilderWorkspace.js";
 import { resolveDesktopRendererMode } from "../src/renderer/renderer-mode.js";
@@ -88,12 +93,55 @@ const learningProposal = {
   },
 };
 
+let waitingRun = createRitualRun({
+  approved,
+  request: {
+    schemaVersion: 1,
+    ritualId: approved.ritualId,
+    ritualRevision: approved.ritualRevision,
+  },
+  runId: "rrn_01J00000000000000000000001",
+  createdAt: "2026-08-16T12:00:00.000Z",
+});
+waitingRun = reduceRitualRun(waitingRun, approved, {
+  type: "START",
+  occurredAt: "2026-08-16T12:00:01.000Z",
+});
+let completedRun = reduceRitualRun(waitingRun, approved, {
+  type: "APPROVE_STEP",
+  stepKey: "prepare-review",
+  occurredAt: "2026-08-16T12:00:02.000Z",
+});
+completedRun = reduceRitualRun(completedRun, approved, {
+  type: "COMPLETE_STEP",
+  stepKey: "prepare-review",
+  occurredAt: "2026-08-16T12:00:03.000Z",
+});
+completedRun = reduceRitualRun(completedRun, approved, {
+  type: "COMPLETE_RUN",
+  outcome: "NEEDS_REVIEW",
+  occurredAt: "2026-08-16T12:00:04.000Z",
+});
+const runReceipt = createRitualRunReceipt({
+  approved,
+  run: completedRun,
+  receiptId: "rcp_01J00000000000000000000001",
+  summary: "The fixture completed the approved orchestration step.",
+  recordedAt: "2026-08-16T12:00:04.000Z",
+});
+const canceledRun = reduceRitualRun(waitingRun, approved, {
+  type: "CANCEL",
+  occurredAt: "2026-08-16T12:00:05.000Z",
+});
+
 function bridge() {
   return {
     initialize: vi.fn(async () => ({
       identity,
       approved: null,
       receipt: null,
+      run: null,
+      runReceipt: null,
     })),
     createDraftIdentity: vi.fn(async () => nextIdentity),
     draft: vi.fn(async (context) => ({
@@ -117,6 +165,16 @@ function bridge() {
     })),
     approve: vi.fn(async (ritual) => ritual),
     testRun: vi.fn(async () => ({ status: "receipt" as const, receipt })),
+    startRun: vi.fn(async () => ({ status: "run" as const, run: waitingRun })),
+    approveRunStep: vi.fn(async () => ({
+      status: "receipt" as const,
+      run: completedRun,
+      receipt: runReceipt,
+    })),
+    cancelRun: vi.fn(async () => ({
+      status: "run" as const,
+      run: waitingRun,
+    })),
     proposeLearning: vi.fn(async () => learningProposal),
     approveLearning: vi.fn(async () => ({
       ...approved,
@@ -150,6 +208,8 @@ describe("RitualBuilderWorkspace", () => {
       identity,
       approved,
       receipt: null,
+      run: null,
+      runReceipt: null,
     });
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
     await screen.findByText("Ritual approved");
@@ -173,12 +233,124 @@ describe("RitualBuilderWorkspace", () => {
     expect(screen.queryByLabelText("Representative sample")).toBeNull();
   });
 
+  it("runs the durable fixture through an explicit owner gate and Receipt", async () => {
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+    });
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+    await screen.findByText("Ritual approved");
+
+    fireEvent.click(screen.getByRole("button", { name: "Run fixture proof" }));
+    await screen.findByText("Owner approval required");
+    expect(activeBridge.startRun).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Approve fixture step" }),
+    );
+    await screen.findByText("Run Receipt");
+    expect(activeBridge.approveRunStep).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      runId: waitingRun.runId,
+      stepKey: "prepare-review",
+    });
+    expect(screen.getByText(runReceipt.summary)).toBeTruthy();
+    expect(screen.getAllByText(/orchestration only/u)).toHaveLength(2);
+  });
+
+  it("releases the Run guard after start, approval, and cancellation failures", async () => {
+    const startBridge = bridge();
+    startBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+    });
+    startBridge.startRun
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({ status: "run", run: waitingRun });
+    const startView = render(<RitualBuilderWorkspace bridge={startBridge} />);
+    await screen.findByText("Ritual approved");
+    fireEvent.click(screen.getByRole("button", { name: "Run fixture proof" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "may already exist",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Run fixture proof" }));
+    await screen.findByText("Owner approval required");
+    expect(startBridge.startRun).toHaveBeenCalledTimes(2);
+    startView.unmount();
+
+    const approvalBridge = bridge();
+    approvalBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved,
+      receipt: null,
+      run: waitingRun,
+      runReceipt: null,
+    });
+    approvalBridge.approveRunStep
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({
+        status: "receipt",
+        run: completedRun,
+        receipt: runReceipt,
+      });
+    const approvalView = render(
+      <RitualBuilderWorkspace bridge={approvalBridge} />,
+    );
+    await screen.findByText("Owner approval required");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Approve fixture step" }),
+    );
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "did not advance",
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Approve fixture step" }),
+    );
+    await screen.findByText("Run Receipt");
+    expect(approvalBridge.approveRunStep).toHaveBeenCalledTimes(2);
+    approvalView.unmount();
+
+    const cancelBridge = bridge();
+    cancelBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved,
+      receipt: null,
+      run: waitingRun,
+      runReceipt: null,
+    });
+    cancelBridge.cancelRun
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({ status: "run", run: canceledRun });
+    render(<RitualBuilderWorkspace bridge={cancelBridge} />);
+    await screen.findByText("Owner approval required");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel Run" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "could not confirm cancellation",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel Run" }));
+    await screen.findByText("Run canceled");
+    expect(cancelBridge.cancelRun).toHaveBeenCalledTimes(2);
+  });
+
   it("coalesces rapid duplicate submits into one paid Test Run", async () => {
     const activeBridge = bridge();
     activeBridge.initialize.mockResolvedValueOnce({
       identity,
       approved,
       receipt: null,
+      run: null,
+      runReceipt: null,
     });
     activeBridge.testRun.mockImplementation(() => new Promise(() => undefined));
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
@@ -203,6 +375,8 @@ describe("RitualBuilderWorkspace", () => {
       identity,
       approved,
       receipt,
+      run: null,
+      runReceipt: null,
     });
 
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
@@ -219,6 +393,8 @@ describe("RitualBuilderWorkspace", () => {
       identity,
       approved,
       receipt,
+      run: null,
+      runReceipt: null,
     });
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
     await screen.findByText("Test Receipt");
@@ -336,6 +512,8 @@ describe("RitualBuilderWorkspace", () => {
       identity,
       approved,
       receipt: null,
+      run: null,
+      runReceipt: null,
     });
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
     await screen.findByText("Ritual approved");
@@ -366,6 +544,8 @@ describe("RitualBuilderWorkspace", () => {
       identity,
       approved,
       receipt: null,
+      run: null,
+      runReceipt: null,
     });
     activeBridge.createDraftIdentity.mockRejectedValueOnce(
       new Error("IDENTITY_UNAVAILABLE"),
