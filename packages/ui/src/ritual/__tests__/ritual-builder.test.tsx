@@ -85,6 +85,36 @@ describe("Ritual Builder", () => {
     expect(html).toContain("What regular work should I take care of?");
   });
 
+  it("offers a bounded 30-day signal starter without hiding the source limits", () => {
+    const onEvent = vi.fn();
+    render(
+      <RitualBuilder
+        identity={identity}
+        state={createRitualBuilderState()}
+        onEvent={onEvent}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /30-day signal brief/u }),
+    );
+    fireEvent.change(screen.getByLabelText("What topic should I track?"), {
+      target: { value: "AI coding agents" },
+    });
+    expect(
+      screen.getByText(/does not yet rank Reddit, X, or YouTube/u),
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Shape the 30-day brief" }),
+    );
+
+    expect(onEvent).toHaveBeenCalledWith({
+      type: "SUBMIT_STARTER",
+      draftId: identity.draftId,
+      starter: { kind: "LAST_30_DAYS", topic: "AI coding agents" },
+    });
+  });
+
   it("shows graphical trigger choices and the exact draft revision for approval", () => {
     let state = draftedState("Review my pipeline and prepare next actions.");
     const triggerHtml = renderToStaticMarkup(

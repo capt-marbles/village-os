@@ -185,6 +185,74 @@ describe("CodexRitualStewardProvider", () => {
     });
   });
 
+  it("binds the 30-day starter to the exact locally governed Exa resource", async () => {
+    const starterContext = {
+      ...context,
+      ownerPurpose:
+        "Prepare a grounded brief on the most important public-web developments about AI coding agents from the last 30 days.",
+      starter: {
+        kind: "LAST_30_DAYS" as const,
+        topic: "AI coding agents",
+      },
+    };
+    let prompt: unknown;
+    const transport = {
+      request: async (method: string) => {
+        if (method === "initialize") return {};
+        if (method === "account/read") return { account: { type: "chatgpt" } };
+        return { thread: { id: "thread-last-30-days" } };
+      },
+      notify: () => undefined,
+      runToolTurn: async (_threadId: string, candidate: unknown) => {
+        prompt = candidate;
+        return {
+          stewardMessage: "I shaped a bounded signal brief.",
+          name: "AI coding agent signals",
+          purpose: starterContext.ownerPurpose,
+          steps: [
+            {
+              stepKey: "prepare-brief",
+              title: "Prepare the brief",
+              description: "Review the bounded recent public-web evidence.",
+              actor: { kind: "STEWARD", role: "Steward" },
+              approval: "NONE",
+            },
+          ],
+          permissions: ["Read bounded public-web evidence"],
+          completion: "A grounded signal brief is ready for review.",
+          research: {
+            provider: "EXA",
+            query: "a broader query the model invented",
+            maxResults: 2,
+            lookbackDays: 7,
+          },
+        };
+      },
+      close: async () => undefined,
+    };
+
+    const result = await new CodexRitualStewardProvider(transport).draft(
+      starterContext,
+    );
+
+    expect(result).toMatchObject({
+      status: "proposal",
+      research: {
+        provider: "EXA",
+        query: "AI coding agents",
+        maxResults: 5,
+        lookbackDays: 30,
+      },
+    });
+    expect(prompt).toMatchObject({
+      starter: {
+        kind: "LAST_30_DAYS",
+        topic: "AI coding agents",
+      },
+    });
+    expect(JSON.stringify(prompt)).not.toContain(starterContext.draftId);
+  });
+
   it("fails closed when ChatGPT authentication is unavailable", async () => {
     const transport = {
       request: async (method: string) =>

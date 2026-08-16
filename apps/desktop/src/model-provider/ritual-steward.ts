@@ -11,6 +11,7 @@ import {
   ritualStewardProposalContentJsonSchema,
   ritualStewardProposalContentSchema,
   ritualStewardResultSchema,
+  researchForRitualStarter,
   type RitualStewardContext,
   type RitualStewardResult,
   type RitualTestRunProviderContext,
@@ -155,6 +156,7 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
         {
           schemaVersion: 1,
           ownerPurpose: context.ownerPurpose,
+          ...(context.starter ? { starter: context.starter } : {}),
           constraints: {
             maximumSteps: 6,
             externalEffects: "OWNER_APPROVAL_REQUIRED",
@@ -176,6 +178,9 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
         draftId: context.draftId,
         requestRevision: context.requestRevision,
         ...proposal.data,
+        ...(context.starter
+          ? { research: researchForRitualStarter(context.starter) }
+          : {}),
       });
     } catch (error) {
       const timeout =
@@ -266,7 +271,7 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
       experimentalRawEvents: false,
       environments: [],
       baseInstructions:
-        "You are the Village Steward. Turn one bounded owner purpose into a concise Ritual draft. Call village_ritual_draft exactly once. Use 1 to 6 semantic steps. Add one bounded EXA research resource only when the outcome requires current public-web information; use a focused query, at most 5 results, and a lookback of at most 30 days. Do not use public-web research for private email, accounts, messages, or connected records. Every external effect must require owner approval. Never add credentials, raw source content, full URLs, code, execution commands, autonomous learning, or a Run capability.",
+        "You are the Village Steward. Turn one bounded owner purpose into a concise Ritual draft. Call village_ritual_draft exactly once. Use 1 to 6 semantic steps. Add one bounded EXA research resource only when the outcome requires current public-web information; use a focused query, at most 5 results, and a lookback of at most 30 days. When starter.kind is LAST_30_DAYS, shape a grounded public-web signal brief for its exact topic; Village binds the resource locally to that topic, 5 results, and 30 days. Do not claim Reddit, X, YouTube, or engagement-specific coverage. Do not use public-web research for private email, accounts, messages, or connected records. Every external effect must require owner approval. Never add credentials, raw source content, full URLs, code, execution commands, autonomous learning, or a Run capability.",
       dynamicTools: [
         {
           type: "function",

@@ -612,6 +612,32 @@ describe("RitualBuilderWorkspace", () => {
     expect(activeBridge.draft).not.toHaveBeenCalled();
   });
 
+  it("sends the curated 30-day starter through the strict Steward boundary", async () => {
+    const activeBridge = bridge();
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+    await screen.findByText("Shape a Ritual with your Steward");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /30-day signal brief/u }),
+    );
+    fireEvent.change(screen.getByLabelText("What topic should I track?"), {
+      target: { value: "AI coding agents" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Shape the 30-day brief" }),
+    );
+
+    await waitFor(() => expect(activeBridge.draft).toHaveBeenCalledOnce());
+    expect(activeBridge.draft).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      draftId: identity.draftId,
+      requestRevision: 1,
+      ownerPurpose:
+        "Prepare a grounded brief on the most important public-web developments about AI coding agents from the last 30 days.",
+      starter: { kind: "LAST_30_DAYS", topic: "AI coding agents" },
+    });
+  });
+
   it("shows the bounded provider failure reason instead of a generic error", async () => {
     const activeBridge = bridge();
     activeBridge.draft.mockResolvedValueOnce({

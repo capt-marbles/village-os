@@ -694,6 +694,14 @@ describe("Ritual Builder state", () => {
     expect(state.phase).toBe("DESCRIBE_PURPOSE");
     expect(state.error).toContain("320");
 
+    state = reduceRitualBuilder(createRitualBuilderState(), {
+      type: "SUBMIT_STARTER",
+      draftId,
+      starter: { kind: "LAST_30_DAYS", topic: "" },
+    });
+    expect(state.phase).toBe("DESCRIBE_PURPOSE");
+    expect(state.error).toContain("starter details are not valid");
+
     state = applyStewardProposal(
       createRitualBuilderState(),
       "Prepare a pipeline review.",
