@@ -145,6 +145,12 @@ describe("CodexRitualStewardProvider", () => {
           ],
           permissions: ["Read only connected pipeline records"],
           completion: "A reviewable follow-up list is ready.",
+          research: {
+            provider: "EXA",
+            query: "recent public signals about pipeline accounts",
+            maxResults: 5,
+            lookbackDays: 30,
+          },
         };
       },
       close: async () => undefined,
@@ -158,6 +164,10 @@ describe("CodexRitualStewardProvider", () => {
       draftId: context.draftId,
       requestRevision: 1,
       name: "Pipeline follow-up review",
+      research: {
+        provider: "EXA",
+        query: "recent public signals about pipeline accounts",
+      },
     });
     const turn = calls.find((call) => call.method === "turn")?.params as {
       prompt: unknown;
@@ -168,6 +178,7 @@ describe("CodexRitualStewardProvider", () => {
     expect(serializedTurn).not.toContain(context.draftId);
     expect(serializedTurn).not.toContain("ritualId");
     expect(serializedTurn).not.toContain("RUN_RITUAL");
+    expect(serializedTurn).toContain("EXA_OPTIONAL_MAX_30_DAYS");
     expect(turn.options).toEqual({
       toolName: "village_ritual_draft",
       timeoutMs: 30_000,

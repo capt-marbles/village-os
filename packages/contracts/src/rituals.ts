@@ -7,6 +7,11 @@ import {
   ritualLearningProposalIdSchema,
   ritualRunIdSchema,
 } from "./ids.js";
+import {
+  webResearchRequestSchema,
+  webResearchSuccessSchema,
+  webResearchWaitingReasonSchema,
+} from "./research.js";
 
 const shortLabelSchema = z.string().trim().min(1).max(80);
 const sentenceSchema = z.string().trim().min(1).max(320);
@@ -52,6 +57,41 @@ export const ritualReviewPolicySchema = z.strictObject({
   learning: z.enum(["PROPOSE_ONLY", "OFF"]),
 });
 
+export const ritualResearchSchema = z.strictObject({
+  provider: z.literal("EXA"),
+  query: webResearchRequestSchema.shape.query,
+  maxResults: webResearchRequestSchema.shape.maxResults.max(5),
+  lookbackDays: z.number().int().min(1).max(30),
+  includeDomains: webResearchRequestSchema.shape.includeDomains
+    .unwrap()
+    .min(1)
+    .optional(),
+});
+
+const ritualResearchEvidenceSourceSchema = z.strictObject({
+  title: webResearchSuccessSchema.shape.sources.element.shape.title.max(160),
+  url: webResearchSuccessSchema.shape.sources.element.shape.url,
+  publishedAt: webResearchSuccessSchema.shape.sources.element.shape.publishedAt,
+  author: webResearchSuccessSchema.shape.sources.element.shape.author
+    .unwrap()
+    .max(100)
+    .nullable(),
+  highlights: z
+    .array(
+      webResearchSuccessSchema.shape.sources.element.shape.highlights.element.max(
+        500,
+      ),
+    )
+    .max(1),
+  taint: z.literal("UNTRUSTED_WEB"),
+});
+
+export const ritualResearchEvidenceSchema = z.strictObject({
+  provider: z.literal("EXA"),
+  requestId: webResearchSuccessSchema.shape.requestId,
+  sources: z.array(ritualResearchEvidenceSourceSchema).max(5),
+});
+
 const ritualDefinition = {
   name: shortLabelSchema,
   purpose: sentenceSchema,
@@ -60,6 +100,7 @@ const ritualDefinition = {
   permissions: z.array(shortLabelSchema).max(12),
   completion: sentenceSchema,
   reviewPolicy: ritualReviewPolicySchema,
+  research: ritualResearchSchema.optional(),
 };
 
 export const ritualDraftSchema = z.strictObject({
@@ -212,6 +253,7 @@ export const ritualRunStepStateSchema = z.strictObject({
     "PENDING",
     "WAITING_FOR_OWNER",
     "RUNNING",
+    "WAITING_FOR_RESOURCE",
     "COMPLETED",
     "FAILED",
     "CANCELED",
@@ -219,6 +261,7 @@ export const ritualRunStepStateSchema = z.strictObject({
   startedAt: instantSchema.nullable(),
   approvedAt: instantSchema.nullable(),
   completedAt: instantSchema.nullable(),
+  research: ritualResearchEvidenceSchema.nullable().optional(),
 });
 
 export const ritualRunSchema = z
@@ -228,11 +271,12 @@ export const ritualRunSchema = z
     revision: z.number().int().positive(),
     ritualId: ritualIdSchema,
     ritualRevision: z.number().int().positive(),
-    executionProvider: z.literal("DETERMINISTIC_FIXTURE"),
+    executionProvider: z.enum(["DETERMINISTIC_FIXTURE", "LOCAL_RITUAL_V1"]),
     status: z.enum([
       "QUEUED",
       "RUNNING",
       "WAITING_FOR_OWNER",
+      "WAITING_FOR_RESOURCE",
       "COMPLETED",
       "NEEDS_REVIEW",
       "FAILED",
@@ -245,6 +289,7 @@ export const ritualRunSchema = z
     failureCode: z
       .enum(["EXECUTOR_FAILED", "INTERRUPTED", "POLICY_DENIED"])
       .nullable(),
+    waitingReason: webResearchWaitingReasonSchema.nullable().optional(),
     createdAt: instantSchema,
     startedAt: instantSchema.nullable(),
     updatedAt: instantSchema,
@@ -292,7 +337,9 @@ export const ritualRunSchema = z
       });
     }
     const active = run.steps.filter((step) =>
-      ["WAITING_FOR_OWNER", "RUNNING"].includes(step.status),
+      ["WAITING_FOR_OWNER", "WAITING_FOR_RESOURCE", "RUNNING"].includes(
+        step.status,
+      ),
     );
     if (
       active.length > 1 ||
@@ -324,6 +371,26 @@ export const ritualRunSchema = z
       });
     }
     if (
+      (run.status === "WAITING_FOR_RESOURCE") !==
+      (active[0]?.status === "WAITING_FOR_RESOURCE")
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["status"],
+        message: "Resource wait and step state must agree",
+      });
+    }
+    if (
+      (run.status === "WAITING_FOR_RESOURCE") !==
+      Boolean(run.waitingReason)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["waitingReason"],
+        message: "Only resource waits carry a reason",
+      });
+    }
+    if (
       (run.status === "COMPLETED" || run.status === "NEEDS_REVIEW") &&
       (run.currentStepKey !== null ||
         run.steps.some((step) => step.status !== "COMPLETED"))
@@ -350,7 +417,7 @@ export const ritualRunReceiptSchema = z.strictObject({
   ritualId: ritualIdSchema,
   ritualRevision: z.number().int().positive(),
   mode: z.literal("RUN"),
-  executionProvider: z.literal("DETERMINISTIC_FIXTURE"),
+  executionProvider: ritualRunSchema.shape.executionProvider,
   outcome: z.enum(["COMPLETED", "NEEDS_REVIEW"]),
   summary: z.string().trim().min(1).max(2_000),
   stepEvidence: z
@@ -359,6 +426,7 @@ export const ritualRunReceiptSchema = z.strictObject({
         stepKey: ritualStepSchema.shape.stepKey,
         title: ritualStepSchema.shape.title,
         actor: ritualActorSchema,
+        research: ritualResearchEvidenceSchema.nullable().optional(),
       }),
     )
     .min(1)
@@ -471,6 +539,7 @@ const ritualStewardProposalFields = {
   steps: ritualDefinition.steps,
   permissions: ritualDefinition.permissions,
   completion: ritualDefinition.completion,
+  research: ritualDefinition.research,
 };
 
 export const ritualStewardProposalContentSchema = z.strictObject({
@@ -508,6 +577,10 @@ export type ApprovedRitualStore = z.infer<typeof approvedRitualStoreSchema>;
 export type RitualStewardContext = z.infer<typeof ritualStewardContextSchema>;
 export type RitualStewardProposal = z.infer<typeof ritualStewardProposalSchema>;
 export type RitualStewardResult = z.infer<typeof ritualStewardResultSchema>;
+export type RitualResearch = z.infer<typeof ritualResearchSchema>;
+export type RitualResearchEvidence = z.infer<
+  typeof ritualResearchEvidenceSchema
+>;
 export type RitualTestRunRequest = z.infer<typeof ritualTestRunRequestSchema>;
 export type RitualTestRunProviderContext = z.infer<
   typeof ritualTestRunProviderContextSchema
@@ -591,7 +664,7 @@ export function createRitualRun(input: {
     revision: 1,
     ritualId: approved.ritualId,
     ritualRevision: approved.ritualRevision,
-    executionProvider: "DETERMINISTIC_FIXTURE",
+    executionProvider: "LOCAL_RITUAL_V1",
     status: "QUEUED",
     currentStepKey: null,
     steps: approved.steps.map((step) => ({
@@ -603,10 +676,12 @@ export function createRitualRun(input: {
       startedAt: null,
       approvedAt: null,
       completedAt: null,
+      research: null,
     })),
     permissions: approved.permissions,
     externalEffects: [],
     failureCode: null,
+    waitingReason: null,
     createdAt: input.createdAt,
     startedAt: null,
     updatedAt: input.createdAt,
@@ -617,7 +692,18 @@ export function createRitualRun(input: {
 export type RitualRunEvent =
   | { type: "START"; occurredAt: string }
   | { type: "APPROVE_STEP"; stepKey: string; occurredAt: string }
-  | { type: "COMPLETE_STEP"; stepKey: string; occurredAt: string }
+  | {
+      type: "COMPLETE_STEP";
+      stepKey: string;
+      research?: z.infer<typeof ritualResearchEvidenceSchema>;
+      occurredAt: string;
+    }
+  | {
+      type: "WAIT_FOR_RESOURCE";
+      reason: z.infer<typeof webResearchWaitingReasonSchema>;
+      occurredAt: string;
+    }
+  | { type: "RETRY_RESOURCE"; occurredAt: string }
   | {
       type: "COMPLETE_RUN";
       outcome: "COMPLETED" | "NEEDS_REVIEW";
@@ -687,6 +773,51 @@ export function reduceRitualRun(
     });
   }
 
+  if (event.type === "WAIT_FOR_RESOURCE") {
+    const index = current.steps.findIndex(
+      (step) =>
+        step.stepKey === current.currentStepKey && step.status === "RUNNING",
+    );
+    if (current.status !== "RUNNING" || index < 0) {
+      return illegalRunTransition();
+    }
+    const steps = current.steps.map((step, stepIndex) =>
+      stepIndex === index
+        ? { ...step, status: "WAITING_FOR_RESOURCE" as const }
+        : step,
+    );
+    return parseRun({
+      ...current,
+      revision: current.revision + 1,
+      status: "WAITING_FOR_RESOURCE",
+      steps,
+      waitingReason: event.reason,
+      updatedAt: event.occurredAt,
+    });
+  }
+
+  if (event.type === "RETRY_RESOURCE") {
+    const index = current.steps.findIndex(
+      (step) =>
+        step.stepKey === current.currentStepKey &&
+        step.status === "WAITING_FOR_RESOURCE",
+    );
+    if (current.status !== "WAITING_FOR_RESOURCE" || index < 0) {
+      return illegalRunTransition();
+    }
+    const steps = current.steps.map((step, stepIndex) =>
+      stepIndex === index ? { ...step, status: "RUNNING" as const } : step,
+    );
+    return parseRun({
+      ...current,
+      revision: current.revision + 1,
+      status: "RUNNING",
+      steps,
+      waitingReason: null,
+      updatedAt: event.occurredAt,
+    });
+  }
+
   if (event.type === "COMPLETE_STEP") {
     const index = current.steps.findIndex(
       (step) => step.stepKey === event.stepKey && step.status === "RUNNING",
@@ -704,6 +835,7 @@ export function reduceRitualRun(
             ...step,
             status: "COMPLETED" as const,
             completedAt: event.occurredAt,
+            research: event.research ?? step.research ?? null,
           }
         : step,
     );
@@ -756,6 +888,7 @@ export function reduceRitualRun(
       currentStepKey: null,
       steps: stopOpenSteps(current.steps, "FAILED", event.occurredAt),
       failureCode: event.failureCode,
+      waitingReason: null,
       startedAt: current.startedAt ?? event.occurredAt,
       updatedAt: event.occurredAt,
       completedAt: event.occurredAt,
@@ -769,6 +902,7 @@ export function reduceRitualRun(
     status: "CANCELED",
     currentStepKey: null,
     steps: stopOpenSteps(current.steps, "CANCELED", event.occurredAt),
+    waitingReason: null,
     updatedAt: event.occurredAt,
     completedAt: event.occurredAt,
   });
@@ -804,10 +938,13 @@ export function createRitualRunReceipt(input: {
       stepKey: step.stepKey,
       title: step.title,
       actor: step.actor,
+      research: step.research ?? null,
     })),
-    uncertainties: [
-      "No external provider was invoked; this Receipt proves orchestration only.",
-    ],
+    uncertainties: run.steps.some((step) => step.research)
+      ? ["Web evidence is untrusted source material and requires owner review."]
+      : [
+          "No external provider was invoked; this Receipt proves orchestration only.",
+        ],
     externalEffects: [],
     startedAt: run.startedAt,
     recordedAt: input.recordedAt,
@@ -835,7 +972,9 @@ export function validateRitualRunReceipt(
         evidence.stepKey !== step.stepKey ||
         evidence.title !== step.title ||
         evidence.actor.kind !== step.actor.kind ||
-        evidence.actor.role !== step.actor.role
+        evidence.actor.role !== step.actor.role ||
+        JSON.stringify(evidence.research ?? null) !==
+          JSON.stringify(step.research ?? null)
       );
     })
   ) {
@@ -880,6 +1019,7 @@ export function approveRitualDraft(
     permissions: draft.permissions,
     completion: draft.completion,
     reviewPolicy: draft.reviewPolicy,
+    ...(draft.research ? { research: draft.research } : {}),
     approvedAt: request.approvedAt,
   });
 }
@@ -970,13 +1110,39 @@ export function validateRitualLearningResult(
   }
   if (
     result.data.status === "proposal" &&
-    result.data.proposedDefinition.permissions.some(
+    (result.data.proposedDefinition.permissions.some(
       (permission) => !context.ritual.permissions.includes(permission),
-    )
+    ) ||
+      !isResearchNoBroader(
+        context.ritual.research,
+        result.data.proposedDefinition.research,
+      ))
   ) {
     return learningWaiting(context, "MALFORMED_PROVIDER_OUTPUT");
   }
   return result.data;
+}
+
+function isResearchNoBroader(
+  current: RitualResearch | undefined,
+  proposed: RitualResearch | undefined,
+): boolean {
+  if (!current) return !proposed;
+  if (!proposed) return true;
+  if (
+    proposed.provider !== current.provider ||
+    proposed.query !== current.query ||
+    proposed.maxResults > current.maxResults ||
+    proposed.lookbackDays > current.lookbackDays
+  ) {
+    return false;
+  }
+  if (!current.includeDomains) return true;
+  return Boolean(
+    proposed.includeDomains?.every((domain) =>
+      current.includeDomains?.includes(domain),
+    ),
+  );
 }
 
 export function approveRitualLearningProposal(
@@ -1091,7 +1257,12 @@ function activateStep(
 }
 
 function canStopRun(status: RitualRun["status"]): boolean {
-  return ["QUEUED", "RUNNING", "WAITING_FOR_OWNER"].includes(status);
+  return [
+    "QUEUED",
+    "RUNNING",
+    "WAITING_FOR_OWNER",
+    "WAITING_FOR_RESOURCE",
+  ].includes(status);
 }
 
 function stopOpenSteps(
@@ -1103,7 +1274,9 @@ function stopOpenSteps(
     if (step.status === "COMPLETED") return step;
     const status =
       activeStatus === "FAILED" &&
-      (step.status === "RUNNING" || step.status === "WAITING_FOR_OWNER")
+      (step.status === "RUNNING" ||
+        step.status === "WAITING_FOR_OWNER" ||
+        step.status === "WAITING_FOR_RESOURCE")
         ? "FAILED"
         : "CANCELED";
     return { ...step, status, completedAt: occurredAt };

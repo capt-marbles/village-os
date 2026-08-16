@@ -132,6 +132,19 @@ function receiptId(index: number): `rcp_${string}` {
   return `rcp_${String(index).padStart(26, "0")}`;
 }
 
+const largeResearchEvidence = {
+  provider: "EXA" as const,
+  requestId: "bounded-evidence",
+  sources: Array.from({ length: 5 }, (_, index) => ({
+    title: `${index}${"t".repeat(159)}`,
+    url: `https://example.com/${index}${"u".repeat(1_900)}`,
+    publishedAt: null,
+    author: "a".repeat(100),
+    highlights: ["h".repeat(500)],
+    taint: "UNTRUSTED_WEB" as const,
+  })),
+};
+
 describe("RitualRepository", () => {
   it("atomically saves and restores an approved Ritual with private permissions", async () => {
     const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
@@ -429,6 +442,177 @@ describe("RitualRepository", () => {
     expect(
       stored.runs.some((run: { runId: string }) => run.runId === next.runId),
     ).toBe(true);
+  });
+
+  it("retains terminal history below the store read byte ceiling", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
+    const path = join(directory, "rituals.json");
+    const repository = new RitualRepository(path);
+    await repository.save(approved);
+
+    for (let index = 0; index < 35; index += 1) {
+      let run = runFor(runId(index));
+      await repository.saveRun(run);
+      run = reduceRitualRun(run, approved, {
+        type: "START",
+        occurredAt: "2026-08-16T12:00:01.000Z",
+      });
+      await repository.saveRun(run);
+      run = reduceRitualRun(run, approved, {
+        type: "APPROVE_STEP",
+        stepKey: approved.steps[0]!.stepKey,
+        occurredAt: "2026-08-16T12:00:02.000Z",
+      });
+      await repository.saveRun(run);
+      run = reduceRitualRun(run, approved, {
+        type: "COMPLETE_STEP",
+        stepKey: approved.steps[0]!.stepKey,
+        research: largeResearchEvidence,
+        occurredAt: "2026-08-16T12:00:03.000Z",
+      });
+      await repository.saveRun(run);
+      const terminal = reduceRitualRun(run, approved, {
+        type: "COMPLETE_RUN",
+        outcome: "NEEDS_REVIEW",
+        occurredAt: "2026-08-16T12:00:04.000Z",
+      });
+      await repository.completeRun(
+        terminal,
+        runReceiptFor(terminal, receiptId(index)),
+      );
+    }
+
+    const stored = await readFile(path);
+    const parsed = JSON.parse(stored.toString()) as {
+      runs: { runId: string }[];
+      runReceipts: { runId: string }[];
+    };
+    expect(stored.byteLength).toBeLessThanOrEqual(768 * 1_024);
+    expect(parsed.runs).toHaveLength(parsed.runReceipts.length);
+    expect(parsed.runs.length).toBeLessThan(35);
+    expect(parsed.runs.at(-1)?.runId).toBe(runId(34));
+    expect(parsed.runs.some((run) => run.runId === runId(0))).toBe(false);
+    await expect(
+      new RitualRepository(path).latestSnapshot(),
+    ).resolves.toMatchObject({ run: { runId: runId(34) } });
+  });
+
+  it("atomically retains a completed Run for a non-latest Ritual near the byte ceiling", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
+    const path = join(directory, "rituals.json");
+    const repository = new RitualRepository(path);
+    const latestApproved = {
+      ...approved,
+      ritualId: "rtl_01J00000000000000000000002",
+      approvedDraftId: "rtd_01J00000000000000000000002",
+      name: "Latest approved Ritual",
+      approvedAt: "2026-08-16T13:00:00.000Z",
+    };
+    await repository.save(approved);
+    await repository.save(latestApproved);
+
+    let olderRun = runFor("rrn_01J00000000000000000000999");
+    await repository.saveRun(olderRun);
+    olderRun = reduceRitualRun(olderRun, approved, {
+      type: "START",
+      occurredAt: "2026-08-16T12:00:01.000Z",
+    });
+    await repository.saveRun(olderRun);
+    olderRun = reduceRitualRun(olderRun, approved, {
+      type: "APPROVE_STEP",
+      stepKey: approved.steps[0]!.stepKey,
+      occurredAt: "2026-08-16T12:00:02.000Z",
+    });
+    await repository.saveRun(olderRun);
+    olderRun = reduceRitualRun(olderRun, approved, {
+      type: "COMPLETE_STEP",
+      stepKey: approved.steps[0]!.stepKey,
+      research: largeResearchEvidence,
+      occurredAt: "2026-08-16T12:00:03.000Z",
+    });
+    await repository.saveRun(olderRun);
+
+    for (let index = 0; index < 60; index += 1) {
+      let latestRun = createRitualRun({
+        approved: latestApproved,
+        request: {
+          schemaVersion: 1,
+          ritualId: latestApproved.ritualId,
+          ritualRevision: latestApproved.ritualRevision,
+        },
+        runId: runId(index),
+        createdAt: "2026-08-16T13:00:00.000Z",
+      });
+      await repository.saveRun(latestRun);
+      latestRun = reduceRitualRun(latestRun, latestApproved, {
+        type: "START",
+        occurredAt: "2026-08-16T13:00:01.000Z",
+      });
+      await repository.saveRun(latestRun);
+      latestRun = reduceRitualRun(latestRun, latestApproved, {
+        type: "APPROVE_STEP",
+        stepKey: latestApproved.steps[0]!.stepKey,
+        occurredAt: "2026-08-16T13:00:02.000Z",
+      });
+      await repository.saveRun(latestRun);
+      latestRun = reduceRitualRun(latestRun, latestApproved, {
+        type: "COMPLETE_STEP",
+        stepKey: latestApproved.steps[0]!.stepKey,
+        research: largeResearchEvidence,
+        occurredAt: "2026-08-16T13:00:03.000Z",
+      });
+      await repository.saveRun(latestRun);
+      latestRun = reduceRitualRun(latestRun, latestApproved, {
+        type: "COMPLETE_RUN",
+        outcome: "NEEDS_REVIEW",
+        occurredAt: "2026-08-16T13:00:04.000Z",
+      });
+      await repository.completeRun(
+        latestRun,
+        createRitualRunReceipt({
+          approved: latestApproved,
+          run: latestRun,
+          receiptId: receiptId(index),
+          summary: "The latest Ritual completed.",
+          recordedAt: "2026-08-16T13:00:04.000Z",
+        }),
+      );
+    }
+
+    const completedOlderRun = reduceRitualRun(olderRun, approved, {
+      type: "COMPLETE_RUN",
+      outcome: "NEEDS_REVIEW",
+      occurredAt: "2026-08-16T14:00:00.000Z",
+    });
+    const completedOlderReceipt = runReceiptFor(
+      completedOlderRun,
+      "rcp_01J00000000000000000000999",
+    );
+    const runCountBeforeCompletion = (
+      JSON.parse(await readFile(path, "utf8")) as { runs: unknown[] }
+    ).runs.length;
+
+    await repository.completeRun(completedOlderRun, completedOlderReceipt);
+
+    const persisted = JSON.parse(await readFile(path, "utf8")) as {
+      runs: { runId: string }[];
+      runReceipts: { receiptId: string; runId: string }[];
+    };
+    expect(persisted.runs.length).toBeLessThan(runCountBeforeCompletion);
+    expect(persisted.runs).toContainEqual(
+      expect.objectContaining({ runId: completedOlderRun.runId }),
+    );
+    expect(persisted.runReceipts).toContainEqual(
+      expect.objectContaining({
+        receiptId: completedOlderReceipt.receiptId,
+        runId: completedOlderRun.runId,
+      }),
+    );
+    await expect(
+      new RitualRepository(path).findRunWithApprovedRevision(
+        completedOlderRun.runId,
+      ),
+    ).resolves.toMatchObject({ run: completedOlderRun, approved });
   });
 
   it("rejects another Run when every retained Run is active", async () => {

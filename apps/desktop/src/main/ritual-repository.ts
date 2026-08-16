@@ -27,6 +27,8 @@ import {
   type RitualTestReceipt,
 } from "@village/contracts";
 
+const MAX_PERSISTED_STORE_BYTES = 768 * 1_024;
+
 export class RitualRepository {
   private operationTail: Promise<void> = Promise.resolve();
 
@@ -262,8 +264,10 @@ export class RitualRepository {
   completeRun(
     candidateRun: RitualRun,
     candidateReceipt: RitualRunReceipt,
+    options: { signal?: AbortSignal } = {},
   ): Promise<void> {
     return this.enqueue(async () => {
+      throwIfRunCanceled(options.signal);
       const run = ritualRunSchema.parse(candidateRun);
       const receipt = ritualRunReceiptSchema.parse(candidateReceipt);
       validateRitualRunReceipt(run, receipt);
@@ -299,13 +303,18 @@ export class RitualRepository {
       if (current.runReceipts.length >= 100) {
         throw new Error("RITUAL_RUN_RECEIPT_STORE_FULL");
       }
+      throwIfRunCanceled(options.signal);
       const runs = [...current.runs];
       runs[runIndex] = run;
-      await this.write({
-        ...current,
-        runs,
-        runReceipts: [...current.runReceipts, receipt],
-      });
+      await this.write(
+        {
+          ...current,
+          runs,
+          runReceipts: [...current.runReceipts, receipt],
+        },
+        run.runId,
+        options.signal,
+      );
     });
   }
 
@@ -375,9 +384,20 @@ export class RitualRepository {
     }
   }
 
-  private async write(store: RitualStore): Promise<void> {
+  private async write(
+    store: RitualStore,
+    protectedRunId?: RitualRun["runId"],
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const retained = retainStoreWithinByteBudget(
+      ritualStoreSchema.parse(store),
+      protectedRunId,
+    );
     if (this.dependencies.write) {
-      await this.dependencies.write(ritualStoreSchema.parse(store));
+      // An injected writer is the atomic commit point. Cancellation after the
+      // call begins observes the terminal result it commits.
+      throwIfRunCanceled(signal);
+      await this.dependencies.write(retained);
       return;
     }
     const directory = dirname(this.path);
@@ -392,15 +412,14 @@ export class RitualRepository {
     if (process.platform !== "win32") await chmod(directory, 0o700);
     const temporary = `${this.path}.${crypto.randomUUID()}.tmp`;
     try {
-      await writeFile(
-        temporary,
-        JSON.stringify(ritualStoreSchema.parse(store)),
-        {
-          mode: 0o600,
-          flag: "wx",
-        },
-      );
+      await writeFile(temporary, JSON.stringify(retained), {
+        mode: 0o600,
+        flag: "wx",
+      });
       if (process.platform !== "win32") await chmod(temporary, 0o600);
+      // rename is the filesystem commit point. Before it begins cancellation
+      // wins and the catch path removes the uncommitted temporary file.
+      throwIfRunCanceled(signal);
       await rename(temporary, this.path);
       if (process.platform !== "win32") await chmod(this.path, 0o600);
     } catch (error) {
@@ -417,6 +436,47 @@ export class RitualRepository {
     );
     return result;
   }
+}
+
+function throwIfRunCanceled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new Error("RITUAL_RUN_CANCELED");
+}
+
+function retainStoreWithinByteBudget(
+  store: RitualStore,
+  explicitlyProtectedRunId?: RitualRun["runId"],
+): RitualStore {
+  let retained = store;
+  while (
+    Buffer.byteLength(JSON.stringify(retained), "utf8") >
+    MAX_PERSISTED_STORE_BYTES
+  ) {
+    const currentApproved = retained.rituals.at(-1);
+    const latestApprovedRunId = currentApproved
+      ? retained.runs.findLast(
+          (run) =>
+            run.ritualId === currentApproved.ritualId &&
+            run.ritualRevision === currentApproved.ritualRevision,
+        )?.runId
+      : undefined;
+    const index = retained.runs.findIndex(
+      (run) =>
+        isTerminalRun(run) &&
+        run.runId !== explicitlyProtectedRunId &&
+        run.runId !== latestApprovedRunId,
+    );
+    if (index < 0) throw new Error("RITUAL_STORE_FULL");
+    const runs = [...retained.runs];
+    const [evicted] = runs.splice(index, 1);
+    retained = {
+      ...retained,
+      runs,
+      runReceipts: retained.runReceipts.filter(
+        (receipt) => receipt.runId !== evicted!.runId,
+      ),
+    };
+  }
+  return retained;
 }
 
 function isTerminalRun(run: RitualRun): boolean {

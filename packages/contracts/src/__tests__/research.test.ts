@@ -2,11 +2,47 @@ import { describe, expect, it } from "vitest";
 import {
   exaCredentialMutationResultSchema,
   exaCredentialSnapshotSchema,
+  ritualResearchSchema,
   webResearchRequestSchema,
   webResearchResultSchema,
 } from "../index.js";
 
 describe("web research contracts", () => {
+  it("binds one reviewable Exa resource to an approved Ritual", () => {
+    expect(
+      ritualResearchSchema.parse({
+        provider: "EXA",
+        query: "important AI agent announcements",
+        maxResults: 5,
+        lookbackDays: 30,
+        includeDomains: ["blog.cloudflare.com"],
+      }),
+    ).toEqual({
+      provider: "EXA",
+      query: "important AI agent announcements",
+      maxResults: 5,
+      lookbackDays: 30,
+      includeDomains: ["blog.cloudflare.com"],
+    });
+    expect(
+      ritualResearchSchema.safeParse({
+        provider: "EXA",
+        query: "news",
+        maxResults: 5,
+        lookbackDays: 31,
+        rawRequest: { includeText: true },
+      }).success,
+    ).toBe(false);
+    expect(
+      ritualResearchSchema.safeParse({
+        provider: "EXA",
+        query: "important AI agent announcements",
+        maxResults: 6,
+        lookbackDays: 30,
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts one bounded provider-neutral search request", () => {
     expect(
       webResearchRequestSchema.parse({

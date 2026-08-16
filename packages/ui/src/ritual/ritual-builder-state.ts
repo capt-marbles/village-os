@@ -71,12 +71,13 @@ export type RitualBuilderState =
       draft: RitualDraft;
       approved: ApprovedRitualRevision;
       receipt: RitualTestReceipt | null;
-      run: null;
+      run: RitualRun | null;
     })
   | (RitualBuilderStateBase & {
       phase:
         | "RUNNING_RITUAL"
         | "RUN_WAITING_FOR_OWNER"
+        | "RUN_WAITING_FOR_RESOURCE"
         | "RUN_FAILED"
         | "RUN_CANCELED";
       draft: RitualDraft;
@@ -349,6 +350,9 @@ export function reduceRitualBuilder(
         steps: event.proposal.steps,
         permissions: event.proposal.permissions,
         completion: event.proposal.completion,
+        ...(event.proposal.research
+          ? { research: event.proposal.research }
+          : {}),
         reviewPolicy: {
           ownerReview: "EVERY_RUN",
           learning: "PROPOSE_ONLY",
@@ -394,20 +398,7 @@ export function reduceRitualBuilder(
     case "RESTORE_APPROVED": {
       if (state.phase !== "DESCRIBE_PURPOSE") return state;
       const approved = event.approved;
-      const draft = ritualDraftSchema.parse({
-        schemaVersion: 1,
-        draftId: approved.approvedDraftId,
-        revision: approved.approvedDraftRevision,
-        status: "DRAFT",
-        name: approved.name,
-        purpose: approved.purpose,
-        trigger: approved.trigger,
-        steps: approved.steps,
-        permissions: approved.permissions,
-        completion: approved.completion,
-        reviewPolicy: approved.reviewPolicy,
-        updatedAt: approved.approvedAt,
-      });
+      const draft = draftFromApproved(approved);
       return {
         phase: "APPROVED",
         draft,
@@ -547,6 +538,7 @@ export function reduceRitualBuilder(
         state.phase !== "APPROVED" &&
         state.phase !== "REVIEW_TEST" &&
         state.phase !== "REVIEW_RUN" &&
+        state.phase !== "RUN_WAITING_FOR_RESOURCE" &&
         state.phase !== "RUN_FAILED" &&
         state.phase !== "RUN_CANCELED"
       ) {
@@ -684,6 +676,7 @@ export function reduceRitualBuilder(
         state.phase !== "APPROVED" &&
         state.phase !== "REVIEW_TEST" &&
         state.phase !== "REVIEW_RUN" &&
+        state.phase !== "RUN_WAITING_FOR_RESOURCE" &&
         state.phase !== "RUN_FAILED" &&
         state.phase !== "RUN_CANCELED"
       ) {
@@ -694,11 +687,13 @@ export function reduceRitualBuilder(
         draft: state.draft,
         approved: state.approved,
         receipt: state.phase === "APPROVED" ? null : state.receipt,
-        run: null,
+        run: state.phase === "RUN_WAITING_FOR_RESOURCE" ? state.run : null,
         messages: message(
           state.messages,
           "STEWARD",
-          "I’m starting a durable local fixture Run. It proves orchestration only and cannot create external effects.",
+          state.phase === "RUN_WAITING_FOR_RESOURCE"
+            ? "I’m retrying the approved research step with the resource available on this Mac."
+            : "I’m starting a durable local Run from the exact approved Ritual.",
         ),
         error: null,
         requestRevision: state.requestRevision,
@@ -708,7 +703,8 @@ export function reduceRitualBuilder(
       if (
         state.phase !== "STARTING_RUN" &&
         state.phase !== "RUNNING_RITUAL" &&
-        state.phase !== "RUN_WAITING_FOR_OWNER"
+        state.phase !== "RUN_WAITING_FOR_OWNER" &&
+        state.phase !== "RUN_WAITING_FOR_RESOURCE"
       ) {
         return state;
       }
@@ -738,18 +734,21 @@ export function reduceRitualBuilder(
         messages: message(
           state.messages,
           "OWNER",
-          `Approve fixture step: ${currentRunStepTitle(state.run)}.`,
+          `Approve step: ${currentRunStepTitle(state.run)}.`,
         ),
         error: null,
       };
     }
     case "CANCEL_RUN": {
       if (
+        state.phase !== "STARTING_RUN" &&
         state.phase !== "RUNNING_RITUAL" &&
-        state.phase !== "RUN_WAITING_FOR_OWNER"
+        state.phase !== "RUN_WAITING_FOR_OWNER" &&
+        state.phase !== "RUN_WAITING_FOR_RESOURCE"
       ) {
         return state;
       }
+      if (state.phase === "STARTING_RUN" && !state.run) return state;
       return {
         ...state,
         messages: message(
@@ -793,7 +792,7 @@ export function reduceRitualBuilder(
         messages: message(
           state.messages,
           "STEWARD",
-          "The fixture Run is complete. Review its bounded Receipt.",
+          "The Run is complete. Review its bounded Receipt and source evidence.",
         ),
         error: null,
         requestRevision: state.requestRevision,
@@ -801,6 +800,18 @@ export function reduceRitualBuilder(
     }
     case "RUN_COMMAND_FAILED": {
       if (state.phase === "STARTING_RUN") {
+        if (state.run) {
+          return {
+            phase: phaseForRun(state.run),
+            draft: state.draft,
+            approved: state.approved,
+            receipt: state.receipt,
+            run: state.run,
+            messages: message(state.messages, "SYSTEM", event.message),
+            error: event.message,
+            requestRevision: state.requestRevision,
+          };
+        }
         if (state.receipt) {
           return {
             phase: "REVIEW_TEST",
@@ -1152,16 +1163,24 @@ function draftFromApproved(approved: ApprovedRitualRevision): RitualDraft {
     permissions: approved.permissions,
     completion: approved.completion,
     reviewPolicy: approved.reviewPolicy,
+    ...(approved.research ? { research: approved.research } : {}),
     updatedAt: approved.approvedAt,
   });
 }
 
 function phaseForRun(
   run: RitualRun,
-): "RUNNING_RITUAL" | "RUN_WAITING_FOR_OWNER" | "RUN_FAILED" | "RUN_CANCELED" {
+):
+  | "RUNNING_RITUAL"
+  | "RUN_WAITING_FOR_OWNER"
+  | "RUN_WAITING_FOR_RESOURCE"
+  | "RUN_FAILED"
+  | "RUN_CANCELED" {
   switch (run.status) {
     case "WAITING_FOR_OWNER":
       return "RUN_WAITING_FOR_OWNER";
+    case "WAITING_FOR_RESOURCE":
+      return "RUN_WAITING_FOR_RESOURCE";
     case "FAILED":
       return "RUN_FAILED";
     case "CANCELED":
@@ -1187,9 +1206,11 @@ function runStatusMessage(run: RitualRun): string {
     case "QUEUED":
       return "The Run is queued locally.";
     case "RUNNING":
-      return `Running fixture step: ${currentRunStepTitle(run)}.`;
+      return `Running approved step: ${currentRunStepTitle(run)}.`;
     case "WAITING_FOR_OWNER":
-      return `Your approval is required before the fixture can continue: ${currentRunStepTitle(run)}.`;
+      return `Your approval is required before the Run can continue: ${currentRunStepTitle(run)}.`;
+    case "WAITING_FOR_RESOURCE":
+      return `The Run is waiting for its Exa research resource: ${currentRunStepTitle(run)}.`;
     case "COMPLETED":
     case "NEEDS_REVIEW":
       return "The Run finished and its Receipt is being restored.";

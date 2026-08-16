@@ -86,6 +86,9 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
             permissions: context.ritual.permissions,
             completion: context.ritual.completion,
             reviewPolicy: context.ritual.reviewPolicy,
+            ...(context.ritual.research
+              ? { research: context.ritual.research }
+              : {}),
           },
           testReceipt: {
             outcome: context.receipt.outcome,
@@ -155,6 +158,7 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
           constraints: {
             maximumSteps: 6,
             externalEffects: "OWNER_APPROVAL_REQUIRED",
+            publicWebResearch: "EXA_OPTIONAL_MAX_30_DAYS",
             learning: "PROPOSE_ONLY",
             execution: "NO_RUN",
           },
@@ -214,6 +218,9 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
             permissions: context.ritual.permissions,
             completion: context.ritual.completion,
             reviewPolicy: context.ritual.reviewPolicy,
+            ...(context.ritual.research
+              ? { research: context.ritual.research }
+              : {}),
           },
           sample: context.sample,
           constraints: {
@@ -259,7 +266,7 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
       experimentalRawEvents: false,
       environments: [],
       baseInstructions:
-        "You are the Village Steward. Turn one bounded owner purpose into a concise Ritual draft. Call village_ritual_draft exactly once. Use 1 to 6 semantic steps. Every external effect must require owner approval. Never add credentials, raw source content, URLs, code, tools, execution commands, autonomous learning, or a Run capability.",
+        "You are the Village Steward. Turn one bounded owner purpose into a concise Ritual draft. Call village_ritual_draft exactly once. Use 1 to 6 semantic steps. Add one bounded EXA research resource only when the outcome requires current public-web information; use a focused query, at most 5 results, and a lookback of at most 30 days. Do not use public-web research for private email, accounts, messages, or connected records. Every external effect must require owner approval. Never add credentials, raw source content, full URLs, code, execution commands, autonomous learning, or a Run capability.",
       dynamicTools: [
         {
           type: "function",

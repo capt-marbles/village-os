@@ -50,13 +50,15 @@ export const webResearchWaitingReasonSchema = z.enum([
   "TIME_BUDGET_EXHAUSTED",
 ]);
 
+export const webResearchSuccessSchema = z.strictObject({
+  status: z.literal("result"),
+  provider: z.literal("EXA"),
+  requestId: z.string().trim().min(1).max(200),
+  sources: z.array(webResearchSourceSchema).max(10),
+});
+
 export const webResearchResultSchema = z.discriminatedUnion("status", [
-  z.strictObject({
-    status: z.literal("result"),
-    provider: z.literal("EXA"),
-    requestId: z.string().trim().min(1).max(200),
-    sources: z.array(webResearchSourceSchema).max(10),
-  }),
+  webResearchSuccessSchema,
   z.strictObject({
     status: z.literal("waiting"),
     provider: z.literal("EXA"),

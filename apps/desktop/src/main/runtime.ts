@@ -58,7 +58,9 @@ import { CodexStdioTransport } from "../model-provider/codex-app-server.js";
 import { CodexRitualStewardProvider } from "../model-provider/ritual-steward.js";
 import { ExaApiKeyStore } from "../research/exa-api-key-store.js";
 import { ExaCredentialController } from "../research/exa-credential-controller.js";
+import { ExaSearchProvider } from "../research/exa-search-provider.js";
 import { installRitualBuilderMenu } from "./ritual-builder-menu.js";
+import { LocalRitualRunExecutor } from "./ritual-run-executor.js";
 
 registerVillageScheme(protocol);
 installGlobalSecurityPolicy(app);
@@ -292,14 +294,13 @@ async function openRitualBuilderWindow(): Promise<RitualBuilderWindow> {
 }
 
 function createRitualBuilderSurface(): Promise<RitualBuilderWindow> {
-  const exaCredentials = new ExaCredentialController(
-    new ExaApiKeyStore(
-      new SecretVault(
-        join(app.getPath("userData"), "research", "exa-vault.json"),
-        new ElectronSafeStorageProtector(),
-      ),
+  const exaApiKeyStore = new ExaApiKeyStore(
+    new SecretVault(
+      join(app.getPath("userData"), "research", "exa-vault.json"),
+      new ElectronSafeStorageProtector(),
     ),
   );
+  const exaCredentials = new ExaCredentialController(exaApiKeyStore);
   return createRitualBuilderWindow({
     preloadPath: join(
       app.getAppPath(),
@@ -312,6 +313,11 @@ function createRitualBuilderSurface(): Promise<RitualBuilderWindow> {
       new RitualRepository(
         join(app.getPath("userData"), "rituals", "approved.json"),
       ),
+      {
+        runExecutor: new LocalRitualRunExecutor({
+          research: new ExaSearchProvider({ credentials: exaApiKeyStore }),
+        }),
+      },
     ),
     exaCredentials,
     openExaDashboard: () =>

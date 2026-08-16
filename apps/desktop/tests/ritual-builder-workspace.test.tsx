@@ -133,6 +133,76 @@ const canceledRun = reduceRitualRun(waitingRun, approved, {
   type: "CANCEL",
   occurredAt: "2026-08-16T12:00:05.000Z",
 });
+const researchApproved = {
+  ...approved,
+  steps: [{ ...approved.steps[0]!, approval: "NONE" as const }],
+  research: {
+    provider: "EXA" as const,
+    query: "important AI agent announcements",
+    maxResults: 3,
+    lookbackDays: 30,
+  },
+};
+let researchWaitingRun = createRitualRun({
+  approved: researchApproved,
+  request: {
+    schemaVersion: 1,
+    ritualId: researchApproved.ritualId,
+    ritualRevision: researchApproved.ritualRevision,
+  },
+  runId: "rrn_01J00000000000000000000002",
+  createdAt: "2026-08-16T13:00:00.000Z",
+});
+researchWaitingRun = reduceRitualRun(researchWaitingRun, researchApproved, {
+  type: "START",
+  occurredAt: "2026-08-16T13:00:01.000Z",
+});
+researchWaitingRun = reduceRitualRun(researchWaitingRun, researchApproved, {
+  type: "WAIT_FOR_RESOURCE",
+  reason: "AUTHENTICATION_REQUIRED",
+  occurredAt: "2026-08-16T13:00:02.000Z",
+});
+let researchCompletedRun = reduceRitualRun(
+  researchWaitingRun,
+  researchApproved,
+  { type: "RETRY_RESOURCE", occurredAt: "2026-08-16T13:00:03.000Z" },
+);
+researchCompletedRun = reduceRitualRun(researchCompletedRun, researchApproved, {
+  type: "COMPLETE_STEP",
+  stepKey: "prepare-review",
+  research: {
+    provider: "EXA",
+    requestId: "exa-run-2",
+    sources: [
+      {
+        title: "Agent announcement",
+        url: "https://example.com/announcement",
+        publishedAt: "2026-08-15T00:00:00.000Z",
+        author: "Example author",
+        highlights: ["A bounded untrusted excerpt."],
+        taint: "UNTRUSTED_WEB",
+      },
+    ],
+  },
+  occurredAt: "2026-08-16T13:00:04.000Z",
+});
+researchCompletedRun = reduceRitualRun(researchCompletedRun, researchApproved, {
+  type: "COMPLETE_RUN",
+  outcome: "NEEDS_REVIEW",
+  occurredAt: "2026-08-16T13:00:05.000Z",
+});
+const researchRunReceipt = createRitualRunReceipt({
+  approved: researchApproved,
+  run: researchCompletedRun,
+  receiptId: "rcp_01J00000000000000000000002",
+  summary: "The local Run completed with bounded Exa evidence.",
+  recordedAt: "2026-08-16T13:00:05.000Z",
+});
+const researchCanceledRun = reduceRitualRun(
+  researchWaitingRun,
+  researchApproved,
+  { type: "CANCEL", occurredAt: "2026-08-16T13:00:06.000Z" },
+);
 
 function bridge() {
   return {
@@ -253,7 +323,7 @@ describe("RitualBuilderWorkspace", () => {
     expect(screen.queryByLabelText("Representative sample")).toBeNull();
   });
 
-  it("runs the durable fixture through an explicit owner gate and Receipt", async () => {
+  it("runs the durable Ritual through an explicit owner gate and Receipt", async () => {
     const activeBridge = bridge();
     activeBridge.initialize.mockResolvedValueOnce({
       identity,
@@ -265,7 +335,7 @@ describe("RitualBuilderWorkspace", () => {
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
     await screen.findByText("Ritual approved");
 
-    fireEvent.click(screen.getByRole("button", { name: "Run fixture proof" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run Ritual" }));
     await screen.findByText("Owner approval required");
     expect(activeBridge.startRun).toHaveBeenCalledWith({
       schemaVersion: 1,
@@ -273,9 +343,7 @@ describe("RitualBuilderWorkspace", () => {
       ritualRevision: approved.ritualRevision,
     });
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Approve fixture step" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Approve step" }));
     await screen.findByText("Run Receipt");
     expect(activeBridge.approveRunStep).toHaveBeenCalledWith({
       schemaVersion: 1,
@@ -283,7 +351,90 @@ describe("RitualBuilderWorkspace", () => {
       stepKey: "prepare-review",
     });
     expect(screen.getByText(runReceipt.summary)).toBeTruthy();
-    expect(screen.getAllByText(/orchestration only/u)).toHaveLength(2);
+    expect(screen.getByText(/orchestration only/u)).toBeTruthy();
+  });
+
+  it("restores an Exa wait, retries the exact Run, and shows bounded sources", async () => {
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved: researchApproved,
+      receipt: null,
+      run: researchWaitingRun,
+      runReceipt: null,
+    });
+    activeBridge.startRun.mockResolvedValueOnce({
+      status: "receipt",
+      run: researchCompletedRun,
+      receipt: researchRunReceipt,
+    });
+
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+
+    await screen.findByText("Exa research is waiting");
+    expect(screen.getByText(/Add or replace the Exa key/u)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Retry research" }));
+    await screen.findByText("Run Receipt");
+    expect(activeBridge.startRun).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      ritualId: researchApproved.ritualId,
+      ritualRevision: researchApproved.ritualRevision,
+    });
+    expect(screen.getByText("Agent announcement")).toBeTruthy();
+    expect(screen.getByText("A bounded untrusted excerpt.")).toBeTruthy();
+    expect(screen.getByText("https://example.com/announcement")).toBeTruthy();
+    expect(
+      screen.getByText("No external mutations; public-web search only"),
+    ).toBeTruthy();
+  });
+
+  it("keeps cancellation available during a deferred research retry and ignores its late result", async () => {
+    let resolveRetry!: (value: {
+      status: "receipt";
+      run: typeof researchCompletedRun;
+      receipt: typeof researchRunReceipt;
+    }) => void;
+    const retry = new Promise<{
+      status: "receipt";
+      run: typeof researchCompletedRun;
+      receipt: typeof researchRunReceipt;
+    }>((resolve) => {
+      resolveRetry = resolve;
+    });
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved: researchApproved,
+      receipt: null,
+      run: researchWaitingRun,
+      runReceipt: null,
+    });
+    activeBridge.startRun.mockImplementationOnce(() => retry);
+    activeBridge.cancelRun.mockResolvedValueOnce({
+      status: "run",
+      run: researchCanceledRun,
+    });
+
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+    await screen.findByText("Exa research is waiting");
+    fireEvent.click(screen.getByRole("button", { name: "Retry research" }));
+    await screen.findByText("Run in progress");
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel Run" }));
+    await screen.findByText("Run canceled");
+    expect(activeBridge.cancelRun).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      runId: researchWaitingRun.runId,
+    });
+
+    resolveRetry({
+      status: "receipt",
+      run: researchCompletedRun,
+      receipt: researchRunReceipt,
+    });
+    await act(async () => Promise.resolve());
+    expect(screen.getByText("Run canceled")).toBeTruthy();
+    expect(screen.queryByText("Run Receipt")).toBeNull();
   });
 
   it("releases the Run guard after start, approval, and cancellation failures", async () => {
@@ -300,11 +451,11 @@ describe("RitualBuilderWorkspace", () => {
       .mockResolvedValueOnce({ status: "run", run: waitingRun });
     const startView = render(<RitualBuilderWorkspace bridge={startBridge} />);
     await screen.findByText("Ritual approved");
-    fireEvent.click(screen.getByRole("button", { name: "Run fixture proof" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run Ritual" }));
     expect((await screen.findByRole("alert")).textContent).toContain(
       "may already exist",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Run fixture proof" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run Ritual" }));
     await screen.findByText("Owner approval required");
     expect(startBridge.startRun).toHaveBeenCalledTimes(2);
     startView.unmount();
@@ -328,15 +479,11 @@ describe("RitualBuilderWorkspace", () => {
       <RitualBuilderWorkspace bridge={approvalBridge} />,
     );
     await screen.findByText("Owner approval required");
-    fireEvent.click(
-      screen.getByRole("button", { name: "Approve fixture step" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Approve step" }));
     expect((await screen.findByRole("alert")).textContent).toContain(
       "did not advance",
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "Approve fixture step" }),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Approve step" }));
     await screen.findByText("Run Receipt");
     expect(approvalBridge.approveRunStep).toHaveBeenCalledTimes(2);
     approvalView.unmount();

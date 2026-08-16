@@ -30,7 +30,10 @@ const exaResponseSchema = z.object({
 });
 
 export interface WebResearchProvider {
-  search(request: WebResearchRequest): Promise<WebResearchResult>;
+  search(
+    request: WebResearchRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<WebResearchResult>;
 }
 
 export class ExaSearchProvider implements WebResearchProvider {
@@ -51,13 +54,26 @@ export class ExaSearchProvider implements WebResearchProvider {
     }
   }
 
-  async search(candidate: WebResearchRequest): Promise<WebResearchResult> {
+  async search(
+    candidate: WebResearchRequest,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<WebResearchResult> {
     const request = webResearchRequestSchema.parse(candidate);
+    if (options.signal?.aborted) throw new Error("RITUAL_RUN_CANCELED");
     const controller = new AbortController();
     let resolveDeadline!: (result: WebResearchResult) => void;
     const deadline = new Promise<WebResearchResult>((resolve) => {
       resolveDeadline = resolve;
     });
+    let rejectCancellation!: (error: Error) => void;
+    const cancellation = new Promise<never>((_resolve, reject) => {
+      rejectCancellation = reject;
+    });
+    const cancel = () => {
+      controller.abort();
+      rejectCancellation(new Error("RITUAL_RUN_CANCELED"));
+    };
+    options.signal?.addEventListener("abort", cancel, { once: true });
     const timeout = setTimeout(() => {
       controller.abort();
       resolveDeadline(waiting("TIME_BUDGET_EXHAUSTED"));
@@ -79,9 +95,10 @@ export class ExaSearchProvider implements WebResearchProvider {
       })
       .catch((error: unknown) => credentialFailure(error));
     try {
-      return await Promise.race([work, deadline]);
+      return await Promise.race([work, deadline, cancellation]);
     } finally {
       clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", cancel);
     }
   }
 

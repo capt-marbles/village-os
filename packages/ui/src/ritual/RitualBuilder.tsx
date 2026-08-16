@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import type { RitualRun } from "@village/contracts";
+import type { RitualRun, RitualRunReceipt } from "@village/contracts";
 import type {
   RitualBuilderEvent,
   RitualBuilderIdentity,
@@ -347,6 +347,17 @@ export function RitualBuilder({
               </ul>
             </RitualField>
 
+            {state.draft.research ? (
+              <RitualField label="Research resource">
+                <strong>Exa · public web</strong>
+                <small>
+                  {state.draft.research.query} · up to{" "}
+                  {state.draft.research.maxResults} sources from the last{" "}
+                  {state.draft.research.lookbackDays} days
+                </small>
+              </RitualField>
+            ) : null}
+
             <RitualField label="Review">
               <strong>
                 {state.draft.reviewPolicy.ownerReview === "EVERY_RUN"
@@ -408,7 +419,7 @@ export function RitualBuilder({
                   type="button"
                   onClick={() => onEvent({ type: "START_RUN" })}
                 >
-                  Run fixture proof
+                  Run Ritual
                 </button>
                 <button
                   type="button"
@@ -428,14 +439,15 @@ export function RitualBuilder({
             {state.phase === "STARTING_RUN" ||
             state.phase === "RUNNING_RITUAL" ? (
               <section className="ritual-receipt" role="status">
-                <p className="ritual-eyebrow">Local fixture Run</p>
+                <p className="ritual-eyebrow">Local Ritual Run</p>
                 <h3>Run in progress</h3>
                 <p>
-                  This deterministic fixture proves durable orchestration. It
-                  cannot browse, contact anyone, or create external effects.
+                  Village is following the exact approved steps. Public-web
+                  research may use Exa when this Ritual includes it; external
+                  effects remain blocked.
                 </p>
                 {state.run ? <RunStepProgress run={state.run} /> : null}
-                {state.phase === "RUNNING_RITUAL" ? (
+                {state.phase === "RUNNING_RITUAL" || state.run ? (
                   <button
                     type="button"
                     onClick={() => onEvent({ type: "CANCEL_RUN" })}
@@ -451,15 +463,36 @@ export function RitualBuilder({
                 <p className="ritual-eyebrow">Human gate</p>
                 <h3>Owner approval required</h3>
                 <p>
-                  Approve only this fixture step. No external action will be
-                  taken.
+                  Approve only this step. The approved Ritual and its resource
+                  limits remain unchanged.
                 </p>
                 <RunStepProgress run={state.run} />
                 <button
                   type="button"
                   onClick={() => onEvent({ type: "APPROVE_RUN_STEP" })}
                 >
-                  Approve fixture step
+                  Approve step
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onEvent({ type: "CANCEL_RUN" })}
+                >
+                  Cancel Run
+                </button>
+              </section>
+            ) : null}
+
+            {state.phase === "RUN_WAITING_FOR_RESOURCE" ? (
+              <section className="ritual-receipt" role="status">
+                <p className="ritual-eyebrow">Resource needed</p>
+                <h3>Exa research is waiting</h3>
+                <p>{researchWaitingCopy(state.run.waitingReason)}</p>
+                <RunStepProgress run={state.run} />
+                <button
+                  type="button"
+                  onClick={() => onEvent({ type: "START_RUN" })}
+                >
+                  Retry research
                 </button>
                 <button
                   type="button"
@@ -472,22 +505,23 @@ export function RitualBuilder({
 
             {state.phase === "RUN_FAILED" || state.phase === "RUN_CANCELED" ? (
               <section className="ritual-receipt" role="status">
-                <p className="ritual-eyebrow">Local fixture Run</p>
+                <p className="ritual-eyebrow">Local Ritual Run</p>
                 <h3>
                   {state.phase === "RUN_FAILED"
                     ? "Run stopped"
                     : "Run canceled"}
                 </h3>
                 <p>
-                  The approved Ritual is unchanged and no external effects
-                  occurred.
+                  {state.run.steps.some((step) => step.research)
+                    ? "Public-web research already occurred, but it was read-only; no external mutations occurred. The approved Ritual is unchanged."
+                    : "No public-web research completed and no external mutations occurred. The approved Ritual is unchanged."}
                 </p>
                 <RunStepProgress run={state.run} />
                 <button
                   type="button"
                   onClick={() => onEvent({ type: "START_RUN" })}
                 >
-                  Run fixture proof again
+                  Run again
                 </button>
               </section>
             ) : null}
@@ -499,7 +533,7 @@ export function RitualBuilder({
               >
                 <header>
                   <div>
-                    <p className="ritual-eyebrow">Proof of orchestration</p>
+                    <p className="ritual-eyebrow">Proof of work</p>
                     <h3 id="run-receipt-title">Run Receipt</h3>
                   </div>
                   <span>Needs review</span>
@@ -511,11 +545,16 @@ export function RitualBuilder({
                   <span>Run</span>
                   <code>{state.run.runId.slice(-8)}</code>
                   <span>Executor</span>
-                  <strong>Deterministic local fixture</strong>
+                  <strong>Local Ritual v1</strong>
                   <span>Safety</span>
-                  <strong>No external effects</strong>
+                  <strong>
+                    {state.runReceipt.stepEvidence.some((step) => step.research)
+                      ? "No external mutations; public-web search only"
+                      : "No external mutations"}
+                  </strong>
                 </div>
                 <RunStepProgress run={state.run} />
+                <ResearchEvidence receipt={state.runReceipt} />
                 <div className="ritual-receipt__uncertainty">
                   <h4>Boundary</h4>
                   <p>{state.runReceipt.uncertainties[0]}</p>
@@ -525,7 +564,7 @@ export function RitualBuilder({
                     type="button"
                     onClick={() => onEvent({ type: "START_RUN" })}
                   >
-                    Run fixture proof again
+                    Run again
                   </button>
                   <button
                     type="button"
@@ -597,7 +636,7 @@ export function RitualBuilder({
                     type="button"
                     onClick={() => onEvent({ type: "START_RUN" })}
                   >
-                    Run fixture proof
+                    Run Ritual
                   </button>
                   <button
                     type="button"
@@ -799,6 +838,60 @@ function RunStepProgress({ run }: { run: RitualRun }) {
       ))}
     </ol>
   );
+}
+
+function ResearchEvidence({ receipt }: { receipt: RitualRunReceipt }) {
+  const sources = receipt.stepEvidence.flatMap(
+    (step) => step.research?.sources ?? [],
+  );
+  if (sources.length === 0) return null;
+  return (
+    <section aria-labelledby="ritual-research-evidence-title">
+      <div className="ritual-field-heading">
+        <span id="ritual-research-evidence-title">Research evidence</span>
+        <small>{sources.length} public sources</small>
+      </div>
+      <ol className="ritual-step-list">
+        {sources.map((source, index) => (
+          <li key={`${source.url}-${index}`}>
+            <span>{String(index + 1).padStart(2, "0")}</span>
+            <div>
+              <strong>{source.title}</strong>
+              <p>{source.highlights[0] ?? "No excerpt returned."}</p>
+              <small>
+                {source.author ?? "Unknown author"}
+                {source.publishedAt
+                  ? ` · ${source.publishedAt.slice(0, 10)}`
+                  : ""}
+              </small>
+              <code>{source.url}</code>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+function researchWaitingCopy(reason: RitualRun["waitingReason"]): string {
+  switch (reason) {
+    case "AUTHENTICATION_REQUIRED":
+      return "Add or replace the Exa key above, then retry this exact Run.";
+    case "RATE_LIMITED":
+      return "Exa is rate-limiting requests. Wait briefly, then retry this exact Run.";
+    case "TIME_BUDGET_EXHAUSTED":
+      return "The research request took too long. Retry this exact Run when the connection is stable.";
+    case "PROVIDER_REQUEST_REJECTED":
+      return "Exa rejected the approved query. Review the Ritual before trying again.";
+    case "MALFORMED_PROVIDER_OUTPUT":
+      return "Exa returned evidence Village could not safely validate. Retry later or revise the Ritual.";
+    case "CREDENTIAL_STORE_UNAVAILABLE":
+      return "Village cannot access the locally saved Exa key. Unlock this Mac and retry.";
+    case "PROVIDER_UNAVAILABLE":
+    case null:
+    case undefined:
+      return "Exa is unavailable on this Mac. Check the resource setup above, then retry.";
+  }
 }
 
 function EditableRitualField({
