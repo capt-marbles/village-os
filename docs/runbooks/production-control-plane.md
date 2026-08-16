@@ -8,6 +8,12 @@ the development principal header.
 This is a self-hosting deployment path. It does not create a Cloudflare Access
 application or choose an identity provider for the owner.
 
+For a personal alpha before a permanent name or domain is chosen, Village can
+instead use an explicitly selected `workers.dev` origin. Cloudflare Access must
+still protect that exact Worker URL before it is used. Keep this temporary mode
+owner-only; Cloudflare recommends a custom domain for business-critical
+production deployments.
+
 ## Before deployment
 
 1. Create the custom hostname that will serve Village.
@@ -41,9 +47,20 @@ export CF_ACCESS_TEAM_DOMAIN=https://your-team.cloudflareaccess.com
 export CF_ACCESS_AUD=<access-application-audience>
 ```
 
-The production origin must be an HTTPS custom domain with no path, query,
-fragment, credentials, or non-default port. The deploy command derives the
-Wrangler custom-domain route and `VILLAGE_ALLOWED_ORIGINS` from that one value.
+For the temporary owner-only `workers.dev` mode, also set:
+
+```sh
+export VILLAGE_PRODUCTION_ROUTE_MODE=workers-dev
+export VILLAGE_PRODUCTION_ORIGIN=https://village-production.<account-subdomain>.workers.dev
+```
+
+The first hostname label must exactly match
+`VILLAGE_PRODUCTION_WORKER_NAME`. Omitting `VILLAGE_PRODUCTION_ROUTE_MODE`
+retains the custom-domain-only default.
+
+The production origin must be HTTPS with no path, query, fragment, credentials,
+or non-default port. The deploy command derives the Wrangler route mode and
+`VILLAGE_ALLOWED_ORIGINS` from that one value.
 
 ## Dry run
 
