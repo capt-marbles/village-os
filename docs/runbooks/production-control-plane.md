@@ -23,9 +23,11 @@ production deployments.
 3. Add the Village hostname as a Cloudflare Access self-hosted application and
    create an allow policy for the intended owner. Access must be active before
    the first production deploy.
-4. Record the Access team domain and application audience.
-5. Create the production D1 database. Do not reuse a development database.
-6. Authenticate Wrangler to the Cloudflare account that owns the hostname and
+4. Add the narrowly scoped native-protocol Access applications described below.
+   Do not bypass Access for the whole Worker or for browser-facing API routes.
+5. Record the Access team domain and application audience.
+6. Create the production D1 database. Do not reuse a development database.
+7. Authenticate Wrangler to the Cloudflare account that owns the hostname and
    database.
 
 Cloudflare Access checks every request before it reaches Village. The Worker
@@ -35,6 +37,40 @@ algorithm before mapping the owner to a Village principal. See Cloudflare's
 and [JWT validation guide](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/).
 Cloudflare Access can use multiple identity providers for one application; see
 the [identity FAQ](https://developers.cloudflare.com/cloudflare-one/faq/authentication-faq/).
+
+### Native desktop paths
+
+The owner-facing shell remains behind Access, but a newly paired desktop does
+not possess the browser's Access cookie. Create three more-specific Access
+applications with a `Bypass` policy whose only include rule is `Everyone`.
+Cloudflare chooses these exact-path applications ahead of the whole-origin
+owner application:
+
+- Pairing consume:
+  `village.example.com/api/pairing/*/consume`
+- Signed desktop runtime (five destinations in one application):
+  `village.example.com/api/browser-sessions/*/connect`,
+  `village.example.com/api/browser-sessions/*/commands`,
+  `village.example.com/api/browser-sessions/*/results`,
+  `village.example.com/api/browser-sessions/*/automation-sync`, and
+  `village.example.com/api/browser-sessions/*/workflow-operations`
+- Signed continuity runtime (five destinations in one application):
+  `village.example.com/api/site-session-continuity/recipient-keys`,
+  `village.example.com/api/site-session-continuity/activations`,
+  `village.example.com/api/site-session-continuity/grants/*/revisions`,
+  `village.example.com/api/site-session-continuity/grants/*/fetch`, and
+  `village.example.com/api/site-session-continuity/grants/*/acknowledgements`
+
+Replace `village.example.com` with the exact production hostname, including a
+temporary `workers.dev` hostname. These paths are public only at the Access
+layer. Village still requires the one-time high-entropy pairing secret or a
+device-bound signed envelope with its principal, device, Site Session,
+sequence, and expiry bindings. Never add `Bypass` to `/api/*`, the whole
+hostname, continuity owner controls, observer routes, or the web shell.
+
+An unauthenticated probe to a native path should return a bounded Village JSON
+validation error, not an Access redirect or HTML login page. A probe to
+`/api/identity` must still require Access.
 
 ## Required environment
 

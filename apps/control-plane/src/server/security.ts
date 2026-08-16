@@ -39,6 +39,18 @@ function cookieValue(request: Request, name: string): string | undefined {
   return undefined;
 }
 
+const browserCsrfToken = /^[A-Za-z0-9_-]{32,128}$/;
+
+export function issueBrowserCsrfCookie(request: Request): string | undefined {
+  const existing = cookieValue(request, "village_csrf");
+  if (existing && browserCsrfToken.test(existing)) return undefined;
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  const token = Array.from(bytes, (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+  return `village_csrf=${token}; Path=/; Secure; SameSite=Strict; Max-Age=86400`;
+}
+
 export function authorizeBrowserMutation(
   request: Request,
   environment: Environment,

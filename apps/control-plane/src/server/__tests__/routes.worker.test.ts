@@ -40,17 +40,33 @@ describe("authenticated pairing routes", () => {
   it("exposes the authenticated Village Identity without authentication material", async () => {
     const response = await SELF.fetch(
       new Request("https://village.test/api/identity", {
-        headers: ownerHeaders,
+        headers: {
+          "x-village-development-principal": principalId,
+        },
       }),
     );
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("set-cookie")).toMatch(
+      /^village_csrf=[a-f0-9]{64}; Path=\/; Secure; SameSite=Strict; Max-Age=86400$/,
+    );
     await expect(response.json()).resolves.toEqual({
       authenticated: true,
       principalId,
       provider: "DEVELOPMENT",
     });
+  });
+
+  it("preserves an existing valid browser CSRF cookie", async () => {
+    const response = await SELF.fetch(
+      new Request("https://village.test/api/identity", {
+        headers: ownerHeaders,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("set-cookie")).toBeNull();
   });
 
   it("creates and reads owner-scoped durable jobs", async () => {

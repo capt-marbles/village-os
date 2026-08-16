@@ -52,6 +52,7 @@ import {
   authorizeBrowserMutation,
   authorizeNonBrowserClient,
   corsHeaders,
+  issueBrowserCsrfCookie,
 } from "./security.js";
 
 function json(
@@ -109,7 +110,10 @@ export async function routeRequest(
     if (request.method === "GET" && url.pathname === "/api/identity") {
       const auth = await authenticateRequest(request, environment);
       if (!auth.ok) return json(request, environment, auth, 401);
-      return json(request, environment, auth.identity);
+      const headers = corsHeaders(request, environment);
+      const csrfCookie = issueBrowserCsrfCookie(request);
+      if (csrfCookie) headers.set("set-cookie", csrfCookie);
+      return Response.json(auth.identity, { headers });
     }
 
     if (
