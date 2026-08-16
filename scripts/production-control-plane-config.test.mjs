@@ -39,12 +39,45 @@ test("production control plane serves the authenticated web shell and API on one
   );
 });
 
+test("production control plane can use an explicitly matched workers.dev alpha origin", () => {
+  const config = createProductionControlPlaneConfig({
+    ...productionEnvironment,
+    VILLAGE_PRODUCTION_ROUTE_MODE: "workers-dev",
+    VILLAGE_PRODUCTION_ORIGIN: "https://village-andrew.andrew-48d.workers.dev",
+  });
+
+  assert.equal(config.workers_dev, true);
+  assert.equal("routes" in config, false);
+  assert.equal(
+    config.vars.VILLAGE_ALLOWED_ORIGINS,
+    "https://village-andrew.andrew-48d.workers.dev",
+  );
+});
+
 test("production control plane rejects unsafe or placeholder identity configuration", () => {
   for (const override of [
     { VILLAGE_PRODUCTION_ORIGIN: "http://village.example.com" },
     { VILLAGE_PRODUCTION_ORIGIN: "https://village.example.com/path" },
     { CF_ACCESS_TEAM_DOMAIN: "https://example.com" },
     { CF_ACCESS_AUD: "short" },
+    { VILLAGE_PRODUCTION_ROUTE_MODE: "unknown" },
+    {
+      VILLAGE_PRODUCTION_ROUTE_MODE: "workers-dev",
+      VILLAGE_PRODUCTION_ORIGIN: "https://other.andrew-48d.workers.dev",
+    },
+    {
+      VILLAGE_PRODUCTION_ROUTE_MODE: "workers-dev",
+      VILLAGE_PRODUCTION_ORIGIN: "https://village-andrew.example.com",
+    },
+    {
+      VILLAGE_PRODUCTION_ROUTE_MODE: "workers-dev",
+      VILLAGE_PRODUCTION_ORIGIN:
+        "https://village-andrew.unowned.andrew-48d.workers.dev",
+    },
+    {
+      VILLAGE_PRODUCTION_ORIGIN:
+        "https://village-andrew.andrew-48d.workers.dev",
+    },
     {
       VILLAGE_CLOUDFLARE_D1_DATABASE_ID: "00000000-0000-0000-0000-000000000000",
     },

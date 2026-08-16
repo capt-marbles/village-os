@@ -25,6 +25,8 @@ function exactHttpsOrigin(candidate, hostnamePredicate = () => true) {
 export function createProductionControlPlaneConfig(environment) {
   const name = environment.VILLAGE_PRODUCTION_WORKER_NAME;
   const origin = exactHttpsOrigin(environment.VILLAGE_PRODUCTION_ORIGIN);
+  const routeMode =
+    environment.VILLAGE_PRODUCTION_ROUTE_MODE ?? "custom-domain";
   const database = environment.VILLAGE_CLOUDFLARE_D1_DATABASE_NAME;
   const databaseId = environment.VILLAGE_CLOUDFLARE_D1_DATABASE_ID;
   const accessDomain = exactHttpsOrigin(
@@ -34,9 +36,18 @@ export function createProductionControlPlaneConfig(environment) {
       hostname !== "cloudflareaccess.com",
   );
   const audience = environment.CF_ACCESS_AUD;
+  const originLabels = origin?.hostname.split(".") ?? [];
+  const workersDevOrigin =
+    originLabels.length === 4 &&
+    originLabels[0] === name &&
+    originLabels[2] === "workers" &&
+    originLabels[3] === "dev";
   if (
     !workerName.test(name ?? "") ||
     !origin ||
+    !["custom-domain", "workers-dev"].includes(routeMode) ||
+    (routeMode === "workers-dev" && !workersDevOrigin) ||
+    (routeMode === "custom-domain" && workersDevOrigin) ||
     !databaseName.test(database ?? "") ||
     !uuid.test(databaseId ?? "") ||
     databaseId === "00000000-0000-0000-0000-000000000000" ||
@@ -46,13 +57,20 @@ export function createProductionControlPlaneConfig(environment) {
     throw new Error("VILLAGE_PRODUCTION_CONFIGURATION_INVALID");
   }
 
+  const routeConfiguration =
+    routeMode === "workers-dev"
+      ? { workers_dev: true }
+      : {
+          workers_dev: false,
+          routes: [{ pattern: origin.hostname, custom_domain: true }],
+        };
+
   return {
     $schema: "../../node_modules/wrangler/config-schema.json",
     name,
     main: "src/index.ts",
     compatibility_date: "2026-08-12",
-    workers_dev: false,
-    routes: [{ pattern: origin.hostname, custom_domain: true }],
+    ...routeConfiguration,
     assets: {
       directory: "../web/dist",
       not_found_handling: "single-page-application",
