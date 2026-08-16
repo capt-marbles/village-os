@@ -6,4 +6,5 @@ release/
 coverage/
 *.tsbuildinfo
 *.log
+apps/control-plane/wrangler.production.generated.jsonc
 .DS_Store

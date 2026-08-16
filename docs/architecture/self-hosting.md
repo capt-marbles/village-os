@@ -36,6 +36,12 @@ Do not deploy them unchanged. Replace the placeholder D1 database identifier,
 apply every migration in order, configure Access, and disable the public
 `workers.dev` route unless it is explicitly protected.
 
+The supported production path is documented in
+[`docs/runbooks/production-control-plane.md`](../runbooks/production-control-plane.md).
+It generates an ignored production Wrangler config, serves the web shell and
+API from one Access-protected custom origin, and requires an explicit
+`--confirm-production` flag before applying migrations or deploying.
+
 ## Authority and recovery
 
 Each browser session has one Durable Object coordinator. Its SQLite event log,
