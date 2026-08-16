@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { webResearchRequestSchema, webResearchResultSchema } from "../index.js";
+import {
+  exaCredentialMutationResultSchema,
+  exaCredentialSnapshotSchema,
+  webResearchRequestSchema,
+  webResearchResultSchema,
+} from "../index.js";
 
 describe("web research contracts", () => {
   it("accepts one bounded provider-neutral search request", () => {
@@ -66,6 +71,36 @@ describe("web research contracts", () => {
         requestId: "exa-request-1",
         sources: [],
         query: "must not be persisted in the result",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("keeps the local Exa credential boundary status-only", () => {
+    expect(
+      exaCredentialSnapshotSchema.parse({
+        provider: "EXA",
+        state: "CONFIGURED",
+        version: 2,
+      }),
+    ).toEqual({ provider: "EXA", state: "CONFIGURED", version: 2 });
+    expect(
+      exaCredentialMutationResultSchema.parse({
+        status: "rejected",
+        reason: "INVALID_API_KEY",
+      }),
+    ).toEqual({ status: "rejected", reason: "INVALID_API_KEY" });
+    expect(
+      exaCredentialSnapshotSchema.safeParse({
+        provider: "EXA",
+        state: "CHECKING",
+      }).success,
+    ).toBe(false);
+    expect(
+      exaCredentialSnapshotSchema.safeParse({
+        provider: "EXA",
+        state: "CONFIGURED",
+        version: 2,
+        apiKey: "must-never-cross-ipc",
       }).success,
     ).toBe(false);
   });

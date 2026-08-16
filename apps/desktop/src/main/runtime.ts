@@ -56,10 +56,15 @@ import { RitualRepository } from "./ritual-repository.js";
 import { RitualBuilderController } from "./ritual-builder-controller.js";
 import { CodexStdioTransport } from "../model-provider/codex-app-server.js";
 import { CodexRitualStewardProvider } from "../model-provider/ritual-steward.js";
+import { ExaApiKeyStore } from "../research/exa-api-key-store.js";
+import { ExaCredentialController } from "../research/exa-credential-controller.js";
+import { installRitualBuilderMenu } from "./ritual-builder-menu.js";
 
 registerVillageScheme(protocol);
 installGlobalSecurityPolicy(app);
 const pairingInbox = new PairingDeepLinkInbox();
+let ritualBuilderWindow: RitualBuilderWindow | undefined;
+let ritualBuilderLaunch: Promise<RitualBuilderWindow> | undefined;
 app.on("open-url", (event, url) => {
   event.preventDefault();
   pairingInbox.accept(url);
@@ -248,7 +253,14 @@ export async function runVillageApplication(
   await app.whenReady();
   for (const argument of process.argv) pairingInbox.accept(argument);
   app.on("window-all-closed", () => app.quit());
-  return startVillageRuntime(pairedIdentitySource, internalComposition);
+  const villageWindow = await startVillageRuntime(
+    pairedIdentitySource,
+    internalComposition,
+  );
+  installRitualBuilderMenu(async () => {
+    await openRitualBuilderWindow();
+  });
+  return villageWindow;
 }
 
 export async function runRitualBuilderApplication(): Promise<RitualBuilderWindow> {
@@ -258,6 +270,36 @@ export async function runRitualBuilderApplication(): Promise<RitualBuilderWindow
     fileURLToPath(new URL("../renderer", import.meta.url)),
   );
   app.on("window-all-closed", () => app.quit());
+  return openRitualBuilderWindow();
+}
+
+async function openRitualBuilderWindow(): Promise<RitualBuilderWindow> {
+  if (ritualBuilderWindow && !ritualBuilderWindow.window.isDestroyed()) {
+    ritualBuilderWindow.window.focus();
+    return ritualBuilderWindow;
+  }
+  if (ritualBuilderLaunch) return ritualBuilderLaunch;
+  ritualBuilderLaunch = createRitualBuilderSurface();
+  try {
+    ritualBuilderWindow = await ritualBuilderLaunch;
+    ritualBuilderWindow.window.on("closed", () => {
+      ritualBuilderWindow = undefined;
+    });
+    return ritualBuilderWindow;
+  } finally {
+    ritualBuilderLaunch = undefined;
+  }
+}
+
+function createRitualBuilderSurface(): Promise<RitualBuilderWindow> {
+  const exaCredentials = new ExaCredentialController(
+    new ExaApiKeyStore(
+      new SecretVault(
+        join(app.getPath("userData"), "research", "exa-vault.json"),
+        new ElectronSafeStorageProtector(),
+      ),
+    ),
+  );
   return createRitualBuilderWindow({
     preloadPath: join(
       app.getAppPath(),
@@ -271,5 +313,8 @@ export async function runRitualBuilderApplication(): Promise<RitualBuilderWindow
         join(app.getPath("userData"), "rituals", "approved.json"),
       ),
     ),
+    exaCredentials,
+    openExaDashboard: () =>
+      shell.openExternal("https://dashboard.exa.ai/api-keys"),
   });
 }
