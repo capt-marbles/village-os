@@ -19,7 +19,12 @@ import {
 import { z } from "zod";
 
 interface ContinuitySequenceStore {
-  reserveNext(deviceId: string, browserSessionId: string): Promise<number>;
+  reserveNext(
+    deviceId: string,
+    browserSessionId: string,
+    scope:
+      "CONTINUITY_ACTIVATION" | "CONTINUITY_ENROLLMENT" | "CONTINUITY_MAILBOX",
+  ): Promise<number>;
 }
 
 interface ContinuityMailboxClientOptions {
@@ -76,6 +81,7 @@ export class ContinuityMailboxClient {
     const sequence = await this.options.sequences.reserveNext(
       identity.deviceId,
       identity.browserSessionId,
+      "CONTINUITY_ACTIVATION",
     );
     const issuedAt = this.now();
     const unsigned = {
@@ -117,6 +123,7 @@ export class ContinuityMailboxClient {
     const sequence = await this.options.sequences.reserveNext(
       identity.deviceId,
       identity.browserSessionId,
+      "CONTINUITY_ENROLLMENT",
     );
     const issuedAt = this.now();
     const unsigned = {
@@ -172,6 +179,7 @@ export class ContinuityMailboxClient {
     const sequence = await this.options.sequences.reserveNext(
       binding.destinationDeviceId,
       binding.destinationBrowserSessionId,
+      "CONTINUITY_MAILBOX",
     );
     const issuedAt = this.now();
     const unsigned = {
@@ -205,6 +213,7 @@ export class ContinuityMailboxClient {
     const sequence = await this.options.sequences.reserveNext(
       binding.destinationDeviceId,
       binding.destinationBrowserSessionId,
+      "CONTINUITY_MAILBOX",
     );
     const issuedAt = this.now();
     const unsigned = {

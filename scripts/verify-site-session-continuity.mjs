@@ -15,7 +15,7 @@ const execFileAsync = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const defaultApplicationPath = path.join(
   root,
-  "apps/desktop/dist/continuity-e2e",
+  "apps/desktop/release/continuity-e2e",
   process.arch === "arm64" ? "mac-arm64" : "mac",
   "Village.app",
 );

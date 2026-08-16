@@ -21,8 +21,18 @@ import {
 } from "./device-identity.js";
 
 export interface ProtocolSequenceStore {
-  reserveNext(deviceId: string, browserSessionId: string): Promise<number>;
+  reserveNext(
+    deviceId: string,
+    browserSessionId: string,
+    scope?: ProtocolSequenceScope,
+  ): Promise<number>;
 }
+
+export type ProtocolSequenceScope =
+  | "CONTROL_PLANE"
+  | "CONTINUITY_ACTIVATION"
+  | "CONTINUITY_ENROLLMENT"
+  | "CONTINUITY_MAILBOX";
 
 export interface AutomationSyncCursorStore {
   load(browserSessionId: string): Promise<number>;
@@ -366,7 +376,11 @@ export class FileProtocolSequenceStore implements ProtocolSequenceStore {
 
   constructor(private readonly path: string) {}
 
-  async reserveNext(deviceId: string, browserSessionId: string) {
+  async reserveNext(
+    deviceId: string,
+    browserSessionId: string,
+    scope: ProtocolSequenceScope = "CONTROL_PLANE",
+  ) {
     let reserved = 0;
     this.mutation = this.mutation.then(async () => {
       let values: Record<string, number> = {};
@@ -384,7 +398,8 @@ export class FileProtocolSequenceStore implements ProtocolSequenceStore {
           throw error;
         }
       }
-      const key = `${deviceId}:${browserSessionId}`;
+      const identity = `${deviceId}:${browserSessionId}`;
+      const key = scope === "CONTROL_PLANE" ? identity : `${scope}:${identity}`;
       reserved = (values[key] ?? 0) + 1;
       values[key] = reserved;
       await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
