@@ -46,6 +46,10 @@ test("CI delegates packaged dependency preparation to the package command", () =
     /pnpm --filter @village\/test-auth-site build/,
   );
   assert.match(ciWorkflow, /pnpm --filter @village\/desktop package:mac:e2e/);
+  assert.match(
+    ciWorkflow,
+    /pnpm --filter @village\/desktop package:mac:continuity-e2e/,
+  );
 });
 
 test("the Ritual smoke package opens its isolated surface, never the delegated proof harness", () => {

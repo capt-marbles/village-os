@@ -46,7 +46,7 @@ interface RuntimeContinuityActivationOptions {
 export type RuntimeContinuityActivationResult =
   | { role: "NONE" }
   | { role: "SOURCE"; published: number; stored: boolean }
-  | { role: "DESTINATION"; applied: number };
+  | { role: "DESTINATION"; applied: number; revision: number };
 
 export class RuntimeContinuityActivation {
   private operation: Promise<RuntimeContinuityActivationResult> | undefined;
@@ -153,7 +153,7 @@ export class RuntimeContinuityActivation {
       };
       applied += 1;
     }
-    return { role: "DESTINATION", applied };
+    return { role: "DESTINATION", applied, revision: current.revision };
   }
 }
 
