@@ -81,8 +81,11 @@ button:focus-visible {
   color: #8e9a91;
 }
 .observer-card__facts dd {
+  min-width: 0;
   margin: 0;
   font-weight: 700;
+  overflow-wrap: anywhere;
+  text-align: right;
   text-transform: capitalize;
 }
 .observer-card__actions {
@@ -166,11 +169,11 @@ button:focus-visible {
   box-shadow: 0 24px 70px rgb(0 0 0 / 18%);
 }
 .continuity-card__header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
-  flex-wrap: wrap;
 }
 .continuity-card h2,
 .continuity-card h3 {
@@ -267,6 +270,9 @@ button:focus-visible {
   gap: 0.35rem;
   margin: 0;
   padding-left: 1.25rem;
+}
+.continuity-card__agreement > p {
+  margin: 0;
 }
 .continuity-card__boundary {
   color: #9eaaa1 !important;
