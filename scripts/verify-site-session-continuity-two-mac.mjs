@@ -71,6 +71,20 @@ export function assertTwoMacSiteSessionContinuity(report) {
   return report;
 }
 
+export function assertOwnerCeremonyTwoMacContinuity(report) {
+  assertTwoMacSiteSessionContinuity(report);
+  if (
+    report.ownerCeremony !== true ||
+    report.ownerApprovedGrant !== true ||
+    report.ownerObservedLogout !== true ||
+    report.ownerStoppedHandoff !== true ||
+    report.ownerDeletedHandoff !== true
+  ) {
+    throw new Error("TWO_MAC_OWNER_CEREMONY_FAILED");
+  }
+  return report;
+}
+
 const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 function createVillageId(prefix, now = Date.now()) {
@@ -164,6 +178,116 @@ async function ownerRequest(
       : { body: JSON.stringify(options.body) }),
   });
   return responseJson(response);
+}
+
+export async function awaitOwnerApprovedGrant({
+  baseUrl,
+  principalId,
+  csrf,
+  binding,
+  timeoutMs = 15 * 60_000,
+  pollIntervalMs = 1_000,
+  request = fetch,
+  pause = (milliseconds) =>
+    new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  now = Date.now,
+}) {
+  const deadline = now() + timeoutMs;
+  while (now() <= deadline) {
+    const snapshot = await responseJson(
+      await request(new URL("/api/site-session-continuity/setup", baseUrl), {
+        method: "GET",
+        headers: ownerHeaders(principalId, csrf),
+      }),
+    );
+    const approved = snapshot.grants?.find(
+      (grant) =>
+        grant.state === "ACTIVE" &&
+        grant.site === "OWNED_FIXTURE" &&
+        grant.sourceDeviceId === binding.sourceDeviceId &&
+        grant.destinationDeviceId === binding.destinationDeviceId &&
+        grant.sourceBrowserSessionId === binding.sourceBrowserSessionId &&
+        grant.destinationBrowserSessionId ===
+          binding.destinationBrowserSessionId,
+    );
+    if (approved) return approved;
+    await pause(pollIntervalMs);
+  }
+  throw new Error("TWO_MAC_OWNER_APPROVAL_TIMEOUT");
+}
+
+export async function awaitOwnerGrantState({
+  baseUrl,
+  principalId,
+  csrf,
+  grantId,
+  expectedState,
+  timeoutMs = 15 * 60_000,
+  pollIntervalMs = 1_000,
+  request = fetch,
+  pause = (milliseconds) =>
+    new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  now = Date.now,
+}) {
+  const deadline = now() + timeoutMs;
+  while (now() <= deadline) {
+    const status = await responseJson(
+      await request(
+        new URL(`/api/site-session-continuity/grants/${grantId}`, baseUrl),
+        { method: "GET", headers: ownerHeaders(principalId, csrf) },
+      ),
+    );
+    if (status.grant?.state === expectedState) return status;
+    await pause(pollIntervalMs);
+  }
+  throw new Error("TWO_MAC_OWNER_GRANT_STATE_TIMEOUT");
+}
+
+export async function awaitOwnerDeletedGrant({
+  baseUrl,
+  principalId,
+  csrf,
+  grantId,
+  timeoutMs = 15 * 60_000,
+  pollIntervalMs = 1_000,
+  request = fetch,
+  pause = (milliseconds) =>
+    new Promise((resolve) => setTimeout(resolve, milliseconds)),
+  now = Date.now,
+}) {
+  const deadline = now() + timeoutMs;
+  while (now() <= deadline) {
+    const response = await request(
+      new URL(`/api/site-session-continuity/grants/${grantId}`, baseUrl),
+      { method: "GET", headers: ownerHeaders(principalId, csrf) },
+    );
+    if (response.status === 404) return;
+    await responseJson(response);
+    await pause(pollIntervalMs);
+  }
+  throw new Error("TWO_MAC_OWNER_DELETION_TIMEOUT");
+}
+
+export async function createOwnerCeremonyConfiguration({
+  configurationPath,
+  controlPlane,
+  principalId,
+  csrf,
+  sourceDeviceName,
+  destinationDeviceName,
+}) {
+  await writeFile(
+    configurationPath,
+    JSON.stringify({ controlPlane, principalId, csrf }),
+    { mode: 0o600 },
+  );
+  return {
+    event: "OWNER_CEREMONY_READY",
+    configurationPath,
+    webOrigin: "http://localhost:5174",
+    sourceDeviceName,
+    destinationDeviceName,
+  };
 }
 
 async function pairDevice({
@@ -371,6 +495,8 @@ export async function runTwoMacSiteSessionContinuity({
   controlPlane,
   remoteHost,
   applicationPath = defaultApplicationPath,
+  ownerCeremony = false,
+  ownerEvent = (event) => process.stdout.write(`${JSON.stringify(event)}\n`),
 }) {
   const baseUrl = new URL(controlPlane);
   if (baseUrl.protocol !== "https:") {
@@ -421,27 +547,53 @@ export async function runTwoMacSiteSessionContinuity({
       signingPrivateKey: keys.destinationSigningPrivateKey,
       encryptionPublicKey: keys.destinationEncryptionPublicKey,
     });
-    const grantId = continuityGrantIdSchema.parse(createVillageId("cgr"));
-    const grant = await ownerRequest(
-      baseUrl,
-      principalId,
-      csrf,
-      "/api/site-session-continuity/grants",
-      {
-        body: {
-          grantId,
-          sourceDeviceId,
-          destinationDeviceId,
-          sourceBrowserSessionId,
-          destinationBrowserSessionId,
-          site: "OWNED_FIXTURE",
-          expiresAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+    const preparedBinding = {
+      sourceDeviceId,
+      destinationDeviceId,
+      sourceBrowserSessionId,
+      destinationBrowserSessionId,
+      site: "OWNED_FIXTURE",
+    };
+    let grant;
+    if (ownerCeremony) {
+      ownerEvent(
+        await createOwnerCeremonyConfiguration({
+          configurationPath: path.join(temporary, "owner-ceremony.json"),
+          controlPlane: baseUrl.href,
+          principalId,
+          csrf,
+          sourceDeviceName: machines.sourceHost,
+          destinationDeviceName: machines.destinationHost,
+        }),
+      );
+      grant = {
+        grant: await awaitOwnerApprovedGrant({
+          baseUrl,
+          principalId,
+          csrf,
+          binding: preparedBinding,
+        }),
+      };
+    } else {
+      const grantId = continuityGrantIdSchema.parse(createVillageId("cgr"));
+      grant = await ownerRequest(
+        baseUrl,
+        principalId,
+        csrf,
+        "/api/site-session-continuity/grants",
+        {
+          body: {
+            grantId,
+            ...preparedBinding,
+            expiresAt: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+          },
         },
-      },
-    );
+      );
+    }
     if (grant.grant?.state !== "ACTIVE") {
       throw new Error("TWO_MAC_CONTINUITY_GRANT_NOT_ACTIVE");
     }
+    const grantId = continuityGrantIdSchema.parse(grant.grant.grantId);
     grantCleanup = { baseUrl, principalId, csrf, grantId };
     const binding = {
       principalId,
@@ -562,26 +714,66 @@ export async function runTwoMacSiteSessionContinuity({
       "0",
     ]);
     const logout = await runRemoteAndRead("DESTINATION", "logout");
-    await ownerRequest(
-      baseUrl,
-      principalId,
-      csrf,
-      `/api/site-session-continuity/grants/${grantId}/revoke`,
-    );
+    if (ownerCeremony) {
+      const logoutStatus = await awaitOwnerGrantState({
+        baseUrl,
+        principalId,
+        csrf,
+        grantId,
+        expectedState: "ACTIVE",
+      });
+      if (
+        logoutStatus.transfer?.publishedRevision !== 21 ||
+        logoutStatus.transfer?.appliedRevision !== 21 ||
+        logoutStatus.transfer?.pendingRevisions !== 0
+      ) {
+        throw new Error("TWO_MAC_OWNER_LOGOUT_PROJECTION_FAILED");
+      }
+      ownerEvent({
+        event: "OWNER_CEREMONY_LOGOUT_READY",
+        grantId,
+        publishedRevision: 21,
+        appliedRevision: 21,
+      });
+      await awaitOwnerGrantState({
+        baseUrl,
+        principalId,
+        csrf,
+        grantId,
+        expectedState: "REVOKED",
+      });
+    } else {
+      await ownerRequest(
+        baseUrl,
+        principalId,
+        csrf,
+        `/api/site-session-continuity/grants/${grantId}/revoke`,
+      );
+    }
     const revoked = await runRemoteAndRead("REVOKED", "revoked");
-    await ownerRequest(
-      baseUrl,
-      principalId,
-      csrf,
-      `/api/site-session-continuity/grants/${grantId}`,
-      { method: "DELETE" },
-    );
+    if (ownerCeremony) {
+      ownerEvent({ event: "OWNER_CEREMONY_STOPPED", grantId });
+      await awaitOwnerDeletedGrant({
+        baseUrl,
+        principalId,
+        csrf,
+        grantId,
+      });
+    } else {
+      await ownerRequest(
+        baseUrl,
+        principalId,
+        csrf,
+        `/api/site-session-continuity/grants/${grantId}`,
+        { method: "DELETE" },
+      );
+    }
     grantCleanup = undefined;
     const deleted = await fetch(
       new URL(`/api/site-session-continuity/grants/${grantId}`, baseUrl),
       { method: "GET", headers: ownerHeaders(principalId, csrf) },
     );
-    return assertTwoMacSiteSessionContinuity({
+    const report = {
       status: "PASS",
       ...machines,
       transfersApplied: destination.applied,
@@ -604,7 +796,19 @@ export async function runTwoMacSiteSessionContinuity({
           ? "MOCK_TEST_ONLY"
           : "UNKNOWN",
       site: "OWNED_FIXTURE",
-    });
+      ...(ownerCeremony
+        ? {
+            ownerCeremony: true,
+            ownerApprovedGrant: true,
+            ownerObservedLogout: true,
+            ownerStoppedHandoff: true,
+            ownerDeletedHandoff: true,
+          }
+        : {}),
+    };
+    return ownerCeremony
+      ? assertOwnerCeremonyTwoMacContinuity(report)
+      : assertTwoMacSiteSessionContinuity(report);
   } finally {
     if (grantCleanup) {
       await ownerRequest(
@@ -645,6 +849,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const report = await runTwoMacSiteSessionContinuity({
     controlPlane,
     remoteHost,
+    ownerCeremony: process.argv.includes("--owner-ceremony"),
     ...(argument("--application")
       ? { applicationPath: path.resolve(argument("--application")) }
       : {}),

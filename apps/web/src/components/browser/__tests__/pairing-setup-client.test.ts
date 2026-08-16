@@ -1,3 +1,5 @@
+// @vitest-environment happy-dom
+
 import { describe, expect, it, vi } from "vitest";
 import {
   PairingSetupClient,
@@ -5,6 +7,7 @@ import {
   pairingLegacySessionUrl,
   pairingSessionUrl,
   parsePublicPairingRequest,
+  readVillageCsrfCookie,
 } from "../pairing-setup-client.js";
 
 const publicRequest = {
@@ -27,6 +30,14 @@ const challenge = {
 };
 
 describe("pairing setup client", () => {
+  it("uses an issued development CSRF cookie before the local fallback", () => {
+    document.cookie =
+      "village_csrf=csrf-owner-ceremony-proof-token-00000008; Path=/";
+    expect(readVillageCsrfCookie()).toBe(
+      "csrf-owner-ceremony-proof-token-00000008",
+    );
+  });
+
   it("accepts only an exact public request and never requires the secret", () => {
     expect(parsePublicPairingRequest(JSON.stringify(publicRequest))).toEqual(
       publicRequest,
