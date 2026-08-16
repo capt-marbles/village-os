@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ObserverBrowserCard } from "../browser/ObserverBrowserCard.js";
 import { PairDesktopCard } from "../browser/PairDesktopCard.js";
 import { ContinuitySetupCard } from "../browser/ContinuitySetupCard.js";
+import { VillageIdentityGate } from "../identity/VillageIdentityGate.js";
 import {
   ObserverApiClient,
   selectionFromUrl,
@@ -114,8 +115,10 @@ export function ChatPage({
     <div className="observer-layout">
       <VillageShell />
       <div>
-        <PairDesktopCard />
-        <ContinuitySetupCard />
+        <VillageIdentityGate>
+          <PairDesktopCard />
+          <ContinuitySetupCard />
+        </VillageIdentityGate>
         {status !== "READY" ? (
           <p className="observer-connection" role="status">
             {status === "LOADING"

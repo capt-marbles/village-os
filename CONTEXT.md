@@ -52,6 +52,10 @@ _Avoid_: Browser profile, snapshot
 The local, site-specific authentication state retained inside a dedicated Browser Session profile.
 _Avoid_: Village session, account
 
+**Village Identity**:
+The authenticated owner identity that scopes Jobs, devices, Browser Sessions, and handoffs across Village clients.
+_Avoid_: Site Session, browser identity, model-provider account
+
 **Takeover Marker**:
 A local durable fact that blocks automation immediately while offline, before the coordinator can allocate a new Lease Epoch.
 _Avoid_: Offline lease
