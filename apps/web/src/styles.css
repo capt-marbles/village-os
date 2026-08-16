@@ -295,6 +295,10 @@ button:focus-visible {
   .observer-layout {
     display: block;
   }
+  .observer-layout > main {
+    min-height: auto !important;
+    padding-bottom: 2rem !important;
+  }
   .observer-card {
     margin-top: 0;
   }
