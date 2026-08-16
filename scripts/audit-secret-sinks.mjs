@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const protectedRoots = [
   "apps/desktop/src/secrets",
+  "apps/desktop/src/research",
   "apps/desktop/src/browser/redaction-policy.ts",
 ];
 const forbidden = [
@@ -34,17 +35,19 @@ async function sourceFiles(target) {
   return nested.flat();
 }
 
-const errors = [];
-for (const file of (
-  await Promise.all(protectedRoots.map(sourceFiles))
-).flat()) {
-  const source = await readFile(file, "utf8");
-  for (const [label, pattern] of forbidden) {
-    if (pattern.test(source)) {
-      errors.push(`${path.relative(root, file)} contains forbidden ${label}`);
-    }
-  }
-}
+const files = (await Promise.all(protectedRoots.map(sourceFiles))).flat();
+const errors = (
+  await Promise.all(
+    files.map(async (file) => {
+      const source = await readFile(file, "utf8");
+      return forbidden.flatMap(([label, pattern]) =>
+        pattern.test(source)
+          ? [`${path.relative(root, file)} contains forbidden ${label}`]
+          : [],
+      );
+    }),
+  )
+).flat();
 
 if (errors.length) {
   for (const error of errors) console.error(error);

@@ -28,3 +28,28 @@ test("rejects outbound transports, forbidden page-derived fields and dynamic pro
   assert.ok(errors.some((error) => error.includes("page-derived field")));
   assert.ok(errors.some((error) => error.includes("dynamic projection")));
 });
+
+test("allows only the fixed Exa research egress contract", () => {
+  const file = "apps/desktop/src/research/exa-search-provider.ts";
+  assert.deepEqual(
+    auditTelemetrySource(
+      `
+        const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
+        const request = globalThis.fetch;
+        response = await this.request(EXA_SEARCH_ENDPOINT, {});
+      `,
+      file,
+    ),
+    [],
+  );
+  assert.ok(
+    auditTelemetrySource(
+      `
+        const EXA_SEARCH_ENDPOINT = "https://attacker.invalid";
+        const request = globalThis.fetch;
+        response = await this.request(EXA_SEARCH_ENDPOINT, {});
+      `,
+      file,
+    ).some((error) => error.includes("fixed Exa egress contract")),
+  );
+});

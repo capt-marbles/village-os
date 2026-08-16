@@ -62,8 +62,8 @@ async function signedRevision() {
     ...binding,
     revision: 1,
     previousDigest: null,
-    issuedAt: "2026-08-15T19:00:00.000Z",
-    expiresAt: "2026-08-16T18:59:59.000Z",
+    issuedAt: "2099-08-15T19:00:00.000Z",
+    expiresAt: "2099-08-16T18:59:59.000Z",
     ephemeralPublicKey: {
       kty: "OKP" as const,
       crv: "X25519" as const,
@@ -100,8 +100,8 @@ async function signedFetch() {
     ...binding,
     sequence: 1,
     afterRevision: 0,
-    issuedAt: "2026-08-15T19:00:30.000Z",
-    expiresAt: "2026-08-15T19:01:00.000Z",
+    issuedAt: "2099-08-15T19:00:30.000Z",
+    expiresAt: "2099-08-15T19:01:00.000Z",
   };
   const signature = await crypto.subtle.sign(
     "Ed25519",
@@ -121,8 +121,8 @@ async function signedAcknowledgement(digest: string) {
     sequence: 2,
     revision: 1,
     digest,
-    issuedAt: "2026-08-15T19:01:00.000Z",
-    expiresAt: "2026-08-15T19:01:30.000Z",
+    issuedAt: "2099-08-15T19:01:00.000Z",
+    expiresAt: "2099-08-15T19:01:30.000Z",
   };
   const signature = await crypto.subtle.sign(
     "Ed25519",
@@ -145,13 +145,13 @@ describe("Site Session ciphertext mailbox", () => {
         binding,
         sourceSigningPublicKey: await publicJwk(sourceKeys.publicKey),
         destinationSigningPublicKey: await publicJwk(destinationKeys.publicKey),
-        createdAt: "2026-08-15T18:59:00.000Z",
-        expiresAt: "2026-08-16T19:00:00.000Z",
+        createdAt: "2099-08-15T18:59:00.000Z",
+        expiresAt: "2099-08-16T19:00:00.000Z",
       }),
     ).resolves.toEqual({ ok: true, initialized: true });
     const revision = await signedRevision();
     await expect(
-      stub.publish(revision, "2026-08-15T19:00:01.000Z"),
+      stub.publish(revision, "2099-08-15T19:00:01.000Z"),
     ).resolves.toEqual({ ok: true, stored: true });
 
     await evictDurableObject(stub);
@@ -159,12 +159,12 @@ describe("Site Session ciphertext mailbox", () => {
       `${binding.principalId}:${binding.grantId}`,
     );
     await expect(
-      restarted.fetchAfter(await signedFetch(), "2026-08-15T19:00:31.000Z"),
+      restarted.fetchAfter(await signedFetch(), "2099-08-15T19:00:31.000Z"),
     ).resolves.toEqual({ ok: true, revision });
     await expect(
       restarted.acknowledge(
         await signedAcknowledgement("0".repeat(64)),
-        "2026-08-15T19:01:01.000Z",
+        "2099-08-15T19:01:01.000Z",
       ),
     ).resolves.toEqual({
       ok: false,
@@ -172,10 +172,10 @@ describe("Site Session ciphertext mailbox", () => {
     });
     const acknowledgement = await signedAcknowledgement(revision.digest);
     await expect(
-      restarted.acknowledge(acknowledgement, "2026-08-15T19:01:01.000Z"),
+      restarted.acknowledge(acknowledgement, "2099-08-15T19:01:01.000Z"),
     ).resolves.toEqual({ ok: true, acknowledged: true });
     await expect(
-      restarted.acknowledge(acknowledgement, "2026-08-15T19:01:01.000Z"),
+      restarted.acknowledge(acknowledgement, "2099-08-15T19:01:01.000Z"),
     ).resolves.toEqual({ ok: true, acknowledged: false });
 
     const diagnostics = await restarted.diagnostics(binding.principalId);
@@ -202,21 +202,21 @@ describe("Site Session ciphertext mailbox", () => {
       binding,
       sourceSigningPublicKey: await publicJwk(sourceKeys.publicKey),
       destinationSigningPublicKey: await publicJwk(destinationKeys.publicKey),
-      createdAt: "2026-08-15T18:59:00.000Z",
-      expiresAt: "2026-08-16T19:00:00.000Z",
+      createdAt: "2099-08-15T18:59:00.000Z",
+      expiresAt: "2099-08-16T19:00:00.000Z",
     });
     const revision = await signedRevision();
-    await stub.publish(revision, "2026-08-15T19:00:01.000Z");
+    await stub.publish(revision, "2099-08-15T19:00:01.000Z");
 
     await expect(
       stub.revoke({
         principalId: binding.principalId,
         deviceId: binding.destinationDeviceId,
-        revokedAt: "2026-08-15T19:00:20.000Z",
+        revokedAt: "2099-08-15T19:00:20.000Z",
       }),
     ).resolves.toEqual({ ok: true, revoked: true });
     await expect(
-      stub.fetchAfter(await signedFetch(), "2026-08-15T19:00:31.000Z"),
+      stub.fetchAfter(await signedFetch(), "2099-08-15T19:00:31.000Z"),
     ).resolves.toEqual({ ok: false, code: "MAILBOX_NOT_ACTIVE" });
     await expect(stub.diagnostics(binding.principalId)).resolves.toMatchObject({
       ok: true,
@@ -243,8 +243,8 @@ describe("Site Session ciphertext mailbox", () => {
       binding,
       sourceSigningPublicKey: await publicJwk(sourceKeys.publicKey),
       destinationSigningPublicKey: await publicJwk(destinationKeys.publicKey),
-      createdAt: "2026-08-15T18:59:00.000Z",
-      expiresAt: "2026-08-16T19:00:00.000Z",
+      createdAt: "2099-08-15T18:59:00.000Z",
+      expiresAt: "2099-08-16T19:00:00.000Z",
     });
     await runInDurableObject(stub, async (_instance, state) => {
       state.storage.sql.exec(
