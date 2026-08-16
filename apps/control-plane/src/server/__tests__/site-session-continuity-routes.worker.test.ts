@@ -286,6 +286,24 @@ describe("Site Session continuity routes", () => {
       acknowledged: true,
     });
 
+    const ownerStatus = await SELF.fetch(
+      new Request(
+        `https://village.test/api/site-session-continuity/grants/${grantId}`,
+        { headers: ownerHeaders },
+      ),
+    );
+    expect(ownerStatus.status).toBe(200);
+    await expect(ownerStatus.json()).resolves.toMatchObject({
+      ok: true,
+      grant: { grantId, state: "ACTIVE" },
+      transfer: {
+        state: "ACTIVE",
+        publishedRevision: 1,
+        appliedRevision: 1,
+        pendingRevisions: 0,
+      },
+    });
+
     const foreignRead = await SELF.fetch(
       new Request(
         `https://village.test/api/site-session-continuity/grants/${grantId}`,

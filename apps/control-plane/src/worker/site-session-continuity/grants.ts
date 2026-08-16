@@ -5,6 +5,7 @@ import {
   continuityFetchEnvelopeSchema,
   continuityGrantIdSchema,
   continuityGrantRequestSchema,
+  continuityGrantStatusResponseSchema,
   continuityRecipientKeyEnrollmentSchema,
   continuityRecipientKeyRevocationSchema,
   deviceCredentialSchema,
@@ -582,7 +583,19 @@ export async function getContinuityGrant(
   if (!row || row.state === "DELETED") {
     return { ok: false as const, code: "CONTINUITY_GRANT_NOT_FOUND" };
   }
-  return { ok: true as const, grant: publicGrant(row) };
+  const diagnostics = await mailbox(environment, row).diagnostics(principalId);
+  if (!diagnostics.ok) return diagnostics;
+  return continuityGrantStatusResponseSchema.parse({
+    ok: true,
+    grant: publicGrant(row),
+    transfer: {
+      state: diagnostics.status,
+      publishedRevision: diagnostics.currentRevision,
+      appliedRevision: diagnostics.acknowledgedRevision,
+      pendingRevisions:
+        diagnostics.currentRevision - diagnostics.acknowledgedRevision,
+    },
+  });
 }
 
 export async function publishContinuityRevision(

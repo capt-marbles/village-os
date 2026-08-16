@@ -94,8 +94,27 @@ export const continuityGrantRevocationResponseSchema = z.strictObject({
   revoked: z.literal(true),
 });
 
+export const continuityGrantDeletionResponseSchema = z.strictObject({
+  ok: z.literal(true),
+  deleted: z.literal(true),
+});
+
+export const continuityGrantStatusResponseSchema = z.strictObject({
+  ok: z.literal(true),
+  grant: continuitySetupGrantSchema,
+  transfer: z.strictObject({
+    state: z.enum(["ACTIVE", "REVOKED", "EXPIRED"]),
+    publishedRevision: z.number().int().nonnegative(),
+    appliedRevision: z.number().int().nonnegative(),
+    pendingRevisions: z.number().int().nonnegative(),
+  }),
+});
+
 export type ContinuitySetupResponse = z.infer<
   typeof continuitySetupResponseSchema
+>;
+export type ContinuityGrantStatusResponse = z.infer<
+  typeof continuityGrantStatusResponseSchema
 >;
 
 const unsignedContinuityRevisionSchema = z
