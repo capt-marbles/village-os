@@ -4,11 +4,13 @@ import {
   runVillageApplication,
 } from "./runtime.js";
 import { resolveRuntimeSurface } from "./runtime-surface.js";
+import { claimVillageInstance } from "./single-instance.js";
 
-const launch =
-  resolveRuntimeSurface(process.argv) === "RITUAL_BUILDER"
+const launch = claimVillageInstance(app)
+  ? resolveRuntimeSurface(process.argv) === "RITUAL_BUILDER"
     ? runRitualBuilderApplication()
-    : runVillageApplication();
+    : runVillageApplication()
+  : Promise.resolve();
 
 void launch.catch((error: unknown) => {
   console.error("Village startup blocked:", error);

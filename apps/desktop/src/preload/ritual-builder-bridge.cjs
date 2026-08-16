@@ -22,5 +22,16 @@ contextBridge.exposeInMainWorld(
       ipcRenderer.invoke("village:ritual-builder:propose-learning", request),
     approveLearning: (request) =>
       ipcRenderer.invoke("village:ritual-builder:approve-learning", request),
+    getExaCredentialStatus: () =>
+      ipcRenderer.invoke("village:ritual-builder:get-exa-credential-status"),
+    configureExaApiKey: (apiKey) =>
+      ipcRenderer.invoke(
+        "village:ritual-builder:configure-exa-api-key",
+        apiKey,
+      ),
+    removeExaApiKey: () =>
+      ipcRenderer.invoke("village:ritual-builder:remove-exa-api-key"),
+    openExaDashboard: () =>
+      ipcRenderer.invoke("village:ritual-builder:open-exa-dashboard"),
   }),
 );

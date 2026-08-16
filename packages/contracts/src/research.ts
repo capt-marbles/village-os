@@ -64,9 +64,48 @@ export const webResearchResultSchema = z.discriminatedUnion("status", [
   }),
 ]);
 
+export const exaCredentialSnapshotSchema = z.discriminatedUnion("state", [
+  z.strictObject({
+    provider: z.literal("EXA"),
+    state: z.literal("CONFIGURATION_REQUIRED"),
+  }),
+  z.strictObject({
+    provider: z.literal("EXA"),
+    state: z.literal("CONFIGURED"),
+    version: z.number().int().positive(),
+  }),
+  z.strictObject({
+    provider: z.literal("EXA"),
+    state: z.literal("UNAVAILABLE"),
+    reason: z.literal("CREDENTIAL_STORE_UNAVAILABLE"),
+  }),
+]);
+
+export const exaCredentialMutationResultSchema = z.discriminatedUnion(
+  "status",
+  [
+    z.strictObject({
+      status: z.literal("snapshot"),
+      snapshot: exaCredentialSnapshotSchema,
+    }),
+    z.strictObject({
+      status: z.literal("rejected"),
+      reason: z.enum([
+        "INVALID_API_KEY",
+        "CREDENTIAL_CHANGED",
+        "CREDENTIAL_STORE_UNAVAILABLE",
+      ]),
+    }),
+  ],
+);
+
 export type WebResearchRequest = z.infer<typeof webResearchRequestSchema>;
 export type WebResearchSource = z.infer<typeof webResearchSourceSchema>;
 export type WebResearchWaitingReason = z.infer<
   typeof webResearchWaitingReasonSchema
 >;
 export type WebResearchResult = z.infer<typeof webResearchResultSchema>;
+export type ExaCredentialSnapshot = z.infer<typeof exaCredentialSnapshotSchema>;
+export type ExaCredentialMutationResult = z.infer<
+  typeof exaCredentialMutationResultSchema
+>;

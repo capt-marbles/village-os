@@ -30,8 +30,9 @@ import {
   type Dispatch,
   type SetStateAction,
 } from "react";
+import { ExaApiKeyCard, type ExaCredentialBridge } from "./ExaApiKeyCard.js";
 
-export interface RitualBuilderBridge {
+export interface RitualBuilderBridge extends ExaCredentialBridge {
   initialize(): Promise<{
     identity: RitualBuilderIdentity;
     approved: ApprovedRitualRevision | null;
@@ -433,8 +434,16 @@ export function RitualBuilderWorkspace({
   };
 
   if (startupError) return <p role="alert">{startupError}</p>;
-  if (!identity) return <p role="status">Opening the Steward’s workroom…</p>;
-  return <RitualBuilder identity={identity} state={state} onEvent={onEvent} />;
+  if (!bridge || !identity)
+    return <p role="status">Opening the Steward’s workroom…</p>;
+  return (
+    <RitualBuilder
+      identity={identity}
+      state={state}
+      onEvent={onEvent}
+      researchSetup={<ExaApiKeyCard bridge={bridge} />}
+    />
+  );
 }
 
 function publishRunResult(

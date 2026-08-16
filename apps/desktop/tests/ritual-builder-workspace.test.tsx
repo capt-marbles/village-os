@@ -136,6 +136,26 @@ const canceledRun = reduceRitualRun(waitingRun, approved, {
 
 function bridge() {
   return {
+    getExaCredentialStatus: vi.fn(async () => ({
+      provider: "EXA" as const,
+      state: "CONFIGURATION_REQUIRED" as const,
+    })),
+    configureExaApiKey: vi.fn(async () => ({
+      status: "snapshot" as const,
+      snapshot: {
+        provider: "EXA" as const,
+        state: "CONFIGURED" as const,
+        version: 1,
+      },
+    })),
+    removeExaApiKey: vi.fn(async () => ({
+      status: "snapshot" as const,
+      snapshot: {
+        provider: "EXA" as const,
+        state: "CONFIGURATION_REQUIRED" as const,
+      },
+    })),
+    openExaDashboard: vi.fn(async () => undefined),
     initialize: vi.fn(async () => ({
       identity,
       approved: null,

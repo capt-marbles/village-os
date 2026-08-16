@@ -19,6 +19,7 @@ const electron = vi.hoisted(() => ({
     };
   }>,
   loadError: null as Error | null,
+  dialogResponse: 0,
   handlers: new Map<string, (...arguments_: any[]) => unknown>(),
 }));
 
@@ -60,6 +61,11 @@ vi.mock("electron", () => {
   return {
     BaseWindow,
     WebContentsView,
+    dialog: {
+      showMessageBox: vi.fn(async () => ({
+        response: electron.dialogResponse,
+      })),
+    },
     ipcMain: {
       handle: vi.fn((channel, handler) =>
         electron.handlers.set(channel, handler),
@@ -89,20 +95,47 @@ describe("Ritual Builder window", () => {
     approveLearning: vi.fn(async (ritual) => ritual),
     close: vi.fn(async () => undefined),
   };
+  const exaCredentials = {
+    status: vi.fn(async () => ({
+      provider: "EXA" as const,
+      state: "CONFIGURATION_REQUIRED" as const,
+    })),
+    configure: vi.fn(async () => ({
+      status: "snapshot" as const,
+      snapshot: {
+        provider: "EXA" as const,
+        state: "CONFIGURED" as const,
+        version: 1,
+      },
+    })),
+    revoke: vi.fn(async (_expectedVersion: number) => ({
+      status: "snapshot" as const,
+      snapshot: {
+        provider: "EXA" as const,
+        state: "CONFIGURATION_REQUIRED" as const,
+      },
+    })),
+  };
+  const openExaDashboard = vi.fn(async () => undefined);
+
+  const windowOptions = () => ({
+    preloadPath: "/app/ritual-builder-bridge.cjs",
+    controller,
+    exaCredentials,
+    openExaDashboard,
+  });
 
   beforeEach(() => {
     electron.windows.length = 0;
     electron.views.length = 0;
     electron.loadError = null;
+    electron.dialogResponse = 0;
     electron.handlers.clear();
     vi.clearAllMocks();
   });
 
   it("shows after load and disposes the child view exactly once", async () => {
-    await createRitualBuilderWindow({
-      preloadPath: "/app/ritual-builder-bridge.cjs",
-      controller,
-    });
+    await createRitualBuilderWindow(windowOptions());
     const window = electron.windows[0]!;
     const view = electron.views[0]!;
 
@@ -119,12 +152,9 @@ describe("Ritual Builder window", () => {
 
   it("disposes and destroys the window when loading fails", async () => {
     electron.loadError = new Error("renderer failed");
-    await expect(
-      createRitualBuilderWindow({
-        preloadPath: "/app/ritual-builder-bridge.cjs",
-        controller,
-      }),
-    ).rejects.toThrow("renderer failed");
+    await expect(createRitualBuilderWindow(windowOptions())).rejects.toThrow(
+      "renderer failed",
+    );
     const window = electron.windows[0]!;
     const view = electron.views[0]!;
 
@@ -135,10 +165,7 @@ describe("Ritual Builder window", () => {
   });
 
   it("routes only exact local-renderer IPC to the controller", async () => {
-    await createRitualBuilderWindow({
-      preloadPath: "/app/ritual-builder-bridge.cjs",
-      controller,
-    });
+    await createRitualBuilderWindow(windowOptions());
     const view = electron.views[0]!;
     const event = { sender: view.webContents };
     const initialize = electron.handlers.get(
@@ -163,6 +190,18 @@ describe("Ritual Builder window", () => {
     const approveLearning = electron.handlers.get(
       "village:ritual-builder:approve-learning",
     )!;
+    const exaStatus = electron.handlers.get(
+      "village:ritual-builder:get-exa-credential-status",
+    )!;
+    const configureExa = electron.handlers.get(
+      "village:ritual-builder:configure-exa-api-key",
+    )!;
+    const removeExa = electron.handlers.get(
+      "village:ritual-builder:remove-exa-api-key",
+    )!;
+    const openDashboard = electron.handlers.get(
+      "village:ritual-builder:open-exa-dashboard",
+    )!;
 
     const initialized = (await initialize(event)) as {
       identity: { draftId: string; ritualId: string };
@@ -178,6 +217,25 @@ describe("Ritual Builder window", () => {
     await cancelRun(event, { runId: "bounded" });
     await proposeLearning(event, { ritualId: initialized.identity.ritualId });
     await approveLearning(event, { ritualId: initialized.identity.ritualId });
+    const apiKey = new TextEncoder().encode("exa-owner-secret");
+    await expect(exaStatus(event)).resolves.toMatchObject({
+      state: "CONFIGURATION_REQUIRED",
+    });
+    await expect(configureExa(event, apiKey)).resolves.toMatchObject({
+      snapshot: { state: "CONFIGURED" },
+    });
+    exaCredentials.status.mockResolvedValueOnce({
+      provider: "EXA" as const,
+      state: "CONFIGURED" as const,
+      version: 1,
+    });
+    await expect(removeExa(event)).resolves.toMatchObject({
+      snapshot: { state: "CONFIGURATION_REQUIRED" },
+    });
+    await openDashboard(event);
+    expect(exaCredentials.configure).toHaveBeenCalledWith(apiKey);
+    expect(exaCredentials.revoke).toHaveBeenCalledWith(1);
+    expect(openExaDashboard).toHaveBeenCalledOnce();
     expect(controller.loadLatestState).toHaveBeenCalledOnce();
     expect(controller.draft).toHaveBeenCalledWith({
       draftId: initialized.identity.draftId,
@@ -243,10 +301,7 @@ describe("Ritual Builder window", () => {
       run: null,
       runReceipt: null,
     });
-    await createRitualBuilderWindow({
-      preloadPath: "/app/ritual-builder-bridge.cjs",
-      controller,
-    });
+    await createRitualBuilderWindow(windowOptions());
     const initialize = electron.handlers.get(
       "village:ritual-builder:initialize",
     )!;
@@ -255,5 +310,52 @@ describe("Ritual Builder window", () => {
       initialize({ sender: electron.views[0]!.webContents }),
     ).resolves.toMatchObject({ approved, receipt });
     expect(controller.loadLatestState).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the Exa key when removal is canceled and rejects extra IPC fields", async () => {
+    electron.dialogResponse = 1;
+    exaCredentials.status
+      .mockResolvedValueOnce({
+        provider: "EXA" as const,
+        state: "CONFIGURED" as const,
+        version: 4,
+      })
+      .mockResolvedValueOnce({
+        provider: "EXA" as const,
+        state: "CONFIGURED" as const,
+        version: 4,
+      });
+    await createRitualBuilderWindow(windowOptions());
+    const event = { sender: electron.views[0]!.webContents };
+    const exaStatus = electron.handlers.get(
+      "village:ritual-builder:get-exa-credential-status",
+    )!;
+    const configureExa = electron.handlers.get(
+      "village:ritual-builder:configure-exa-api-key",
+    )!;
+    const removeExa = electron.handlers.get(
+      "village:ritual-builder:remove-exa-api-key",
+    )!;
+    const openDashboard = electron.handlers.get(
+      "village:ritual-builder:open-exa-dashboard",
+    )!;
+
+    await expect(removeExa(event)).resolves.toMatchObject({
+      snapshot: { state: "CONFIGURED", version: 4 },
+    });
+    expect(exaCredentials.revoke).not.toHaveBeenCalled();
+    expect(exaCredentials.status).toHaveBeenCalledTimes(2);
+    await expect(exaStatus(event, "extra")).rejects.toThrow(
+      "MALFORMED_IPC_REQUEST",
+    );
+    await expect(
+      configureExa(event, new Uint8Array(8), "extra"),
+    ).rejects.toThrow("MALFORMED_IPC_REQUEST");
+    await expect(removeExa(event, "extra")).rejects.toThrow(
+      "MALFORMED_IPC_REQUEST",
+    );
+    await expect(openDashboard(event, "extra")).rejects.toThrow(
+      "MALFORMED_IPC_REQUEST",
+    );
   });
 });

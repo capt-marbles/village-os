@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import type { RitualRun } from "@village/contracts";
 import type {
   RitualBuilderEvent,
@@ -14,10 +14,12 @@ export function RitualBuilder({
   state,
   onEvent,
   identity,
+  researchSetup,
 }: {
   state: RitualBuilderState;
   onEvent(event: RitualBuilderEvent): void;
   identity: RitualBuilderIdentity;
+  researchSetup?: ReactNode;
 }) {
   const submitPurpose = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -65,6 +67,8 @@ export function RitualBuilder({
             agreement without making you configure a workflow.
           </p>
         </header>
+
+        {researchSetup}
 
         <ol className="ritual-messages" aria-live="polite">
           {state.messages.map((entry) => (

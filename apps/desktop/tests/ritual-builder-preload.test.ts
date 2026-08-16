@@ -3,7 +3,7 @@ import vm from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 
 describe("Ritual Builder preload", () => {
-  it("exposes only the ten fixed Ritual operations", async () => {
+  it("exposes only the fixed Ritual and Exa credential operations", async () => {
     const source = await readFile(
       new URL("../src/preload/ritual-builder-bridge.cjs", import.meta.url),
       "utf8",
@@ -26,10 +26,14 @@ describe("Ritual Builder preload", () => {
       "approveLearning",
       "approveRunStep",
       "cancelRun",
+      "configureExaApiKey",
       "createDraftIdentity",
       "draft",
+      "getExaCredentialStatus",
       "initialize",
+      "openExaDashboard",
       "proposeLearning",
+      "removeExaApiKey",
       "startRun",
       "testRun",
     ]);
@@ -43,6 +47,11 @@ describe("Ritual Builder preload", () => {
     await bridge.cancelRun!({ runId: "bounded" });
     await bridge.proposeLearning!({ ritualId: "bounded", feedback: "bounded" });
     await bridge.approveLearning!({ ritualId: "bounded" });
+    const key = new Uint8Array([1, 2, 3]);
+    await bridge.getExaCredentialStatus!();
+    await bridge.configureExaApiKey!(key);
+    await bridge.removeExaApiKey!();
+    await bridge.openExaDashboard!();
     expect(invoke).toHaveBeenNthCalledWith(
       1,
       "village:ritual-builder:initialize",
@@ -88,6 +97,23 @@ describe("Ritual Builder preload", () => {
       10,
       "village:ritual-builder:approve-learning",
       { ritualId: "bounded" },
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      11,
+      "village:ritual-builder:get-exa-credential-status",
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      12,
+      "village:ritual-builder:configure-exa-api-key",
+      key,
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      13,
+      "village:ritual-builder:remove-exa-api-key",
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      14,
+      "village:ritual-builder:open-exa-dashboard",
     );
   });
 });

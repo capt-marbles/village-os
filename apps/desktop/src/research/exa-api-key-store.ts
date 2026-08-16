@@ -3,6 +3,13 @@ import type { ExaCredentialSource } from "./exa-credential-source.js";
 
 const EXA_API_KEY_SECRET_REF = "sec_exa_api_key";
 
+export class ExaApiKeyValidationError extends Error {
+  constructor() {
+    super("EXA_API_KEY_INVALID");
+    this.name = "ExaApiKeyValidationError";
+  }
+}
+
 export class ExaApiKeyStore implements ExaCredentialSource {
   constructor(private readonly vault: SecretVault) {}
 
@@ -13,7 +20,7 @@ export class ExaApiKeyStore implements ExaCredentialSource {
     try {
       value = new TextDecoder("utf-8", { fatal: true }).decode(candidate);
       if (!/^[\x21-\x7e]{8,512}$/.test(value)) {
-        throw new Error("EXA_API_KEY_INVALID");
+        throw new ExaApiKeyValidationError();
       }
       const { version } = await this.vault.store(
         EXA_API_KEY_SECRET_REF,
@@ -21,7 +28,7 @@ export class ExaApiKeyStore implements ExaCredentialSource {
       );
       return { configured: true, version };
     } catch (error) {
-      if (error instanceof TypeError) throw new Error("EXA_API_KEY_INVALID");
+      if (error instanceof TypeError) throw new ExaApiKeyValidationError();
       throw error;
     } finally {
       candidate.fill(0);

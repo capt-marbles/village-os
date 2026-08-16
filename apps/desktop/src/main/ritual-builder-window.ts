@@ -1,5 +1,6 @@
 import {
   BaseWindow,
+  dialog,
   ipcMain,
   type IpcMainInvokeEvent,
   WebContentsView,
@@ -8,6 +9,7 @@ import {
 import { isTrustedVillageSender, trustedWebPreferences } from "./security.js";
 import type { RitualBuilderController } from "./ritual-builder-controller.js";
 import { createVillageId } from "./local-village-id.js";
+import type { ExaCredentialOperations } from "../research/exa-credential-controller.js";
 
 export interface RitualBuilderWindow {
   window: BaseWindow;
@@ -17,6 +19,8 @@ export interface RitualBuilderWindow {
 export async function createRitualBuilderWindow(options: {
   preloadPath: string;
   controller: RitualBuilderController;
+  exaCredentials: ExaCredentialOperations;
+  openExaDashboard: () => Promise<void>;
 }): Promise<RitualBuilderWindow> {
   const window = new BaseWindow({
     width: 1_280,
@@ -57,6 +61,10 @@ export async function createRitualBuilderWindow(options: {
   const cancelRunChannel = "village:ritual-builder:cancel-run";
   const proposeLearningChannel = "village:ritual-builder:propose-learning";
   const approveLearningChannel = "village:ritual-builder:approve-learning";
+  const exaStatusChannel = "village:ritual-builder:get-exa-credential-status";
+  const configureExaChannel = "village:ritual-builder:configure-exa-api-key";
+  const removeExaChannel = "village:ritual-builder:remove-exa-api-key";
+  const openExaDashboardChannel = "village:ritual-builder:open-exa-dashboard";
   const assertSender = (event: IpcMainInvokeEvent) => {
     if (
       event.sender !== appView.webContents ||
@@ -112,6 +120,48 @@ export async function createRitualBuilderWindow(options: {
     assertSender(event);
     return options.controller.approveLearning(candidate);
   });
+  ipcMain.handle(exaStatusChannel, async (event, ...arguments_) => {
+    assertSender(event);
+    if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
+    return options.exaCredentials.status();
+  });
+  ipcMain.handle(
+    configureExaChannel,
+    async (event, candidate: unknown, ...arguments_) => {
+      assertSender(event);
+      if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
+      return options.exaCredentials.configure(candidate);
+    },
+  );
+  ipcMain.handle(removeExaChannel, async (event, ...arguments_) => {
+    assertSender(event);
+    if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
+    const current = await options.exaCredentials.status();
+    if (current.state !== "CONFIGURED") {
+      return { status: "snapshot" as const, snapshot: current };
+    }
+    const response = await dialog.showMessageBox({
+      type: "warning",
+      title: "Remove the Exa key from this Mac?",
+      message:
+        "Future research steps will wait until you connect Exa again. Existing Rituals and Receipts are unchanged.",
+      buttons: ["Remove key", "Keep key"],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    });
+    return response.response === 0
+      ? options.exaCredentials.revoke(current.version)
+      : {
+          status: "snapshot" as const,
+          snapshot: await options.exaCredentials.status(),
+        };
+  });
+  ipcMain.handle(openExaDashboardChannel, async (event, ...arguments_) => {
+    assertSender(event);
+    if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
+    await options.openExaDashboard();
+  });
   const cleanup = () => {
     if (closed) return;
     closed = true;
@@ -125,6 +175,10 @@ export async function createRitualBuilderWindow(options: {
     ipcMain.removeHandler(cancelRunChannel);
     ipcMain.removeHandler(proposeLearningChannel);
     ipcMain.removeHandler(approveLearningChannel);
+    ipcMain.removeHandler(exaStatusChannel);
+    ipcMain.removeHandler(configureExaChannel);
+    ipcMain.removeHandler(removeExaChannel);
+    ipcMain.removeHandler(openExaDashboardChannel);
     void options.controller.close();
     disposeView();
   };
