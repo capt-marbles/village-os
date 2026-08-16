@@ -71,10 +71,20 @@ body { margin: 0; min-width: 320px; min-height: 100vh; background: radial-gradie
 .ritual-message > span { padding-top: .18rem; color: #7f9180; font-size: .68rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
 .ritual-message p { margin: 0; color: #e9eee5; line-height: 1.62; }
 .ritual-message--owner p { justify-self: end; max-width: 86%; padding: .8rem 1rem; border: 1px solid #405242; border-radius: 1rem 1rem .25rem 1rem; background: #1a231b; }
+.ritual-start { max-width: 710px; margin: 2rem auto 0; }
+.ritual-start__choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; margin: 0; border: 0; padding: 0; }
+.ritual-start__choices legend { grid-column: 1 / -1; margin-bottom: .2rem; color: #cbd7c7; font-size: .82rem; font-weight: 750; }
+.ritual-start__choices button { display: grid; grid-template-columns: 2.3rem 1fr; gap: .15rem .7rem; min-height: 92px; border: 1px solid #3a4b3c; border-radius: 1rem; padding: .85rem; color: #edf2e9; background: #151c16; text-align: left; cursor: pointer; }
+.ritual-start__choices button[aria-pressed="true"] { border-color: #9cc985; background: #1d2b1e; box-shadow: inset 0 0 0 1px #6f9462; }
+.ritual-start__choices button > span { grid-row: span 2; display: grid; place-items: center; width: 2.3rem; height: 2.3rem; border: 1px solid #66806a; border-radius: 50%; color: #b8e19f; font: 750 .66rem ui-monospace, monospace; }
+.ritual-start__choices button strong { align-self: end; font-size: .86rem; }
+.ritual-start__choices button small { color: #91a090; line-height: 1.35; }
+.ritual-start .ritual-composer { margin-top: 1rem; }
 .ritual-composer, .ritual-decisions { max-width: 710px; margin: 2rem auto 0; border: 0; padding: 0; }
 .ritual-composer label, .ritual-decisions legend { display: block; margin-bottom: .75rem; color: #cbd7c7; font-size: .82rem; font-weight: 750; }
-.ritual-composer textarea { width: 100%; resize: vertical; border: 1px solid #405242; border-radius: 1rem; padding: 1rem 1.1rem; color: #f2f5ed; background: #151c16; font: inherit; line-height: 1.5; }
+.ritual-composer textarea, .ritual-composer input { width: 100%; resize: vertical; border: 1px solid #405242; border-radius: 1rem; padding: 1rem 1.1rem; color: #f2f5ed; background: #151c16; font: inherit; line-height: 1.5; }
 .ritual-composer button, .ritual-approval button { min-height: 46px; margin-top: .8rem; border: 0; border-radius: 999px; padding: .7rem 1.15rem; color: #11200f; background: #b8e19f; font: 800 .84rem ui-sans-serif, system-ui; cursor: pointer; }
+.ritual-composer > p { margin: .65rem 0 0; color: #8fa08e; font-size: .76rem; line-height: 1.45; }
 .ritual-test-composer p { margin: .55rem 0 0; color: #8fa08e; font-size: .76rem; line-height: 1.45; }
 .ritual-decisions > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; }
 .ritual-decisions button { display: grid; grid-template-columns: 2rem 1fr; gap: .2rem .7rem; min-height: 116px; border: 1px solid #3a4b3c; border-radius: 1rem; padding: .9rem; color: #edf2e9; background: #151c16; text-align: left; cursor: pointer; transition: border-color 160ms ease, transform 160ms ease, background 160ms ease; }
@@ -144,7 +154,7 @@ body { margin: 0; min-width: 320px; min-height: 100vh; background: radial-gradie
 button:focus-visible { outline: 3px solid white !important; outline-offset: 3px; }
 button:disabled { cursor: not-allowed !important; opacity: .52; }
 input:focus-visible, textarea:focus-visible { outline: 3px solid #b8e19f; outline-offset: 3px; }
-@media (max-width: 860px) { .ritual-builder { grid-template-columns: 1fr; } .ritual-conversation { padding: 2rem 1.25rem 3rem; } .ritual-draft { max-height: none; border-top: 1px solid #445043; border-left: 0; padding: 1.5rem 1.25rem; } .ritual-decisions > div, .ritual-learning__comparison { grid-template-columns: 1fr; } .ritual-message { grid-template-columns: 4rem 1fr; } .ritual-tool { margin-top: -1.5rem; } }
+@media (max-width: 860px) { .ritual-builder { grid-template-columns: 1fr; } .ritual-conversation { padding: 2rem 1.25rem 3rem; } .ritual-draft { max-height: none; border-top: 1px solid #445043; border-left: 0; padding: 1.5rem 1.25rem; } .ritual-start__choices, .ritual-decisions > div, .ritual-learning__comparison { grid-template-columns: 1fr; } .ritual-message { grid-template-columns: 4rem 1fr; } .ritual-tool { margin-top: -1.5rem; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; } }`;
 
 const shieldHtml = `<!doctype html>

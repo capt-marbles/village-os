@@ -102,6 +102,87 @@ describe("Ritual contracts", () => {
     ).toBe(false);
   });
 
+  it("requires an exact Exa resource for the 30-day signal starter", () => {
+    const context = ritualStewardContextSchema.parse({
+      schemaVersion: 1,
+      draftId: draft.draftId,
+      requestRevision: 1,
+      ownerPurpose:
+        "Prepare a grounded brief on the most important public-web developments about AI coding agents from the last 30 days.",
+      starter: {
+        kind: "LAST_30_DAYS",
+        topic: "AI coding agents",
+      },
+    });
+    const proposal = {
+      status: "proposal" as const,
+      draftId: draft.draftId,
+      requestRevision: 1,
+      stewardMessage: "I shaped a bounded 30-day signal brief.",
+      name: "AI coding agent signals",
+      purpose: context.ownerPurpose,
+      steps: draft.steps,
+      permissions: ["Read bounded public-web evidence"],
+      completion: "A grounded 30-day signal brief is ready for review.",
+      research: {
+        provider: "EXA" as const,
+        query: context.starter!.topic,
+        maxResults: 5,
+        lookbackDays: 30,
+      },
+    };
+
+    expect(validateRitualStewardResult(context, proposal)).toEqual(proposal);
+    expect(
+      validateRitualStewardResult(context, {
+        ...proposal,
+        research: { ...proposal.research, lookbackDays: 7 },
+      }),
+    ).toMatchObject({
+      status: "waiting",
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    });
+    expect(
+      validateRitualStewardResult(context, {
+        ...proposal,
+        research: { ...proposal.research, query: "broader technology news" },
+      }),
+    ).toMatchObject({
+      status: "waiting",
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    });
+    expect(
+      validateRitualStewardResult(context, {
+        ...proposal,
+        research: { ...proposal.research, maxResults: 4 },
+      }),
+    ).toMatchObject({
+      status: "waiting",
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    });
+    expect(
+      validateRitualStewardResult(context, {
+        ...proposal,
+        research: {
+          ...proposal.research,
+          includeDomains: ["example.com"],
+        },
+      }),
+    ).toMatchObject({
+      status: "waiting",
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    });
+    expect(
+      validateRitualStewardResult(context, {
+        ...proposal,
+        research: undefined,
+      }),
+    ).toMatchObject({
+      status: "waiting",
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    });
+  });
+
   it("accepts one strict, versioned draft without execution authority", () => {
     expect(ritualDraftSchema.parse(draft)).toEqual(draft);
     expect(

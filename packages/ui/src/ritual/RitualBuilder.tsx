@@ -1,5 +1,9 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import type { RitualRun, RitualRunReceipt } from "@village/contracts";
+import type {
+  RitualRun,
+  RitualRunReceipt,
+  RitualStarter,
+} from "@village/contracts";
 import type {
   RitualBuilderEvent,
   RitualBuilderIdentity,
@@ -21,9 +25,25 @@ export function RitualBuilder({
   identity: RitualBuilderIdentity;
   researchSetup?: ReactNode;
 }) {
+  const [starterMode, setStarterMode] = useState<
+    "CUSTOM" | RitualStarter["kind"]
+  >("CUSTOM");
   const submitPurpose = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
+    if (starterMode === "LAST_30_DAYS") {
+      const topic = String(data.get("topic") ?? "").trim();
+      const starter: RitualStarter = {
+        kind: "LAST_30_DAYS",
+        topic,
+      };
+      onEvent({
+        type: "SUBMIT_STARTER",
+        draftId: identity.draftId,
+        starter,
+      });
+      return;
+    }
     onEvent({
       type: "SUBMIT_PURPOSE",
       draftId: identity.draftId,
@@ -89,19 +109,69 @@ export function RitualBuilder({
         </ol>
 
         {state.phase === "DESCRIBE_PURPOSE" ? (
-          <form className="ritual-composer" onSubmit={submitPurpose}>
-            <label htmlFor="ritual-goal">What should become repeatable?</label>
-            <textarea
-              id="ritual-goal"
-              name="purpose"
-              rows={3}
-              maxLength={320}
-              placeholder="For example: Review my pipeline each weekday and prepare the next follow-ups."
-              required
-              autoComplete="off"
-            />
-            <button type="submit">Start the draft</button>
-          </form>
+          <section className="ritual-start">
+            <fieldset className="ritual-start__choices">
+              <legend>How would you like to begin?</legend>
+              <button
+                type="button"
+                aria-pressed={starterMode === "CUSTOM"}
+                onClick={() => setStarterMode("CUSTOM")}
+              >
+                <span aria-hidden="true">O</span>
+                <strong>Describe an outcome</strong>
+                <small>Shape any regular work with your Steward</small>
+              </button>
+              <button
+                type="button"
+                aria-pressed={starterMode === "LAST_30_DAYS"}
+                onClick={() => setStarterMode("LAST_30_DAYS")}
+              >
+                <span aria-hidden="true">30</span>
+                <strong>30-day signal brief</strong>
+                <small>Track one topic across recent public-web sources</small>
+              </button>
+            </fieldset>
+            <form className="ritual-composer" onSubmit={submitPurpose}>
+              {starterMode === "LAST_30_DAYS" ? (
+                <>
+                  <label htmlFor="ritual-topic">
+                    What topic should I track?
+                  </label>
+                  <input
+                    id="ritual-topic"
+                    name="topic"
+                    minLength={3}
+                    maxLength={160}
+                    placeholder="For example: AI coding agents"
+                    required
+                    autoComplete="off"
+                  />
+                  <p>
+                    This first version uses up to five Exa public-web results
+                    from the previous 30 days. It does not yet rank Reddit, X,
+                    or YouTube engagement.
+                  </p>
+                  <button type="submit">Shape the 30-day brief</button>
+                </>
+              ) : (
+                <>
+                  <label htmlFor="ritual-goal">
+                    What should become repeatable?
+                  </label>
+                  <textarea
+                    id="ritual-goal"
+                    name="purpose"
+                    rows={3}
+                    maxLength={320}
+                    placeholder="For example: Review my pipeline each weekday and prepare the next follow-ups."
+                    required
+                    autoComplete="off"
+                  />
+                  <button type="submit">Start the draft</button>
+                </>
+              )}
+            </form>
+          </section>
         ) : null}
 
         {state.phase === "DRAFTING" ? (

@@ -1,3 +1,4 @@
+import { purposeForRitualStarter } from "@village/contracts";
 import type {
   ApprovedRitualRevision,
   RitualStewardContext,
@@ -157,17 +158,24 @@ export function RitualBuilderWorkspace({
         });
       return;
     }
-    if (event.type === "SUBMIT_PURPOSE") {
+    if (event.type === "SUBMIT_PURPOSE" || event.type === "SUBMIT_STARTER") {
       const next = reduceRitualBuilder(state, event);
       setState(next);
       if (next.phase !== "DRAFTING") return;
       const requestGeneration = ++generation.current;
+      const ownerPurpose =
+        event.type === "SUBMIT_STARTER"
+          ? purposeForRitualStarter(event.starter)
+          : event.purpose.trim();
       void bridge
         .draft({
           schemaVersion: 1,
           draftId: next.pendingDraftId,
           requestRevision: next.pendingRequestRevision,
-          ownerPurpose: event.purpose.trim(),
+          ownerPurpose,
+          ...(event.type === "SUBMIT_STARTER"
+            ? { starter: event.starter }
+            : {}),
         })
         .then((result) => {
           if (generation.current !== requestGeneration) return;

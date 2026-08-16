@@ -68,6 +68,13 @@ export const ritualResearchSchema = z.strictObject({
     .optional(),
 });
 
+export const ritualStarterSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("LAST_30_DAYS"),
+    topic: webResearchRequestSchema.shape.query.max(160),
+  }),
+]);
+
 const ritualResearchEvidenceSourceSchema = z.strictObject({
   title: webResearchSuccessSchema.shape.sources.element.shape.title.max(160),
   url: webResearchSuccessSchema.shape.sources.element.shape.url,
@@ -530,6 +537,7 @@ export const ritualStewardContextSchema = z.strictObject({
   draftId: ritualDraftIdSchema,
   requestRevision: z.number().int().positive(),
   ownerPurpose: sentenceSchema,
+  starter: ritualStarterSchema.optional(),
 });
 
 const ritualStewardProposalFields = {
@@ -578,6 +586,7 @@ export type RitualStewardContext = z.infer<typeof ritualStewardContextSchema>;
 export type RitualStewardProposal = z.infer<typeof ritualStewardProposalSchema>;
 export type RitualStewardResult = z.infer<typeof ritualStewardResultSchema>;
 export type RitualResearch = z.infer<typeof ritualResearchSchema>;
+export type RitualStarter = z.infer<typeof ritualStarterSchema>;
 export type RitualResearchEvidence = z.infer<
   typeof ritualResearchEvidenceSchema
 >;
@@ -641,7 +650,58 @@ export function validateRitualStewardResult(
       reason: "STALE_STEWARD_RESULT",
     };
   }
+  if (
+    result.data.status === "proposal" &&
+    context.starter &&
+    !matchesStarterResearch(
+      result.data.research,
+      researchForRitualStarter(context.starter),
+    )
+  ) {
+    return {
+      status: "waiting",
+      draftId: context.draftId,
+      requestRevision: context.requestRevision,
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    };
+  }
   return result.data;
+}
+
+export function researchForRitualStarter(
+  starterCandidate: unknown,
+): RitualResearch {
+  const starter = ritualStarterSchema.parse(starterCandidate);
+  switch (starter.kind) {
+    case "LAST_30_DAYS":
+      return ritualResearchSchema.parse({
+        provider: "EXA",
+        query: starter.topic,
+        maxResults: 5,
+        lookbackDays: 30,
+      });
+  }
+}
+
+export function purposeForRitualStarter(starterCandidate: unknown): string {
+  const starter = ritualStarterSchema.parse(starterCandidate);
+  switch (starter.kind) {
+    case "LAST_30_DAYS":
+      return `Prepare a grounded brief on the most important public-web developments about ${starter.topic} from the last 30 days.`;
+  }
+}
+
+function matchesStarterResearch(
+  candidate: RitualResearch | undefined,
+  expected: RitualResearch,
+): boolean {
+  return (
+    candidate?.provider === expected.provider &&
+    candidate.query === expected.query &&
+    candidate.maxResults === expected.maxResults &&
+    candidate.lookbackDays === expected.lookbackDays &&
+    candidate.includeDomains === undefined
+  );
 }
 
 export function createRitualRun(input: {

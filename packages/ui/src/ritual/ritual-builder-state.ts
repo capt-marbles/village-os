@@ -7,11 +7,14 @@ import {
   ritualLearningProposalSchema,
   ritualRunReceiptSchema,
   ritualRunSchema,
+  ritualStarterSchema,
   ritualStewardContextSchema,
+  purposeForRitualStarter,
   ritualTestReceiptSchema,
   ritualTestRunRequestSchema,
   type ApprovedRitualRevision,
   type RitualDraft,
+  type RitualStarter,
   type RitualStewardProposal,
   type RitualLearningProposal,
   type RitualRun,
@@ -145,6 +148,7 @@ export type RitualBuilderEvent =
       draftId: string;
       purpose: string;
     }
+  | { type: "SUBMIT_STARTER"; draftId: string; starter: RitualStarter }
   | {
       type: "STEWARD_PROPOSED";
       proposal: RitualStewardProposal;
@@ -279,9 +283,25 @@ export function reduceRitualBuilder(
   event: RitualBuilderEvent,
 ): RitualBuilderState {
   switch (event.type) {
-    case "SUBMIT_PURPOSE": {
+    case "SUBMIT_PURPOSE":
+    case "SUBMIT_STARTER": {
       if (state.phase !== "DESCRIBE_PURPOSE") return state;
-      const purpose = event.purpose.trim();
+      let purpose: string;
+      let starter: RitualStarter | undefined;
+      if (event.type === "SUBMIT_STARTER") {
+        const parsedStarter = ritualStarterSchema.safeParse(event.starter);
+        if (!parsedStarter.success) {
+          return {
+            ...state,
+            error:
+              "The Ritual starter details are not valid. Review them and try again.",
+          };
+        }
+        starter = parsedStarter.data;
+        purpose = purposeForRitualStarter(starter);
+      } else {
+        purpose = event.purpose.trim();
+      }
       if (!purpose) return { ...state, error: "Describe the outcome first." };
       if (purpose.length > 320) {
         return {
@@ -296,6 +316,7 @@ export function reduceRitualBuilder(
           draftId: event.draftId,
           requestRevision,
           ownerPurpose: purpose,
+          ...(starter ? { starter } : {}),
         }).success
       ) {
         return {
