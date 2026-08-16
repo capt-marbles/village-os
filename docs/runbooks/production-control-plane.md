@@ -11,12 +11,15 @@ application or choose an identity provider for the owner.
 ## Before deployment
 
 1. Create the custom hostname that will serve Village.
-2. Add that hostname as a Cloudflare Access self-hosted application and create
-   an allow policy for the intended owner. Access must be active before the
-   first production deploy.
-3. Record the Access team domain and application audience.
-4. Create the production D1 database. Do not reuse a development database.
-5. Authenticate Wrangler to the Cloudflare account that owns the hostname and
+2. Add an OAuth or OIDC identity provider to Cloudflare Access. Google is a
+   supported owner-facing choice; another compatible OIDC provider can be
+   added later. Village does not store a separate password.
+3. Add the Village hostname as a Cloudflare Access self-hosted application and
+   create an allow policy for the intended owner. Access must be active before
+   the first production deploy.
+4. Record the Access team domain and application audience.
+5. Create the production D1 database. Do not reuse a development database.
+6. Authenticate Wrangler to the Cloudflare account that owns the hostname and
    database.
 
 Cloudflare Access checks every request before it reaches Village. The Worker
@@ -24,6 +27,8 @@ also validates the `Cf-Access-Jwt-Assertion` signature, issuer, audience, and
 algorithm before mapping the owner to a Village principal. See Cloudflare's
 [Access application guide](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/)
 and [JWT validation guide](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/).
+Cloudflare Access can use multiple identity providers for one application; see
+the [identity FAQ](https://developers.cloudflare.com/cloudflare-one/faq/authentication-faq/).
 
 ## Required environment
 
@@ -68,6 +73,10 @@ After deployment, sign in through Access in a normal browser. Pair each Mac
 from that authenticated page. The paired desktop persists the same control
 plane origin and uses its device-bound signed protocol for enrollment and Site
 Session continuity; it does not receive or reuse the browser's Access token.
+The web shell shows the verified email for the current Village Identity and
+withholds pairing and handoff controls until `/api/identity` succeeds. Its
+sign-out action uses the application-local Access logout endpoint, which clears
+the application authorization cookie.
 
 The Static Assets settings follow Cloudflare's current
 [single-page application routing](https://developers.cloudflare.com/workers/static-assets/routing/single-page-application/):

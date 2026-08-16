@@ -106,6 +106,12 @@ export async function routeRequest(
   }
 
   try {
+    if (request.method === "GET" && url.pathname === "/api/identity") {
+      const auth = await authenticateRequest(request, environment);
+      if (!auth.ok) return json(request, environment, auth, 401);
+      return json(request, environment, auth.identity);
+    }
+
     if (
       request.method === "GET" &&
       url.pathname === "/api/site-session-continuity/setup"

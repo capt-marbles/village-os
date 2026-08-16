@@ -37,6 +37,22 @@ beforeEach(async () => {
 });
 
 describe("authenticated pairing routes", () => {
+  it("exposes the authenticated Village Identity without authentication material", async () => {
+    const response = await SELF.fetch(
+      new Request("https://village.test/api/identity", {
+        headers: ownerHeaders,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    await expect(response.json()).resolves.toEqual({
+      authenticated: true,
+      principalId,
+      provider: "DEVELOPMENT",
+    });
+  });
+
   it("creates and reads owner-scoped durable jobs", async () => {
     const created = await SELF.fetch(
       new Request("https://village.test/api/jobs", {

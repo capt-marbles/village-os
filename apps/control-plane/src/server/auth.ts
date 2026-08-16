@@ -1,4 +1,8 @@
-import { principalIdSchema } from "@village/contracts";
+import {
+  principalIdSchema,
+  villageIdentitySessionSchema,
+  type VillageIdentitySession,
+} from "@village/contracts";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { Environment } from "../env.js";
 
@@ -63,7 +67,14 @@ export async function authenticateRequest(
   request: Request,
   environment: Environment,
   now = new Date().toISOString(),
-): Promise<{ ok: true; principalId: string } | { ok: false; code: string }> {
+): Promise<
+  | {
+      ok: true;
+      principalId: string;
+      identity: VillageIdentitySession;
+    }
+  | { ok: false; code: string }
+> {
   if (environment.VILLAGE_AUTH_MODE === "development-header") {
     if (
       environment.VILLAGE_ENVIRONMENT !== "development" &&
@@ -79,7 +90,12 @@ export async function authenticateRequest(
     )
       .bind(parsed.data, now)
       .run();
-    return { ok: true, principalId: parsed.data };
+    const identity = villageIdentitySessionSchema.parse({
+      authenticated: true,
+      principalId: parsed.data,
+      provider: "DEVELOPMENT",
+    });
+    return { ok: true, principalId: identity.principalId, identity };
   }
 
   const domain = environment.CF_ACCESS_TEAM_DOMAIN;
@@ -100,16 +116,22 @@ export async function authenticateRequest(
       audience,
       algorithms: ["RS256"],
     });
-    if (!payload.sub) return { ok: false, code: "UNAUTHENTICATED" };
-    return {
-      ok: true,
+    if (!payload.sub || typeof payload.email !== "string") {
+      return { ok: false, code: "UNAUTHENTICATED" };
+    }
+    const identity = villageIdentitySessionSchema.parse({
+      authenticated: true,
       principalId: await principalForSubject(
         environment.VILLAGE_DB,
         issuer,
         payload.sub,
         now,
       ),
-    };
+      provider: "CLOUDFLARE_ACCESS",
+      email: payload.email,
+      signOutPath: "/cdn-cgi/access/logout",
+    });
+    return { ok: true, principalId: identity.principalId, identity };
   } catch {
     return { ok: false, code: "UNAUTHENTICATED" };
   }

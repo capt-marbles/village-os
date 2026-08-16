@@ -103,6 +103,24 @@ button:focus-visible {
   background: #182019;
 }
 
+.village-identity-card {
+  margin: clamp(1rem, 3vw, 2rem);
+  border: 1px solid var(--village-border);
+  border-radius: 20px;
+  padding: 1rem;
+  background: var(--village-surface);
+}
+.village-identity-card h2 {
+  margin: 0.4rem 0;
+}
+.village-identity-card p {
+  color: var(--village-muted);
+}
+.village-identity-card a {
+  color: var(--village-success);
+  font-weight: 750;
+}
+
 .pair-desktop-card {
   margin: clamp(1rem, 3vw, 2rem);
   border: 1px solid #334038;
