@@ -4,10 +4,15 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const telemetryModules = ["apps/desktop/src/main/crash-reporting.ts"];
+const allowedOutboundModules = [
+  "apps/desktop/src/research/exa-search-provider.ts",
+];
+const exaEgressContract =
+  /const EXA_SEARCH_ENDPOINT = ["']https:\/\/api\.exa\.ai\/search["'];[\s\S]*this\.request\(EXA_SEARCH_ENDPOINT,/;
 const sourceRoots = ["apps/desktop/src", "packages/ui/src"];
 
 const outboundTransport =
-  /\bfetch\s*\(|\bsendBeacon\s*\(|\bXMLHttpRequest\b|\bcaptureException\s*\(|\b(?:http|https)\s*\.\s*request\s*\(/;
+  /\bglobalThis\s*\.\s*fetch\b|\bfetch\s*\(|\bsendBeacon\s*\(|\bXMLHttpRequest\b|\bcaptureException\s*\(|\b(?:http|https)\s*\.\s*request\s*\(/;
 const thirdPartyTelemetry =
   /(?:from\s+|require\s*\()["'](?:@sentry|posthog|analytics-node|@segment|datadog|amplitude)(?:\/[^"']*)?["']/i;
 const pageDerivedField =
@@ -18,8 +23,14 @@ const exactAllowlist =
 
 export function auditTelemetrySource(source, file) {
   const errors = [];
-  if (outboundTransport.test(source))
+  if (outboundTransport.test(source) && !allowedOutboundModules.includes(file))
     errors.push(`${file} contains forbidden outbound transport`);
+  if (
+    file === "apps/desktop/src/research/exa-search-provider.ts" &&
+    !exaEgressContract.test(source)
+  ) {
+    errors.push(`${file} must retain the fixed Exa egress contract`);
+  }
   if (thirdPartyTelemetry.test(source))
     errors.push(`${file} imports a forbidden telemetry SDK`);
   if (pageDerivedField.test(source))
@@ -61,10 +72,12 @@ export async function auditTelemetryEgress() {
   );
   for (const [relative, source] of sources) {
     const sourceErrors = auditTelemetrySource(source, relative).filter(
-      (error) =>
-        telemetryModules.includes(relative) ||
-        error.includes("outbound transport") ||
-        error.includes("telemetry SDK"),
+      (error) => {
+        if (telemetryModules.includes(relative)) return true;
+        if (allowedOutboundModules.includes(relative)) return true;
+        if (error.includes("outbound transport")) return true;
+        return error.includes("telemetry SDK");
+      },
     );
     errors.push(...sourceErrors);
   }
