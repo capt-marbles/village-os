@@ -74,6 +74,10 @@ test("the continuity smoke package uses only its isolated proof entry", () => {
     desktopPackage.scripts["package:mac:continuity-e2e"],
     /electron-builder --dir --config electron-builder\.continuity-e2e\.yml --mac/,
   );
+  assert.match(
+    desktopPackage.scripts["package:mac:continuity-e2e"],
+    /--config\.directories\.output=release\/continuity-e2e/,
+  );
   assert.equal(
     continuityPackageConfig.extraMetadata.main,
     "dist/main/internal-continuity-proof-entry.js",
@@ -82,4 +86,12 @@ test("the continuity smoke package uses only its isolated proof entry", () => {
     continuityPackageConfig.extraMetadata.main,
     "dist/main/production-entry.js",
   );
+  for (const excludedOutput of [
+    "!dist/mac*/**",
+    "!dist/ritual-e2e/**",
+    "!dist/e2e/**",
+    "!dist/continuity-e2e/**",
+  ]) {
+    assert.ok(continuityPackageConfig.files.includes(excludedOutput));
+  }
 });

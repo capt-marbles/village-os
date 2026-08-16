@@ -4,6 +4,10 @@ extraMetadata:
   main: dist/main/internal-continuity-proof-entry.js
 files:
   - dist/**
+  - "!dist/mac*/**"
+  - "!dist/ritual-e2e/**"
+  - "!dist/e2e/**"
+  - "!dist/continuity-e2e/**"
   - package.json
 mac:
   target: dir

@@ -201,6 +201,49 @@ describe("desktop encrypted continuity mailbox client", () => {
     ]);
   });
 
+  it("keeps activation discovery and mailbox mutation sequence spaces independent", async () => {
+    const keys = await crypto.subtle.generateKey("Ed25519", false, [
+      "sign",
+      "verify",
+    ]);
+    const sequences = new Map<string, number>();
+    const observed: unknown[] = [];
+    const client = new ContinuityMailboxClient({
+      baseUrl: new URL("https://village.test"),
+      privateKey: keys.privateKey,
+      sequences: {
+        reserveNext: async (_deviceId, _browserSessionId, scope) => {
+          const next = (sequences.get(scope) ?? 0) + 1;
+          sequences.set(scope, next);
+          return next;
+        },
+      },
+      request: vi.fn(async (_input, init) => {
+        observed.push(JSON.parse(String(init?.body)));
+        return observed.length === 1
+          ? Response.json({ ok: true, activations: [] })
+          : Response.json({ ok: true, revision: null });
+      }),
+    });
+
+    await client.loadActivations({
+      principalId: binding.principalId,
+      deviceId: binding.destinationDeviceId,
+      browserSessionId: binding.destinationBrowserSessionId,
+      site: binding.site,
+    });
+    await client.fetchAfter(binding, 0);
+
+    expect(continuityActivationRequestSchema.parse(observed[0]).sequence).toBe(
+      1,
+    );
+    expect(continuityFetchEnvelopeSchema.parse(observed[1]).sequence).toBe(1);
+    expect([...sequences.keys()]).toEqual([
+      "CONTINUITY_ACTIVATION",
+      "CONTINUITY_MAILBOX",
+    ]);
+  });
+
   it("fails closed on unsafe origins, malformed responses, and timeouts", async () => {
     const keys = await crypto.subtle.generateKey("Ed25519", false, [
       "sign",
