@@ -947,6 +947,8 @@ function researchWaitingCopy(reason: RitualRun["waitingReason"]): string {
   switch (reason) {
     case "AUTHENTICATION_REQUIRED":
       return "Add or replace the Exa key above, then retry this exact Run.";
+    case "CREDITS_EXHAUSTED":
+      return "Exa credits are exhausted. Open the Exa key dashboard to review billing, then retry this exact Run.";
     case "RATE_LIMITED":
       return "Exa is rate-limiting requests. Wait briefly, then retry this exact Run.";
     case "TIME_BUDGET_EXHAUSTED":

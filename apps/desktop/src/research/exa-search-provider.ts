@@ -197,6 +197,7 @@ export class ExaSearchProvider implements WebResearchProvider {
 
 function reasonForStatus(status: number): WebResearchWaitingReason {
   if (status === 401 || status === 403) return "AUTHENTICATION_REQUIRED";
+  if (status === 402) return "CREDITS_EXHAUSTED";
   if (status === 429) return "RATE_LIMITED";
   if (status >= 400 && status < 500) return "PROVIDER_REQUEST_REJECTED";
   return "PROVIDER_UNAVAILABLE";

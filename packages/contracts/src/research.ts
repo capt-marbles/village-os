@@ -42,6 +42,7 @@ export const webResearchSourceSchema = z.strictObject({
 
 export const webResearchWaitingReasonSchema = z.enum([
   "AUTHENTICATION_REQUIRED",
+  "CREDITS_EXHAUSTED",
   "RATE_LIMITED",
   "PROVIDER_UNAVAILABLE",
   "PROVIDER_REQUEST_REJECTED",

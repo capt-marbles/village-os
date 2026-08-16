@@ -86,6 +86,7 @@ describe("Exa search provider", () => {
   it.each([
     [401, "AUTHENTICATION_REQUIRED"],
     [403, "AUTHENTICATION_REQUIRED"],
+    [402, "CREDITS_EXHAUSTED"],
     [422, "PROVIDER_REQUEST_REJECTED"],
     [429, "RATE_LIMITED"],
     [500, "PROVIDER_UNAVAILABLE"],
