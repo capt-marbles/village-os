@@ -42,7 +42,7 @@ export function ObserverBrowserCard({
           <div>
             <dt>Workflow</dt>
             <dd>
-              {snapshot.workflowKind} v{snapshot.workflowVersion}
+              {workflowLabel(snapshot.workflowKind)} v{snapshot.workflowVersion}
             </dd>
           </div>
           <div>
@@ -98,4 +98,10 @@ export function ObserverBrowserCard({
       </div>
     </section>
   );
+}
+
+function workflowLabel(workflowKind: string) {
+  return workflowKind === "OWNED_FIXTURE_ACCOUNT_SETUP_V1"
+    ? "Owned fixture setup"
+    : workflowKind.replaceAll("_", " ").toLowerCase();
 }
