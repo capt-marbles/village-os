@@ -267,6 +267,78 @@ describe("Ritual Builder state", () => {
     });
   });
 
+  it("restores the exact resource wait when a research retry command fails", () => {
+    const researchApproved = {
+      schemaVersion: 1 as const,
+      ritualId,
+      ritualRevision: 1 as const,
+      status: "APPROVED" as const,
+      approvedDraftId: draftId,
+      approvedDraftRevision: 3,
+      name: "Research review",
+      purpose: "Prepare a public-web research review.",
+      trigger: { kind: "ON_DEMAND" as const, summary: "Whenever I ask" },
+      steps: [
+        {
+          stepKey: "prepare-review",
+          title: "Prepare the review",
+          description: "Gather bounded public-web evidence.",
+          actor: { kind: "STEWARD" as const, role: "Steward" },
+          approval: "NONE" as const,
+        },
+      ],
+      permissions: ["Read bounded public-web evidence"],
+      completion: "A reviewable result is ready.",
+      reviewPolicy: {
+        ownerReview: "EVERY_RUN" as const,
+        learning: "PROPOSE_ONLY" as const,
+      },
+      approvedAt: "2026-08-15T16:03:00.000Z",
+      research: {
+        provider: "EXA" as const,
+        query: "important AI agent announcements",
+        maxResults: 3,
+        lookbackDays: 30,
+      },
+    };
+    let run = createRitualRun({
+      approved: researchApproved,
+      request: {
+        schemaVersion: 1,
+        ritualId: researchApproved.ritualId,
+        ritualRevision: researchApproved.ritualRevision,
+      },
+      runId: "rrn_01J00000000000000000000009",
+      createdAt: "2026-08-16T13:00:00.000Z",
+    });
+    run = reduceRitualRun(run, researchApproved, {
+      type: "START",
+      occurredAt: "2026-08-16T13:00:01.000Z",
+    });
+    run = reduceRitualRun(run, researchApproved, {
+      type: "WAIT_FOR_RESOURCE",
+      reason: "AUTHENTICATION_REQUIRED",
+      occurredAt: "2026-08-16T13:00:02.000Z",
+    });
+    let state = reduceRitualBuilder(createRitualBuilderState(), {
+      type: "RESTORE_APPROVED",
+      approved: researchApproved,
+    });
+    state = reduceRitualBuilder(state, { type: "RESTORE_RUN", run });
+    state = reduceRitualBuilder(state, { type: "START_RUN" });
+    expect(state).toMatchObject({ phase: "STARTING_RUN", run });
+
+    state = reduceRitualBuilder(state, {
+      type: "RUN_COMMAND_FAILED",
+      message: "Research retry could not start.",
+    });
+    expect(state).toMatchObject({
+      phase: "RUN_WAITING_FOR_RESOURCE",
+      run,
+      error: "Research retry could not start.",
+    });
+  });
+
   it("returns an approved Ritual to a clean purpose prompt for another Ritual", () => {
     const approved = {
       schemaVersion: 1 as const,

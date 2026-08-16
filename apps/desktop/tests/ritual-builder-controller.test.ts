@@ -354,7 +354,7 @@ describe("RitualBuilderController", () => {
       run: { status: "NEEDS_REVIEW", currentStepKey: null },
       receipt: {
         mode: "RUN",
-        executionProvider: "DETERMINISTIC_FIXTURE",
+        executionProvider: "LOCAL_RITUAL_V1",
         externalEffects: [],
       },
     });
@@ -432,7 +432,9 @@ describe("RitualBuilderController", () => {
         now: () => "2026-08-16T12:02:00.000Z",
         runExecutor: {
           completeCurrentStep: async () => ({
+            status: "completed" as const,
             stepKey: "prepare-review",
+            research: null,
             externalEffects: ["unexpected effect"] as unknown as readonly [],
           }),
         },
@@ -600,6 +602,423 @@ describe("RitualBuilderController", () => {
       }),
     ).resolves.toEqual({ status: "run", run: existing });
     expect(repository.saveRun).not.toHaveBeenCalled();
+  });
+
+  it("persists an Exa wait and resumes the exact Run after owner recovery", async () => {
+    const researchApproved = {
+      ...automaticApproved,
+      research: {
+        provider: "EXA" as const,
+        query: "important AI agent announcements",
+        maxResults: 3,
+        lookbackDays: 30,
+      },
+    };
+    let currentRun: RitualRun | null = null;
+    const repository = {
+      find: vi.fn(async () => researchApproved),
+      findNonterminalRun: vi.fn(async () => currentRun),
+      saveRun: vi.fn(async (run: RitualRun) => {
+        currentRun = run;
+      }),
+      completeRun: vi.fn(async (run: RitualRun) => {
+        currentRun = run;
+      }),
+    };
+    const completeCurrentStep = vi
+      .fn()
+      .mockResolvedValueOnce({
+        status: "waiting",
+        stepKey: "prepare-review",
+        reason: "AUTHENTICATION_REQUIRED",
+        externalEffects: [],
+      })
+      .mockResolvedValueOnce({
+        status: "completed",
+        stepKey: "prepare-review",
+        research: {
+          provider: "EXA",
+          requestId: "exa-run-1",
+          sources: [],
+        },
+        externalEffects: [],
+      });
+    const controller = new RitualBuilderController(
+      unavailableProvider(),
+      repository,
+      {
+        createId: (prefix) =>
+          prefix === "rrn"
+            ? "rrn_01J00000000000000000000008"
+            : "rcp_01J00000000000000000000008",
+        now: () => "2026-08-16T12:07:00.000Z",
+        runExecutor: { completeCurrentStep },
+      },
+    );
+    const request = {
+      schemaVersion: 1 as const,
+      ritualId: researchApproved.ritualId,
+      ritualRevision: researchApproved.ritualRevision,
+    };
+
+    await expect(controller.startRun(request)).resolves.toMatchObject({
+      status: "run",
+      run: {
+        status: "WAITING_FOR_RESOURCE",
+        waitingReason: "AUTHENTICATION_REQUIRED",
+      },
+    });
+    await expect(controller.startRun(request)).resolves.toMatchObject({
+      status: "receipt",
+      run: { status: "NEEDS_REVIEW" },
+      receipt: {
+        stepEvidence: [
+          {
+            research: { provider: "EXA", requestId: "exa-run-1" },
+          },
+        ],
+      },
+    });
+    expect(completeCurrentStep).toHaveBeenCalledTimes(2);
+    expect(repository.completeRun).toHaveBeenCalledOnce();
+  });
+
+  it("durably cancels a deferred research retry and ignores its late completion", async () => {
+    const researchApproved = {
+      ...automaticApproved,
+      research: {
+        provider: "EXA" as const,
+        query: "important AI agent announcements",
+        maxResults: 3,
+        lookbackDays: 30,
+      },
+    };
+    let currentRun = createRunningRun(
+      researchApproved,
+      "rrn_01J00000000000000000000009",
+    );
+    currentRun = reduceRitualRun(currentRun, researchApproved, {
+      type: "WAIT_FOR_RESOURCE",
+      reason: "AUTHENTICATION_REQUIRED",
+      occurredAt: "2026-08-16T13:00:02.000Z",
+    });
+    const repository = {
+      find: vi.fn(async () => researchApproved),
+      findNonterminalRun: vi.fn(async () => currentRun),
+      findRunWithApprovedRevision: vi.fn(async () => ({
+        run: currentRun,
+        approved: researchApproved,
+      })),
+      saveRun: vi.fn(async (run: RitualRun) => {
+        currentRun = run;
+      }),
+      completeRun: vi.fn(async (run: RitualRun) => {
+        currentRun = run;
+      }),
+    };
+    let resolveExecution!: (value: {
+      status: "completed";
+      stepKey: string;
+      research: null;
+      externalEffects: readonly [];
+    }) => void;
+    const execution = new Promise<{
+      status: "completed";
+      stepKey: string;
+      research: null;
+      externalEffects: readonly [];
+    }>((resolve) => {
+      resolveExecution = resolve;
+    });
+    const completeCurrentStep = vi.fn(() => execution);
+    const controller = new RitualBuilderController(
+      unavailableProvider(),
+      repository,
+      {
+        now: () => "2026-08-16T13:00:03.000Z",
+        runExecutor: { completeCurrentStep },
+      },
+    );
+    const start = controller.startRun({
+      schemaVersion: 1,
+      ritualId: researchApproved.ritualId,
+      ritualRevision: researchApproved.ritualRevision,
+    });
+    await vi.waitFor(() => expect(completeCurrentStep).toHaveBeenCalledOnce());
+
+    await expect(
+      controller.cancelRun({ schemaVersion: 1, runId: currentRun.runId }),
+    ).resolves.toMatchObject({ status: "run", run: { status: "CANCELED" } });
+    await expect(start).resolves.toMatchObject({
+      status: "run",
+      run: { status: "CANCELED" },
+    });
+
+    resolveExecution({
+      status: "completed",
+      stepKey: "prepare-review",
+      research: null,
+      externalEffects: [],
+    });
+    await Promise.resolve();
+    expect(currentRun).toMatchObject({ status: "CANCELED" });
+    expect(repository.completeRun).not.toHaveBeenCalled();
+  });
+
+  it("honors cancellation queued before retry activation without starting executor work", async () => {
+    const researchApproved = {
+      ...automaticApproved,
+      research: {
+        provider: "EXA" as const,
+        query: "important AI agent announcements",
+        maxResults: 3,
+        lookbackDays: 30,
+      },
+    };
+    let currentRun = createRunningRun(
+      researchApproved,
+      "rrn_01J00000000000000000000010",
+    );
+    currentRun = reduceRitualRun(currentRun, researchApproved, {
+      type: "WAIT_FOR_RESOURCE",
+      reason: "AUTHENTICATION_REQUIRED",
+      occurredAt: "2026-08-16T13:01:00.000Z",
+    });
+    let releaseFind!: () => void;
+    const findBlocked = new Promise<void>((resolve) => {
+      releaseFind = resolve;
+    });
+    const repository = {
+      find: vi.fn(async () => {
+        await findBlocked;
+        return researchApproved;
+      }),
+      findNonterminalRun: vi.fn(async () => currentRun),
+      findRunWithApprovedRevision: vi.fn(async () => ({
+        run: currentRun,
+        approved: researchApproved,
+      })),
+      saveRun: vi.fn(async (run: RitualRun) => {
+        currentRun = run;
+      }),
+      completeRun: vi.fn(async () => undefined),
+    };
+    const completeCurrentStep = vi.fn(async () => ({
+      status: "completed" as const,
+      stepKey: "prepare-review",
+      research: null,
+      externalEffects: [] as const,
+    }));
+    const controller = new RitualBuilderController(
+      unavailableProvider(),
+      repository,
+      {
+        now: () => "2026-08-16T13:01:01.000Z",
+        runExecutor: { completeCurrentStep },
+      },
+    );
+
+    const retry = controller.startRun({
+      schemaVersion: 1,
+      ritualId: researchApproved.ritualId,
+      ritualRevision: researchApproved.ritualRevision,
+    });
+    await vi.waitFor(() => expect(repository.find).toHaveBeenCalledOnce());
+    const cancel = controller.cancelRun({
+      schemaVersion: 1,
+      runId: currentRun.runId,
+    });
+    releaseFind();
+
+    await expect(cancel).resolves.toMatchObject({
+      status: "run",
+      run: { status: "CANCELED" },
+    });
+    await expect(retry).resolves.toMatchObject({
+      status: "run",
+      run: { status: "CANCELED" },
+    });
+    expect(completeCurrentStep).not.toHaveBeenCalled();
+    expect(repository.completeRun).not.toHaveBeenCalled();
+  });
+
+  it("lets cancellation win while terminal persistence is still pre-commit", async () => {
+    let currentRun: RitualRun | null = null;
+    let terminalSignal: AbortSignal | undefined;
+    let terminalWriteStarted!: () => void;
+    const terminalStarted = new Promise<void>((resolve) => {
+      terminalWriteStarted = resolve;
+    });
+    const repository = {
+      find: vi.fn(async () => automaticApproved),
+      findNonterminalRun: vi.fn(async () => null),
+      findRunWithApprovedRevision: vi.fn(async () =>
+        currentRun ? { run: currentRun, approved: automaticApproved } : null,
+      ),
+      saveRun: vi.fn(async (run: RitualRun) => {
+        currentRun = run;
+      }),
+      completeRun: vi.fn(
+        async (
+          _run: RitualRun,
+          _receipt: unknown,
+          options?: { signal?: AbortSignal },
+        ) => {
+          terminalSignal = options?.signal;
+          terminalWriteStarted();
+          await new Promise<void>((resolve, reject) => {
+            const cancel = () => reject(new Error("RITUAL_RUN_CANCELED"));
+            options?.signal?.addEventListener("abort", cancel, { once: true });
+          });
+        },
+      ),
+    };
+    const controller = new RitualBuilderController(
+      unavailableProvider(),
+      repository,
+      {
+        createId: (prefix) =>
+          prefix === "rrn"
+            ? "rrn_01J00000000000000000000011"
+            : "rcp_01J00000000000000000000011",
+        now: () => "2026-08-16T13:02:00.000Z",
+      },
+    );
+    const start = controller.startRun({
+      schemaVersion: 1,
+      ritualId: automaticApproved.ritualId,
+      ritualRevision: automaticApproved.ritualRevision,
+    });
+    await terminalStarted;
+
+    const cancel = controller.cancelRun({
+      schemaVersion: 1,
+      runId: "rrn_01J00000000000000000000011",
+    });
+
+    await expect(cancel).resolves.toMatchObject({
+      status: "run",
+      run: { status: "CANCELED" },
+    });
+    await expect(start).resolves.toMatchObject({
+      status: "run",
+      run: { status: "CANCELED" },
+    });
+    expect(terminalSignal?.aborted).toBe(true);
+    expect(currentRun).toMatchObject({ status: "CANCELED" });
+  });
+
+  it("returns the committed receipt when cancellation arrives after the terminal commit point", async () => {
+    let currentRun: RitualRun | null = null;
+    let releaseTerminalWrite!: () => void;
+    const terminalRelease = new Promise<void>((resolve) => {
+      releaseTerminalWrite = resolve;
+    });
+    let terminalCommitted!: () => void;
+    const committed = new Promise<void>((resolve) => {
+      terminalCommitted = resolve;
+    });
+    const repository = {
+      find: vi.fn(async () => automaticApproved),
+      findNonterminalRun: vi.fn(async () => null),
+      findRunWithApprovedRevision: vi.fn(async () =>
+        currentRun ? { run: currentRun, approved: automaticApproved } : null,
+      ),
+      saveRun: vi.fn(async (run: RitualRun) => {
+        currentRun = run;
+      }),
+      completeRun: vi.fn(async (run: RitualRun) => {
+        // This assignment models the repository's documented atomic commit
+        // point. An abort after it cannot safely be rewritten as CANCELED.
+        currentRun = run;
+        terminalCommitted();
+        await terminalRelease;
+      }),
+    };
+    const controller = new RitualBuilderController(
+      unavailableProvider(),
+      repository,
+      {
+        createId: (prefix) =>
+          prefix === "rrn"
+            ? "rrn_01J00000000000000000000013"
+            : "rcp_01J00000000000000000000013",
+        now: () => "2026-08-16T13:02:30.000Z",
+      },
+    );
+    const start = controller.startRun({
+      schemaVersion: 1,
+      ritualId: automaticApproved.ritualId,
+      ritualRevision: automaticApproved.ritualRevision,
+    });
+    await committed;
+    const cancel = controller.cancelRun({
+      schemaVersion: 1,
+      runId: "rrn_01J00000000000000000000013",
+    });
+    releaseTerminalWrite();
+
+    await expect(start).resolves.toMatchObject({
+      status: "receipt",
+      run: { status: "NEEDS_REVIEW" },
+    });
+    await expect(cancel).resolves.toMatchObject({
+      status: "receipt",
+      run: { status: "NEEDS_REVIEW" },
+    });
+    expect(repository.saveRun).not.toHaveBeenCalledWith(
+      expect.objectContaining({ status: "CANCELED" }),
+    );
+  });
+
+  it("aborts and durably cancels active work before closing the provider", async () => {
+    let currentRun: RitualRun | null = null;
+    let observedSignal: AbortSignal | undefined;
+    let executionStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      executionStarted = resolve;
+    });
+    const repository = {
+      find: vi.fn(async () => automaticApproved),
+      findNonterminalRun: vi.fn(async () => null),
+      findRunWithApprovedRevision: vi.fn(async () =>
+        currentRun ? { run: currentRun, approved: automaticApproved } : null,
+      ),
+      saveRun: vi.fn(async (run: RitualRun) => {
+        currentRun = run;
+      }),
+      completeRun: vi.fn(async () => undefined),
+    };
+    const provider = unavailableProvider();
+    const completeCurrentStep = vi.fn(
+      async ({ signal }: { signal?: AbortSignal }) => {
+        observedSignal = signal;
+        executionStarted();
+        return new Promise<never>(() => undefined);
+      },
+    );
+    const controller = new RitualBuilderController(provider, repository, {
+      createId: () => "rrn_01J00000000000000000000012",
+      now: () => "2026-08-16T13:03:00.000Z",
+      runExecutor: { completeCurrentStep },
+    });
+    const start = controller.startRun({
+      schemaVersion: 1,
+      ritualId: automaticApproved.ritualId,
+      ritualRevision: automaticApproved.ritualRevision,
+    });
+    await started;
+
+    await controller.close();
+
+    await expect(start).resolves.toMatchObject({
+      status: "run",
+      run: { status: "CANCELED" },
+    });
+    expect(observedSignal?.aborted).toBe(true);
+    expect(currentRun).toMatchObject({ status: "CANCELED" });
+    expect(repository.completeRun).not.toHaveBeenCalled();
+    expect(provider.close).toHaveBeenCalledOnce();
   });
 
   it("recovers a rejected terminal write without replaying the completed fixture", async () => {

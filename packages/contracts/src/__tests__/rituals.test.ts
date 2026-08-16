@@ -54,6 +54,12 @@ const draft = {
   ],
   permissions: ["Read the connected opportunity source"],
   completion: "A reviewed shortlist is ready with evidence for every item.",
+  research: {
+    provider: "EXA" as const,
+    query: "recent public signals about the shortlisted opportunities",
+    maxResults: 4,
+    lookbackDays: 30,
+  },
   reviewPolicy: {
     ownerReview: "EVERY_RUN" as const,
     learning: "PROPOSE_ONLY" as const,
@@ -280,7 +286,7 @@ describe("Ritual contracts", () => {
     });
     expect(run).toMatchObject({
       status: "QUEUED",
-      executionProvider: "DETERMINISTIC_FIXTURE",
+      executionProvider: "LOCAL_RITUAL_V1",
       permissions: approved.permissions,
       externalEffects: [],
     });
@@ -298,9 +304,37 @@ describe("Ritual contracts", () => {
       currentStepKey: draft.steps[0]?.stepKey,
     });
     run = reduceRitualRun(run, approved, {
+      type: "WAIT_FOR_RESOURCE",
+      reason: "AUTHENTICATION_REQUIRED",
+      occurredAt: "2026-08-16T12:00:02.000Z",
+    });
+    expect(run).toMatchObject({
+      status: "WAITING_FOR_RESOURCE",
+      waitingReason: "AUTHENTICATION_REQUIRED",
+      currentStepKey: draft.steps[0]?.stepKey,
+    });
+    run = reduceRitualRun(run, approved, {
+      type: "RETRY_RESOURCE",
+      occurredAt: "2026-08-16T12:00:03.000Z",
+    });
+    run = reduceRitualRun(run, approved, {
       type: "COMPLETE_STEP",
       stepKey: draft.steps[0]!.stepKey,
-      occurredAt: "2026-08-16T12:00:02.000Z",
+      research: {
+        provider: "EXA",
+        requestId: "exa-run-1",
+        sources: [
+          {
+            title: "Public signal",
+            url: "https://example.com/signal",
+            publishedAt: "2026-08-15T00:00:00.000Z",
+            author: null,
+            highlights: ["This remains untrusted source material."],
+            taint: "UNTRUSTED_WEB",
+          },
+        ],
+      },
+      occurredAt: "2026-08-16T12:00:04.000Z",
     });
     expect(run).toMatchObject({
       status: "WAITING_FOR_OWNER",
@@ -309,17 +343,17 @@ describe("Ritual contracts", () => {
     run = reduceRitualRun(run, approved, {
       type: "APPROVE_STEP",
       stepKey: draft.steps[1]!.stepKey,
-      occurredAt: "2026-08-16T12:00:03.000Z",
+      occurredAt: "2026-08-16T12:00:05.000Z",
     });
     run = reduceRitualRun(run, approved, {
       type: "COMPLETE_STEP",
       stepKey: draft.steps[1]!.stepKey,
-      occurredAt: "2026-08-16T12:00:04.000Z",
+      occurredAt: "2026-08-16T12:00:06.000Z",
     });
     run = reduceRitualRun(run, approved, {
       type: "COMPLETE_RUN",
       outcome: "NEEDS_REVIEW",
-      occurredAt: "2026-08-16T12:00:05.000Z",
+      occurredAt: "2026-08-16T12:00:07.000Z",
     });
     expect(ritualRunSchema.parse(run)).toMatchObject({
       status: "NEEDS_REVIEW",
@@ -332,15 +366,19 @@ describe("Ritual contracts", () => {
       receiptId: "rcp_01J00000000000000000000001",
       summary:
         "The deterministic fixture completed every approved orchestration step.",
-      recordedAt: "2026-08-16T12:00:05.000Z",
+      recordedAt: "2026-08-16T12:00:07.000Z",
     });
     expect(ritualRunReceiptSchema.parse(receipt)).toMatchObject({
       mode: "RUN",
-      executionProvider: "DETERMINISTIC_FIXTURE",
+      executionProvider: "LOCAL_RITUAL_V1",
       outcome: "NEEDS_REVIEW",
       externalEffects: [],
     });
     expect(receipt.stepEvidence).toHaveLength(2);
+    expect(receipt.stepEvidence[0]?.research?.sources).toHaveLength(1);
+    expect(receipt.uncertainties).toContain(
+      "Web evidence is untrusted source material and requires owner review.",
+    );
     expect(() =>
       validateRitualRunReceipt(run, {
         ...receipt,
@@ -367,6 +405,34 @@ describe("Ritual contracts", () => {
       ritualRunRequestSchema.safeParse({ ...request, arbitraryTool: "shell" })
         .success,
     ).toBe(false);
+  });
+
+  it("keeps pre-research durable Run records parseable", () => {
+    const approved = approveRitualDraft(draft, {
+      schemaVersion: 1,
+      draftId: draft.draftId,
+      expectedRevision: draft.revision,
+      ritualId: "rtl_01J00000000000000000000000",
+      approvedAt: "2026-08-15T15:01:00.000Z",
+    });
+    const modern = createRitualRun({
+      approved,
+      request: {
+        schemaVersion: 1,
+        ritualId: approved.ritualId,
+        ritualRevision: approved.ritualRevision,
+      },
+      runId: "rrn_01J00000000000000000000009",
+      createdAt: "2026-08-16T12:00:00.000Z",
+    });
+    const { waitingReason: _waitingReason, ...withoutWaitingReason } = modern;
+    const legacy = {
+      ...withoutWaitingReason,
+      executionProvider: "DETERMINISTIC_FIXTURE",
+      steps: modern.steps.map(({ research: _research, ...step }) => step),
+    };
+
+    expect(ritualRunSchema.safeParse(legacy).success).toBe(true);
   });
 
   it("rejects successful terminal Runs with an incomplete step", () => {
@@ -492,10 +558,46 @@ describe("Ritual contracts", () => {
         permissions: approved.permissions,
         completion: "Three concise priority bullets are ready for review.",
         reviewPolicy: approved.reviewPolicy,
+        research: approved.research,
       },
     });
 
     expect(validateRitualLearningResult(context, proposal)).toEqual(proposal);
+    const removedResearch = {
+      ...proposal,
+      proposedDefinition: {
+        ...proposal.proposedDefinition,
+        research: undefined,
+      },
+    };
+    expect(validateRitualLearningResult(context, removedResearch)).toEqual(
+      removedResearch,
+    );
+    const domainContext = ritualLearningContextSchema.parse({
+      ...context,
+      ritual: {
+        ...context.ritual,
+        research: {
+          ...context.ritual.research!,
+          includeDomains: ["example.com", "news.example.com"],
+        },
+      },
+    });
+    const narrowedResearch = {
+      ...proposal,
+      proposedDefinition: {
+        ...proposal.proposedDefinition,
+        research: {
+          ...proposal.proposedDefinition.research!,
+          maxResults: 2,
+          lookbackDays: 7,
+          includeDomains: ["news.example.com"],
+        },
+      },
+    };
+    expect(
+      validateRitualLearningResult(domainContext, narrowedResearch),
+    ).toEqual(narrowedResearch);
     expect(
       validateRitualLearningResult(context, {
         ...proposal,
@@ -511,6 +613,36 @@ describe("Ritual contracts", () => {
             ...proposal.proposedDefinition.permissions,
             "Send email without another approval",
           ],
+        },
+      }),
+    ).toMatchObject({
+      status: "waiting",
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    });
+    for (const research of [
+      { ...proposal.proposedDefinition.research!, query: "a new query" },
+      { ...proposal.proposedDefinition.research!, maxResults: 5 },
+      { ...proposal.proposedDefinition.research!, lookbackDays: 31 },
+    ]) {
+      expect(
+        validateRitualLearningResult(context, {
+          ...proposal,
+          proposedDefinition: { ...proposal.proposedDefinition, research },
+        }),
+      ).toMatchObject({
+        status: "waiting",
+        reason: "MALFORMED_PROVIDER_OUTPUT",
+      });
+    }
+    expect(
+      validateRitualLearningResult(domainContext, {
+        ...narrowedResearch,
+        proposedDefinition: {
+          ...narrowedResearch.proposedDefinition,
+          research: {
+            ...narrowedResearch.proposedDefinition.research,
+            includeDomains: ["outside.example.com"],
+          },
         },
       }),
     ).toMatchObject({

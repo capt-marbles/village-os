@@ -31,7 +31,7 @@ import {
 import type { RitualStewardProvider } from "../model-provider/ritual-steward.js";
 import { createVillageId } from "./local-village-id.js";
 import {
-  DeterministicRitualRunExecutor,
+  LocalRitualRunExecutor,
   type RitualRunExecutor,
 } from "./ritual-run-executor.js";
 
@@ -59,30 +59,56 @@ export interface RitualPersistence {
     ritualRevision: number,
   ): Promise<RitualRun | null>;
   saveRun(run: RitualRun): Promise<void>;
-  completeRun(run: RitualRun, receipt: RitualRunReceipt): Promise<void>;
+  completeRun(
+    run: RitualRun,
+    receipt: RitualRunReceipt,
+    options?: { signal?: AbortSignal },
+  ): Promise<void>;
 }
 
 interface RitualControllerDependencies {
   createId(prefix: "rrn" | "rcp" | "rlp"): string;
   now(): string;
-  runExecutor?: RitualRunExecutor;
+  runExecutor: RitualRunExecutor;
 }
+
+interface ActiveRunOperation {
+  abortController: AbortController;
+  cancellation: Promise<RitualRunControllerResult>;
+  resolveCancellation(result: RitualRunControllerResult): void;
+  rejectCancellation(error: unknown): void;
+  committedResult: RitualRunControllerResult | null;
+}
+
+type PreparedRun =
+  | { kind: "result"; result: RitualRunControllerResult }
+  | {
+      kind: "drive";
+      ritual: ApprovedRitualRevision;
+      run: RitualRun;
+      active: ActiveRunOperation;
+    };
 
 export class RitualBuilderController {
   private runOperationTail: Promise<void> = Promise.resolve();
+  private readonly activeRuns = new Map<string, ActiveRunOperation>();
+  private readonly pendingRunCancellations = new Set<string>();
+  private readonly dependencies: RitualControllerDependencies;
   private readonly runExecutor: RitualRunExecutor;
+  private closed = false;
+  private closePromise: Promise<void> | null = null;
 
   constructor(
     private readonly provider: RitualStewardProvider,
     private readonly repository: RitualPersistence,
-    private readonly dependencies: RitualControllerDependencies = {
-      createId: createVillageId,
-      now: () => new Date().toISOString(),
-      runExecutor: new DeterministicRitualRunExecutor(),
-    },
+    dependencies: Partial<RitualControllerDependencies> = {},
   ) {
-    this.runExecutor =
-      dependencies.runExecutor ?? new DeterministicRitualRunExecutor();
+    this.dependencies = {
+      createId: dependencies.createId ?? createVillageId,
+      now: dependencies.now ?? (() => new Date().toISOString()),
+      runExecutor: dependencies.runExecutor ?? new LocalRitualRunExecutor(),
+    };
+    this.runExecutor = this.dependencies.runExecutor;
   }
 
   async draft(candidate: unknown): Promise<RitualStewardResult> {
@@ -124,8 +150,10 @@ export class RitualBuilderController {
     return ritual;
   }
 
-  startRun(candidate: unknown): Promise<RitualRunControllerResult> {
-    return this.enqueueRun(async () => {
+  async startRun(candidate: unknown): Promise<RitualRunControllerResult> {
+    this.assertOpen();
+    const prepared = await this.enqueueRun<PreparedRun>(async () => {
+      this.assertOpen();
       const request = ritualRunRequestSchema.parse(candidate);
       const ritual = await this.repository.find(request.ritualId);
       if (!ritual || ritual.ritualRevision !== request.ritualRevision) {
@@ -136,10 +164,26 @@ export class RitualBuilderController {
         ritual.ritualRevision,
       );
       if (existing) {
-        return ritualRunControllerResultSchema.parse({
-          status: "run",
-          run: existing,
-        });
+        if (existing.status === "WAITING_FOR_RESOURCE") {
+          const retrying = reduceRitualRun(existing, ritual, {
+            type: "RETRY_RESOURCE",
+            occurredAt: this.dependencies.now(),
+          });
+          await this.repository.saveRun(retrying);
+          return {
+            kind: "drive",
+            ritual,
+            run: retrying,
+            active: this.activateRun(retrying.runId),
+          };
+        }
+        return {
+          kind: "result",
+          result: ritualRunControllerResultSchema.parse({
+            status: "run",
+            run: existing,
+          }),
+        };
       }
       let run = createRitualRun({
         approved: ritual,
@@ -153,12 +197,22 @@ export class RitualBuilderController {
         occurredAt: this.dependencies.now(),
       });
       await this.repository.saveRun(run);
-      return this.driveRun(ritual, run);
+      return {
+        kind: "drive",
+        ritual,
+        run,
+        active: this.activateRun(run.runId),
+      };
     });
+    return prepared.kind === "result"
+      ? prepared.result
+      : this.driveActiveRun(prepared.ritual, prepared.run, prepared.active);
   }
 
-  approveRunStep(candidate: unknown): Promise<RitualRunControllerResult> {
-    return this.enqueueRun(async () => {
+  async approveRunStep(candidate: unknown): Promise<RitualRunControllerResult> {
+    this.assertOpen();
+    const prepared = await this.enqueueRun<PreparedRun>(async () => {
+      this.assertOpen();
       const request = ritualRunStepApprovalRequestSchema.parse(candidate);
       const context = await this.repository.findRunWithApprovedRevision(
         request.runId,
@@ -171,13 +225,27 @@ export class RitualBuilderController {
         occurredAt: this.dependencies.now(),
       });
       await this.repository.saveRun(approved);
-      return this.driveRun(ritual, approved);
+      return {
+        kind: "drive",
+        ritual,
+        run: approved,
+        active: this.activateRun(approved.runId),
+      };
     });
+    return prepared.kind === "result"
+      ? prepared.result
+      : this.driveActiveRun(prepared.ritual, prepared.run, prepared.active);
   }
 
   cancelRun(candidate: unknown): Promise<RitualRunControllerResult> {
-    return this.enqueueRun(async () => {
-      const request = ritualRunCancelRequestSchema.parse(candidate);
+    const request = ritualRunCancelRequestSchema.parse(candidate);
+    this.assertOpen();
+    this.pendingRunCancellations.add(request.runId);
+    this.activeRuns.get(request.runId)?.abortController.abort();
+    const cancellation = this.enqueueRun(async () => {
+      const active = this.activeRuns.get(request.runId);
+      if (active?.committedResult) return active.committedResult;
+      active?.abortController.abort();
       const context = await this.repository.findRunWithApprovedRevision(
         request.runId,
       );
@@ -193,6 +261,17 @@ export class RitualBuilderController {
         run: canceled,
       });
     });
+    void cancellation.then(
+      (result) => {
+        this.pendingRunCancellations.delete(request.runId);
+        this.activeRuns.get(request.runId)?.resolveCancellation(result);
+      },
+      (error: unknown) => {
+        this.pendingRunCancellations.delete(request.runId);
+        this.activeRuns.get(request.runId)?.rejectCancellation(error);
+      },
+    );
+    return cancellation;
   }
 
   async testRun(candidate: unknown): Promise<RitualTestRunControllerResult> {
@@ -276,27 +355,91 @@ export class RitualBuilderController {
   }
 
   close(): Promise<void> {
-    return this.provider.close();
+    if (this.closePromise) return this.closePromise;
+    this.closed = true;
+    const closingRuns = new Map(this.activeRuns);
+    for (const [runId, active] of this.activeRuns) {
+      if (!active.committedResult) {
+        this.pendingRunCancellations.add(runId);
+        active.abortController.abort();
+      }
+    }
+    const cancelActiveRuns = this.enqueueRun(async () => {
+      for (const [runId, active] of this.activeRuns) {
+        closingRuns.set(runId, active);
+      }
+      let cancellationFailure: unknown;
+      for (const [runId, active] of closingRuns) {
+        if (active.committedResult) continue;
+        try {
+          const context =
+            await this.repository.findRunWithApprovedRevision(runId);
+          if (!context) throw new Error("RITUAL_RUN_NOT_FOUND");
+          const canceled = reduceRitualRun(context.run, context.approved, {
+            type: "CANCEL",
+            occurredAt: this.dependencies.now(),
+          });
+          await this.repository.saveRun(canceled);
+          active.resolveCancellation(
+            ritualRunControllerResultSchema.parse({
+              status: "run",
+              run: canceled,
+            }),
+          );
+        } catch (error) {
+          active.rejectCancellation(error);
+          cancellationFailure ??= error;
+        } finally {
+          this.pendingRunCancellations.delete(runId);
+        }
+      }
+      if (cancellationFailure) throw cancellationFailure;
+    });
+    this.closePromise = cancelActiveRuns.then(
+      () => this.provider.close(),
+      async (error: unknown) => {
+        await this.provider.close();
+        throw error;
+      },
+    );
+    return this.closePromise;
   }
 
   private async driveRun(
     ritual: ApprovedRitualRevision,
     initial: RitualRun,
+    active: ActiveRunOperation,
   ): Promise<RitualRunControllerResult> {
+    const { signal } = active.abortController;
     let run = initial;
     let durableRun = initial;
     try {
       while (run.status === "RUNNING" && run.currentStepKey) {
-        const executed = await this.runExecutor.completeCurrentStep({
-          approved: ritual,
-          run,
-        });
+        const executed = await abortable(
+          () =>
+            this.runExecutor.completeCurrentStep({
+              approved: ritual,
+              run,
+              signal,
+            }),
+          signal,
+        );
         if (executed.externalEffects.length !== 0) {
           throw new Error("RITUAL_RUN_POLICY_DENIED");
+        }
+        if (executed.status === "waiting") {
+          run = reduceRitualRun(run, ritual, {
+            type: "WAIT_FOR_RESOURCE",
+            reason: executed.reason,
+            occurredAt: this.dependencies.now(),
+          });
+          await this.repository.saveRun(run);
+          return ritualRunControllerResultSchema.parse({ status: "run", run });
         }
         run = reduceRitualRun(run, ritual, {
           type: "COMPLETE_STEP",
           stepKey: executed.stepKey,
+          ...(executed.research ? { research: executed.research } : {}),
           occurredAt: this.dependencies.now(),
         });
         await this.repository.saveRun(run);
@@ -309,6 +452,12 @@ export class RitualBuilderController {
         return ritualRunControllerResultSchema.parse({ status: "run", run });
       }
     } catch (error) {
+      if (
+        signal.aborted ||
+        (error instanceof Error && error.message === "RITUAL_RUN_CANCELED")
+      ) {
+        return active.cancellation;
+      }
       const failureCode =
         error instanceof Error && error.message === "RITUAL_RUN_POLICY_DENIED"
           ? "POLICY_DENIED"
@@ -324,24 +473,86 @@ export class RitualBuilderController {
         run: failed,
       });
     }
-    run = reduceRitualRun(run, ritual, {
-      type: "COMPLETE_RUN",
-      outcome: "NEEDS_REVIEW",
-      occurredAt: this.dependencies.now(),
-    });
-    const receipt = createRitualRunReceipt({
-      approved: ritual,
-      run,
-      receiptId: this.dependencies.createId("rcp"),
-      summary: `The deterministic fixture completed all ${run.steps.length} approved orchestration ${run.steps.length === 1 ? "step" : "steps"}.`,
-      recordedAt: this.dependencies.now(),
-    });
-    await this.repository.completeRun(run, receipt);
-    return ritualRunControllerResultSchema.parse({
-      status: "receipt",
-      run,
-      receipt,
-    });
+    try {
+      return await this.enqueueRun(async () => {
+        throwIfRunCanceled(signal, this.pendingRunCancellations.has(run.runId));
+        run = reduceRitualRun(run, ritual, {
+          type: "COMPLETE_RUN",
+          outcome: "NEEDS_REVIEW",
+          occurredAt: this.dependencies.now(),
+        });
+        const receipt = createRitualRunReceipt({
+          approved: ritual,
+          run,
+          receiptId: this.dependencies.createId("rcp"),
+          summary: run.steps.some((step) => step.research)
+            ? `The local Run completed ${run.steps.length} approved ${run.steps.length === 1 ? "step" : "steps"} with bounded Exa evidence.`
+            : `The local Run completed all ${run.steps.length} approved orchestration ${run.steps.length === 1 ? "step" : "steps"}.`,
+          recordedAt: this.dependencies.now(),
+        });
+        await this.repository.completeRun(run, receipt, { signal });
+        const result = ritualRunControllerResultSchema.parse({
+          status: "receipt",
+          run,
+          receipt,
+        });
+        active.committedResult = result;
+        this.pendingRunCancellations.delete(run.runId);
+        return result;
+      });
+    } catch (error) {
+      if (
+        signal.aborted ||
+        (error instanceof Error && error.message === "RITUAL_RUN_CANCELED")
+      ) {
+        return active.cancellation;
+      }
+      throw error;
+    }
+  }
+
+  private async driveActiveRun(
+    ritual: ApprovedRitualRevision,
+    run: RitualRun,
+    active: ActiveRunOperation,
+  ): Promise<RitualRunControllerResult> {
+    try {
+      return await this.driveRun(ritual, run, active);
+    } finally {
+      if (this.activeRuns.get(run.runId) === active) {
+        this.activeRuns.delete(run.runId);
+      }
+    }
+  }
+
+  private activateRun(runId: string): ActiveRunOperation {
+    if (this.activeRuns.has(runId))
+      throw new Error("RITUAL_RUN_ALREADY_ACTIVE");
+    const abortController = new AbortController();
+    let resolveCancellation!: (result: RitualRunControllerResult) => void;
+    let rejectCancellation!: (error: unknown) => void;
+    const cancellation = new Promise<RitualRunControllerResult>(
+      (resolve, reject) => {
+        resolveCancellation = resolve;
+        rejectCancellation = reject;
+      },
+    );
+    const active: ActiveRunOperation = {
+      abortController,
+      cancellation,
+      resolveCancellation,
+      rejectCancellation,
+      committedResult: null,
+    };
+    this.activeRuns.set(runId, active);
+    if (this.closed || this.pendingRunCancellations.has(runId)) {
+      abortController.abort();
+    }
+    return active;
+  }
+
+  private assertOpen(): void {
+    if (this.closed) throw new Error("RITUAL_CONTROLLER_CLOSED");
   }
 
   private enqueueRun<T>(operation: () => Promise<T>): Promise<T> {
@@ -352,4 +563,34 @@ export class RitualBuilderController {
     );
     return result;
   }
+}
+
+function abortable<T>(work: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new Error("RITUAL_RUN_CANCELED"));
+  return new Promise<T>((resolve, reject) => {
+    const cancel = () => reject(new Error("RITUAL_RUN_CANCELED"));
+    signal.addEventListener("abort", cancel, { once: true });
+    let operation: Promise<T>;
+    try {
+      operation = work();
+    } catch (error) {
+      signal.removeEventListener("abort", cancel);
+      reject(error);
+      return;
+    }
+    void operation.then(
+      (value) => {
+        signal.removeEventListener("abort", cancel);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", cancel);
+        reject(error);
+      },
+    );
+  });
+}
+
+function throwIfRunCanceled(signal: AbortSignal, pending: boolean): void {
+  if (signal.aborted || pending) throw new Error("RITUAL_RUN_CANCELED");
 }

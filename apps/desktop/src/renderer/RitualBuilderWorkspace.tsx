@@ -81,6 +81,7 @@ export function RitualBuilderWorkspace({
   const testRunInFlight = useRef(false);
   const learningInFlight = useRef(false);
   const runInFlight = useRef(false);
+  const cancelRunInFlight = useRef(false);
 
   useEffect(() => {
     if (!bridge) {
@@ -325,16 +326,20 @@ export function RitualBuilderWorkspace({
     }
     if (event.type === "CANCEL_RUN") {
       if (
-        runInFlight.current ||
-        (state.phase !== "RUNNING_RITUAL" &&
-          state.phase !== "RUN_WAITING_FOR_OWNER")
+        cancelRunInFlight.current ||
+        (state.phase !== "STARTING_RUN" &&
+          state.phase !== "RUNNING_RITUAL" &&
+          state.phase !== "RUN_WAITING_FOR_OWNER" &&
+          state.phase !== "RUN_WAITING_FOR_RESOURCE")
       ) {
         return;
       }
-      const runId = state.run.runId;
+      const activeRun = state.run;
+      if (!activeRun) return;
+      const runId = activeRun.runId;
       const next = reduceRitualBuilder(state, event);
       setState(next);
-      runInFlight.current = true;
+      cancelRunInFlight.current = true;
       const requestGeneration = ++generation.current;
       void bridge
         .cancelRun({ schemaVersion: 1, runId })
@@ -353,7 +358,7 @@ export function RitualBuilderWorkspace({
           );
         })
         .finally(() => {
-          runInFlight.current = false;
+          cancelRunInFlight.current = false;
         });
       return;
     }

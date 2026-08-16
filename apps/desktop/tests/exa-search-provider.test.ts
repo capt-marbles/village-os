@@ -159,6 +159,33 @@ describe("Exa search provider", () => {
     });
   });
 
+  it("aborts a deferred network request when the Run is canceled", async () => {
+    let observedSignal: AbortSignal | undefined;
+    const fetch = vi.fn<typeof globalThis.fetch>(
+      async (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          observedSignal = init?.signal ?? undefined;
+          observedSignal?.addEventListener(
+            "abort",
+            () => reject(new Error("aborted")),
+            { once: true },
+          );
+        }),
+    );
+    const provider = new ExaSearchProvider({
+      credentials: credentialSource(),
+      fetch,
+    });
+    const cancellation = new AbortController();
+    const search = provider.search(request, { signal: cancellation.signal });
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+
+    cancellation.abort();
+
+    await expect(search).rejects.toThrow("RITUAL_RUN_CANCELED");
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
   it.each([
     ["SECRET_REVOKED", "AUTHENTICATION_REQUIRED"],
     ["SECRET_VAULT_CORRUPT", "CREDENTIAL_STORE_UNAVAILABLE"],
