@@ -54,16 +54,16 @@ function record(value: unknown): Record<string, unknown> | null {
 
 export function readVillageCsrfCookie(): string | undefined {
   if (typeof document === "undefined") return undefined;
+  for (const pair of document.cookie.split(";")) {
+    const [name, ...value] = pair.trim().split("=");
+    if (name === "village_csrf") return decodeURIComponent(value.join("="));
+  }
   if (
     import.meta.env.DEV &&
     (window.location.hostname === "localhost" ||
       window.location.hostname === "127.0.0.1")
   ) {
     return "village-local-e2e-csrf-token-00000001";
-  }
-  for (const pair of document.cookie.split(";")) {
-    const [name, ...value] = pair.trim().split("=");
-    if (name === "village_csrf") return decodeURIComponent(value.join("="));
   }
   return undefined;
 }
