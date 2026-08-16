@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ContinuitySetupClient,
   type ContinuitySetupGrant,
+  type ContinuityGrantStatus,
   type ContinuitySetupSession,
 } from "./continuity-setup-client.js";
 
@@ -18,6 +19,11 @@ interface ContinuitySetupOperations {
     destination: ContinuitySetupSession,
   ): Promise<ContinuitySetupGrant>;
   revokeGrant(grantId: string): Promise<void>;
+  deleteGrant(grantId: string): Promise<void>;
+  loadGrantStatus(
+    grantId: string,
+    signal?: AbortSignal,
+  ): Promise<ContinuityGrantStatus>;
 }
 
 export function ContinuitySetupCard({
@@ -42,7 +48,11 @@ export function ContinuitySetupCard({
   const [destinationId, setDestinationId] = useState("");
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState(false);
-  const [stopped, setStopped] = useState(false);
+  const [deleted, setDeleted] = useState(false);
+  const [confirmingDeletion, setConfirmingDeletion] = useState(false);
+  const [transfer, setTransfer] = useState<
+    ContinuityGrantStatus["transfer"] | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -51,9 +61,13 @@ export function ContinuitySetupCard({
       .load(abort.signal)
       .then((snapshot) => {
         setSessions(snapshot.sessions);
-        const active = snapshot.grants.find((item) =>
-          ["PENDING", "ACTIVE"].includes(item.state),
-        );
+        const active =
+          snapshot.grants.find((item) =>
+            ["PENDING", "ACTIVE"].includes(item.state),
+          ) ??
+          snapshot.grants.find((item) =>
+            ["REVOKED", "EXPIRED"].includes(item.state),
+          );
         if (active) {
           setGrant(active);
           setStep("ACTIVE");
@@ -69,6 +83,40 @@ export function ContinuitySetupCard({
       });
     return () => abort.abort();
   }, [activeClient]);
+
+  useEffect(() => {
+    if (!grant || !["PENDING", "ACTIVE"].includes(grant.state)) {
+      return;
+    }
+    const abort = new AbortController();
+    let timer: number | undefined;
+    const refresh = async () => {
+      try {
+        const status = await activeClient.loadGrantStatus(
+          grant.grantId,
+          abort.signal,
+        );
+        if (!abort.signal.aborted) {
+          setGrant((current) => {
+            const effectiveState = status.transfer.state;
+            return current?.state === effectiveState
+              ? current
+              : { ...status.grant, state: effectiveState };
+          });
+          setTransfer(status.transfer);
+        }
+      } catch {
+        // The setup state remains usable when transient status refresh fails.
+      } finally {
+        if (!abort.signal.aborted) timer = window.setTimeout(refresh, 3_000);
+      }
+    };
+    void refresh();
+    return () => {
+      abort.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [activeClient, grant]);
 
   const source = sessions.find((item) => item.browserSessionId === sourceId);
   const sourceCandidates = sessions.filter((candidate) =>
@@ -91,12 +139,17 @@ export function ContinuitySetupCard({
     destination?.deviceName ??
     nameFor(grant?.destinationBrowserSessionId, sessions);
 
+  if (loading || (!error && !grant && sourceCandidates.length === 0)) {
+    return null;
+  }
+
   const approve = async () => {
     if (!source || !destination || pending) return;
     setPending(true);
     setError(null);
     try {
       setGrant(await activeClient.createGrant(source, destination));
+      setDeleted(false);
       setStep("ACTIVE");
     } catch {
       setError(
@@ -113,11 +166,32 @@ export function ContinuitySetupCard({
     setError(null);
     try {
       await activeClient.revokeGrant(grant.grantId);
-      setGrant(null);
-      setStopped(true);
-      setStep("CLOSED");
+      setGrant((current) =>
+        current ? { ...current, state: "REVOKED" } : current,
+      );
+      setTransfer((current) =>
+        current ? { ...current, state: "REVOKED" } : current,
+      );
     } catch {
       setError("Village could not stop this handoff. Try again.");
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const deleteGrant = async () => {
+    if (!grant || pending) return;
+    setPending(true);
+    setError(null);
+    try {
+      await activeClient.deleteGrant(grant.grantId);
+      setGrant(null);
+      setTransfer(null);
+      setConfirmingDeletion(false);
+      setDeleted(true);
+      setStep("CLOSED");
+    } catch {
+      setError("Village could not delete this handoff. Try again.");
     } finally {
       setPending(false);
     }
@@ -143,8 +217,7 @@ export function ContinuitySetupCard({
 
       {step === "CLOSED" ? (
         <div className="continuity-card__summary" aria-live="polite">
-          {loading ? <p>Checking paired Macs…</p> : null}
-          {!loading && sourceCandidates.length > 0 ? (
+          {sourceCandidates.length > 0 ? (
             <>
               <p>
                 {sessions.length === 2
@@ -154,7 +227,7 @@ export function ContinuitySetupCard({
               <button
                 type="button"
                 onClick={() => {
-                  setStopped(false);
+                  setDeleted(false);
                   setStep("SOURCE");
                 }}
               >
@@ -162,20 +235,8 @@ export function ContinuitySetupCard({
               </button>
             </>
           ) : null}
-          {!loading && sourceCandidates.length === 0 ? (
-            <>
-              <p>
-                {sessions.length < 2
-                  ? "Pair two Macs to try the demo handoff."
-                  : "Finish continuity enrollment on a destination Mac."}
-              </p>
-              <p className="continuity-card__boundary">
-                LinkedIn stays local for now.
-              </p>
-            </>
-          ) : null}
-          {stopped ? (
-            <p className="continuity-card__success">Handoff stopped</p>
+          {deleted ? (
+            <p className="continuity-card__success">Handoff deleted</p>
           ) : null}
         </div>
       ) : null}
@@ -183,8 +244,8 @@ export function ContinuitySetupCard({
       {step === "SOURCE" ? (
         <SetupChoice
           progress="Step 1 of 3"
-          legend="Where should the session come from?"
-          help="Choose the Mac where the Village demo account is already signed in."
+          legend="Where should the Site Session come from?"
+          help="Choose the Mac where the owned fixture Site Session is already signed in."
           sessions={sourceCandidates}
           value={sourceId}
           onChange={(value) => {
@@ -199,7 +260,7 @@ export function ContinuitySetupCard({
       {step === "DESTINATION" ? (
         <SetupChoice
           progress="Step 2 of 3"
-          legend="Where should Village keep it available?"
+          legend="Where should Village keep this Site Session available?"
           help="Only Macs that have enrolled a protected recipient key can receive it."
           sessions={destinations}
           value={destinationId}
@@ -219,7 +280,7 @@ export function ContinuitySetupCard({
             {destination.deviceName}
           </p>
           <ul className="continuity-card__agreement">
-            <li>Village demo account only</li>
+            <li>Village-owned test fixture only</li>
             <li>One-way handoff</li>
             <li>Expires after 7 days</li>
             <li>Cloudflare stores encrypted session data it cannot read</li>
@@ -247,22 +308,72 @@ export function ContinuitySetupCard({
 
       {step === "ACTIVE" && grant ? (
         <div className="continuity-card__step" aria-live="polite">
-          <p className="continuity-card__success">Handoff ready</p>
+          <p className="continuity-card__success">{grantStateCopy(grant)}</p>
           <h3>
             {sourceName} <span aria-hidden="true">→</span> {destinationName}
           </h3>
-          <p>
-            Village can keep the demo session available until{" "}
-            {formatDate(grant.expiresAt)}.
-          </p>
-          <button
-            type="button"
-            className="button-secondary"
-            onClick={() => void stop()}
-            disabled={pending}
-          >
-            {pending ? "Stopping…" : "Stop handoff"}
-          </button>
+          {confirmingDeletion ? (
+            <div className="continuity-card__agreement">
+              <p>
+                This permanently deletes the encrypted mailbox and continuity
+                relationship. It does not delete either local Site Session.
+              </p>
+              <div className="continuity-card__actions">
+                <button
+                  type="button"
+                  className="button-secondary"
+                  onClick={() => setConfirmingDeletion(false)}
+                  disabled={pending}
+                >
+                  Keep handoff
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void deleteGrant()}
+                  disabled={pending}
+                >
+                  {pending ? "Deleting…" : "Confirm deletion"}
+                </button>
+              </div>
+            </div>
+          ) : grant.state === "REVOKED" || grant.state === "EXPIRED" ? (
+            <>
+              <p>No further Site Session revisions can be transferred.</p>
+              <button
+                type="button"
+                className="button-secondary"
+                onClick={() => setConfirmingDeletion(true)}
+              >
+                Delete handoff data
+              </button>
+            </>
+          ) : (
+            <>
+              <p>
+                Village can keep this Site Session available until{" "}
+                {formatDate(grant.expiresAt)}.
+              </p>
+              {transfer ? <TransferStatus transfer={transfer} /> : null}
+              <div className="continuity-card__actions">
+                <button
+                  type="button"
+                  className="button-secondary"
+                  onClick={() => void stop()}
+                  disabled={pending}
+                >
+                  {pending ? "Stopping…" : "Stop handoff"}
+                </button>
+                <button
+                  type="button"
+                  className="button-secondary"
+                  onClick={() => setConfirmingDeletion(true)}
+                  disabled={pending}
+                >
+                  Delete handoff data
+                </button>
+              </div>
+            </>
+          )}
         </div>
       ) : null}
 
@@ -358,4 +469,35 @@ function formatDate(value: string) {
     day: "numeric",
     year: "numeric",
   }).format(new Date(value));
+}
+
+function grantStateCopy(grant: ContinuitySetupGrant) {
+  return grant.state === "REVOKED"
+    ? "Handoff stopped"
+    : grant.state === "EXPIRED"
+      ? "Handoff expired"
+      : "Handoff ready";
+}
+
+function TransferStatus({
+  transfer,
+}: {
+  transfer: ContinuityGrantStatus["transfer"];
+}) {
+  const pending = transfer.pendingRevisions;
+  return (
+    <div className="continuity-card__agreement" aria-label="Transfer status">
+      <p>
+        {transfer.publishedRevision === 0
+          ? "No updates published yet"
+          : `${transfer.publishedRevision} ${transfer.publishedRevision === 1 ? "update" : "updates"} published`}
+      </p>
+      <p>Destination applied revision {transfer.appliedRevision}</p>
+      <p>
+        {pending === 0
+          ? "Latest revision is applied"
+          : `${pending} ${pending === 1 ? "update is" : "updates are"} waiting for the destination`}
+      </p>
+    </div>
+  );
 }

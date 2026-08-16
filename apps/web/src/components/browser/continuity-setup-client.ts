@@ -1,10 +1,13 @@
 import {
   continuityGrantIdSchema,
   continuityGrantCreationResponseSchema,
+  continuityGrantDeletionResponseSchema,
   continuityGrantRevocationResponseSchema,
+  continuityGrantStatusResponseSchema,
   continuitySetupResponseSchema,
   continuitySetupSessionSchema,
   type ContinuitySetupResponse,
+  type ContinuityGrantStatusResponse,
 } from "@village/contracts";
 import {
   createVillageId,
@@ -14,6 +17,7 @@ import {
 export type ContinuitySetupSession =
   ContinuitySetupResponse["sessions"][number];
 export type ContinuitySetupGrant = ContinuitySetupResponse["grants"][number];
+export type ContinuityGrantStatus = ContinuityGrantStatusResponse;
 
 export class ContinuitySetupClient {
   private readonly baseUrl: URL;
@@ -79,6 +83,27 @@ export class ContinuitySetupClient {
     return parsed.data.grant;
   }
 
+  async loadGrantStatus(
+    grantIdCandidate: unknown,
+    signal?: AbortSignal,
+  ): Promise<ContinuityGrantStatus> {
+    const grantId = continuityGrantIdSchema.parse(grantIdCandidate);
+    const response = await this.request(
+      new URL(`/api/site-session-continuity/grants/${grantId}`, this.baseUrl),
+      {
+        credentials: "include",
+        headers: { accept: "application/json" },
+        ...(signal ? { signal } : {}),
+      },
+    );
+    const candidate: unknown = await response.json();
+    const parsed = continuityGrantStatusResponseSchema.safeParse(candidate);
+    if (!response.ok || !parsed.success) {
+      throw new Error("CONTINUITY_GRANT_STATUS_RESPONSE_INVALID");
+    }
+    return parsed.data;
+  }
+
   async revokeGrant(grantIdCandidate: unknown): Promise<void> {
     const grantId = continuityGrantIdSchema.parse(grantIdCandidate);
     const candidate = await this.ownerMutation(
@@ -89,12 +114,28 @@ export class ContinuitySetupClient {
     }
   }
 
-  private async ownerMutation(path: string, body?: unknown): Promise<unknown> {
+  async deleteGrant(grantIdCandidate: unknown): Promise<void> {
+    const grantId = continuityGrantIdSchema.parse(grantIdCandidate);
+    const candidate = await this.ownerMutation(
+      `/api/site-session-continuity/grants/${grantId}`,
+      undefined,
+      "DELETE",
+    );
+    if (!continuityGrantDeletionResponseSchema.safeParse(candidate).success) {
+      throw new Error("CONTINUITY_DELETION_RESPONSE_INVALID");
+    }
+  }
+
+  private async ownerMutation(
+    path: string,
+    body?: unknown,
+    method: "POST" | "DELETE" = "POST",
+  ): Promise<unknown> {
     const csrf = this.csrfToken();
     if (!csrf || csrf.length < 32)
       throw new Error("CONTINUITY_CSRF_UNAVAILABLE");
     const response = await this.request(new URL(path, this.baseUrl), {
-      method: "POST",
+      method,
       credentials: "include",
       headers: {
         accept: "application/json",

@@ -115,4 +115,60 @@ describe("continuity setup client", () => {
     );
     expect(request.mock.calls[0]![1]?.method).toBe("POST");
   });
+
+  it("deletes one exact revoked grant with owner CSRF", async () => {
+    const grantId = "cgr_01J00000000000000000000009";
+    const request = vi.fn<typeof fetch>(async () =>
+      Response.json({ ok: true, deleted: true }),
+    );
+    const client = new ContinuitySetupClient(
+      "https://village.test",
+      request,
+      () => csrf,
+    );
+
+    await expect(client.deleteGrant(grantId)).resolves.toBeUndefined();
+    expect(String(request.mock.calls[0]![0])).toBe(
+      `https://village.test/api/site-session-continuity/grants/${grantId}`,
+    );
+    expect(request.mock.calls[0]![1]?.method).toBe("DELETE");
+    expect(
+      new Headers(request.mock.calls[0]![1]?.headers).get("x-village-csrf"),
+    ).toBe(csrf);
+  });
+
+  it("loads bounded transfer status without exposing mailbox content", async () => {
+    const grantId = "cgr_01J00000000000000000000009";
+    const request = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        ok: true,
+        grant: {
+          grantId,
+          sourceDeviceId: source.deviceId,
+          destinationDeviceId: destination.deviceId,
+          sourceBrowserSessionId: source.browserSessionId,
+          destinationBrowserSessionId: destination.browserSessionId,
+          site: "OWNED_FIXTURE",
+          state: "ACTIVE",
+          createdAt: "2026-08-15T21:00:00.000Z",
+          expiresAt: "2026-08-22T21:00:00.000Z",
+        },
+        transfer: {
+          state: "ACTIVE",
+          publishedRevision: 20,
+          appliedRevision: 20,
+          pendingRevisions: 0,
+        },
+      }),
+    );
+    const client = new ContinuitySetupClient("https://village.test", request);
+
+    await expect(client.loadGrantStatus(grantId)).resolves.toMatchObject({
+      transfer: { publishedRevision: 20, appliedRevision: 20 },
+    });
+    expect(String(request.mock.calls[0]![0])).toBe(
+      `https://village.test/api/site-session-continuity/grants/${grantId}`,
+    );
+    expect(request.mock.calls[0]![1]?.method).toBeUndefined();
+  });
 });
