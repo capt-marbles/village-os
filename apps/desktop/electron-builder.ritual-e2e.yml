@@ -4,6 +4,7 @@ directories:
   output: dist/ritual-e2e
 extraMetadata:
   main: dist/main/ritual-builder-entry.js
+  villageUpdateSignerSha256: null
 mac:
   target: dir
   identity: "-"

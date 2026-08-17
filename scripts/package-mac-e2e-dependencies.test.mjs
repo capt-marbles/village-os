@@ -19,6 +19,12 @@ const ritualPackageConfig = parse(
     "utf8",
   ),
 );
+const delegatedPackageConfig = parse(
+  await readFile(
+    new URL("../apps/desktop/electron-builder.e2e.yml", import.meta.url),
+    "utf8",
+  ),
+);
 const ritualPackageEntry = await readFile(
   new URL("../apps/desktop/src/main/ritual-builder-entry.ts", import.meta.url),
   "utf8",
@@ -47,6 +53,19 @@ test("the packaged desktop command builds its complete workspace graph", () => {
     desktopPackage.scripts["package:mac:e2e"],
     /^pnpm --dir \.\.\/\.\. exec tsc -b --force packages\/contracts packages\/ui packages\/test-auth-site apps\/desktop && pnpm build && /,
   );
+});
+
+test("the delegated smoke package excludes every nested package output", () => {
+  for (const excludedOutput of [
+    "!dist/mac*/**",
+    "!dist/steward-default/**",
+    "!dist/ritual-e2e/**",
+    "!dist/e2e/**",
+    "!dist/continuity-e2e/**",
+    "!dist/credential-e2e/**",
+  ]) {
+    assert.ok(delegatedPackageConfig.files.includes(excludedOutput));
+  }
 });
 
 test("CI delegates packaged dependency preparation to the package command", () => {

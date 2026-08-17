@@ -7,6 +7,8 @@ export const VILLAGE_PRODUCT_ID = "com.village.desktop" as const;
 export const VILLAGE_UPDATE_CHANNEL = "alpha" as const;
 export const VILLAGE_UPDATE_ENDPOINT =
   "https://updates.village.run/desktop/alpha/manifest.json" as const;
+export const VILLAGE_UPDATE_ARTIFACT_BASE_URL =
+  "https://updates.village.run/desktop/alpha/" as const;
 
 export interface UpdateTrustPolicy {
   productId: string;
@@ -25,6 +27,16 @@ export interface UpdateCandidate {
   signerSha256: string;
   expectedSha512: string;
   downloadedSha512: string;
+  artifactRequestedUrl: string;
+  artifactFinalUrl: string;
+}
+
+export interface VillageUpdateManifest {
+  productId: string;
+  channel: string;
+  version: string;
+  artifactUrl: string;
+  sha512: string;
 }
 
 export type UpdateValidation =
@@ -38,6 +50,8 @@ export type UpdateValidation =
         | "CHANNEL_MISMATCH"
         | "ENDPOINT_MISMATCH"
         | "REDIRECT_DENIED"
+        | "ARTIFACT_ENDPOINT_MISMATCH"
+        | "ARTIFACT_REDIRECT_DENIED"
         | "SIGNER_MISMATCH"
         | "CHECKSUM_MISMATCH"
         | "VERSION_NOT_NEWER";
@@ -65,6 +79,10 @@ function parseVersion(value: string): ParsedVersion | undefined {
     core: [Number(match[1]), Number(match[2]), Number(match[3])],
     prerelease,
   };
+}
+
+export function isValidUpdateVersion(value: string): boolean {
+  return parseVersion(value) !== undefined;
 }
 
 function compareVersions(left: ParsedVersion, right: ParsedVersion): number {
@@ -127,6 +145,8 @@ function parseCandidate(candidate: unknown): UpdateCandidate | undefined {
     "signerSha256",
     "expectedSha512",
     "downloadedSha512",
+    "artifactRequestedUrl",
+    "artifactFinalUrl",
   ] as const;
   if (
     Object.keys(record).length !== keys.length ||
@@ -135,6 +155,52 @@ function parseCandidate(candidate: unknown): UpdateCandidate | undefined {
     return undefined;
   }
   return record as unknown as UpdateCandidate;
+}
+
+export function parseUpdateManifest(
+  input: unknown,
+): VillageUpdateManifest | undefined {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return undefined;
+  }
+  const record = input as Record<string, unknown>;
+  const keys = [
+    "productId",
+    "channel",
+    "version",
+    "artifactUrl",
+    "sha512",
+  ] as const;
+  if (
+    Object.keys(record).length !== keys.length ||
+    !keys.every((key) => typeof record[key] === "string") ||
+    !parseVersion(record.version as string) ||
+    !isLowercaseHex(record.sha512 as string, 128) ||
+    !isAllowedArtifactUrl(record.artifactUrl as string)
+  ) {
+    return undefined;
+  }
+  return record as unknown as VillageUpdateManifest;
+}
+
+function isAllowedArtifactUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    const base = new URL(VILLAGE_UPDATE_ARTIFACT_BASE_URL);
+    const relativePath = url.pathname.slice(base.pathname.length);
+    return (
+      url.protocol === "https:" &&
+      url.origin === base.origin &&
+      url.pathname.startsWith(base.pathname) &&
+      relativePath.length > 4 &&
+      !relativePath.includes("/") &&
+      /^[A-Za-z0-9][A-Za-z0-9._-]*\.zip$/.test(relativePath) &&
+      url.search === "" &&
+      url.hash === ""
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function validateUpdateCandidate(
@@ -163,6 +229,10 @@ export function validateUpdateCandidate(
     return { ok: false, code: "ENDPOINT_MISMATCH" };
   if (candidate.finalUrl !== candidate.requestedUrl)
     return { ok: false, code: "REDIRECT_DENIED" };
+  if (!isAllowedArtifactUrl(candidate.artifactRequestedUrl))
+    return { ok: false, code: "ARTIFACT_ENDPOINT_MISMATCH" };
+  if (candidate.artifactFinalUrl !== candidate.artifactRequestedUrl)
+    return { ok: false, code: "ARTIFACT_REDIRECT_DENIED" };
   if (!equalHex(candidate.signerSha256, policy.signerSha256, 64))
     return { ok: false, code: "SIGNER_MISMATCH" };
   if (!equalHex(candidate.downloadedSha512, candidate.expectedSha512, 128))
