@@ -4,16 +4,18 @@ import {
   runRitualBuilderApplication,
   runVillageApplication,
 } from "./runtime.js";
-import {
-  activateRuntimeSurface,
-  resolveRuntimeSurface,
-} from "./runtime-surface.js";
+import { activateRuntimeSurface } from "./runtime-surface.js";
 import { claimVillageInstance } from "./single-instance.js";
 
 let workspaceLaunch: ReturnType<typeof runVillageApplication> | undefined;
 
-function openWorkspace() {
-  workspaceLaunch ??= runVillageApplication();
+function openBrowserWorkspace() {
+  if (!workspaceLaunch) {
+    workspaceLaunch = runVillageApplication();
+    void workspaceLaunch.catch(() => {
+      workspaceLaunch = undefined;
+    });
+  }
   return workspaceLaunch;
 }
 
@@ -26,7 +28,8 @@ if (ownsInstance) {
   const activateWorkspace = (arguments_: readonly string[]) =>
     activateRuntimeSurface(arguments_, {
       acceptPairingLink: acceptRuntimePairingLink,
-      openWorkspace: () => void openWorkspace().catch(reportActivationFailure),
+      openBrowserWorkspace: () =>
+        void openBrowserWorkspace().catch(reportActivationFailure),
     });
 
   app.on("second-instance", (_event, commandLine) => {
@@ -37,11 +40,16 @@ if (ownsInstance) {
   });
 }
 
-const launch = ownsInstance
-  ? resolveRuntimeSurface(process.argv) === "RITUAL_BUILDER"
-    ? runRitualBuilderApplication()
-    : openWorkspace()
-  : Promise.resolve();
+let launch: Promise<unknown> = Promise.resolve();
+if (ownsInstance) {
+  const initialWorkspaceActivated = activateRuntimeSurface(process.argv, {
+    acceptPairingLink: acceptRuntimePairingLink,
+    openBrowserWorkspace: () => {
+      launch = openBrowserWorkspace();
+    },
+  });
+  if (!initialWorkspaceActivated) launch = runRitualBuilderApplication();
+}
 
 void launch.catch((error: unknown) => {
   console.error("Village startup blocked:", error);

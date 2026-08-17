@@ -1,6 +1,12 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { useReducer } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -87,12 +93,10 @@ describe("Ritual Builder", () => {
     expect(
       screen.getByText(/What regular work should I take care of\?/u),
     ).toBeTruthy();
-    expect(
-      screen
-        .getByText("Steward inbox")
-        .closest("aside")
-        ?.getAttribute("aria-label"),
-    ).toBe("Ritual agreement and activity");
+    const agreement = screen.getByRole("complementary", {
+      name: "Ritual agreement and activity",
+    });
+    expect(within(agreement).getByText("Steward inbox")).toBeTruthy();
   });
 
   it("offers a bounded 30-day signal starter without hiding the source limits", () => {

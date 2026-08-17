@@ -274,7 +274,6 @@ export async function runVillageApplication(
 ): Promise<VillageAppWindow> {
   await app.whenReady();
   await ensureRitualServices();
-  for (const argument of process.argv) pairingInbox.accept(argument);
   app.on("window-all-closed", () => app.quit());
   const villageWindow = await startVillageRuntime(
     pairedIdentitySource,

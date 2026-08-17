@@ -7,6 +7,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import {
   createRitualRun,
@@ -370,10 +371,10 @@ describe("RitualBuilderWorkspace", () => {
     });
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
 
-    const inboxHeading = await screen.findByText("Steward inbox");
-    expect(
-      inboxHeading.closest('aside[aria-label="Ritual agreement and activity"]'),
-    ).not.toBeNull();
+    const agreement = await screen.findByRole("complementary", {
+      name: "Ritual agreement and activity",
+    });
+    expect(within(agreement).getByText("Steward inbox")).toBeTruthy();
     expect(screen.getByText("2 needs attention")).toBeTruthy();
     expect(screen.getAllByText("Approve")[0]).toBeTruthy();
     expect(screen.getByText(runReceipt.summary)).toBeTruthy();
@@ -559,10 +560,10 @@ describe("RitualBuilderWorkspace", () => {
 
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
 
-    const exaWait = await screen.findByText("Exa research is waiting");
-    expect(exaWait.closest("aside")?.getAttribute("aria-label")).toBe(
-      "Ritual agreement and activity",
-    );
+    const agreement = await screen.findByRole("complementary", {
+      name: "Ritual agreement and activity",
+    });
+    expect(within(agreement).getByText("Exa research is waiting")).toBeTruthy();
     expect(screen.getByText(/Add or replace the Exa key/u)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry research" }));
     await screen.findByText("Run Receipt");
