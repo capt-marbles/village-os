@@ -1,5 +1,6 @@
 export const releaseInternalModulePrefixes = [
   "dist/main/browser-host-manager",
+  "dist/main/continuity-",
   "dist/main/desktop-delegated-workflow",
   "dist/main/fixture-session-handler",
   "dist/main/internal-fixture-provisioner",
@@ -14,8 +15,11 @@ export const releaseInternalModulePrefixes = [
   "dist/main/abrupt-exit-barrier",
   "dist/main/internal-paired-bootstrap",
   "dist/main/lazy-delegated-workflow",
+  "dist/main/linkedin-session-continuity",
   "dist/main/paired-proof-coordination",
   "dist/main/proof-projection",
+  "dist/main/runtime-continuity-",
+  "dist/main/site-session-continuity",
 ];
 
 export const requiredInternalReleaseExclusions = [

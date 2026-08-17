@@ -20,7 +20,7 @@ describe("pair desktop card", () => {
     expect(html).not.toContain("pairing secret");
   });
 
-  it("offers a safe retry after the desktop already consumed the challenge", async () => {
+  it("opens the single assigned LinkedIn browser after pairing", async () => {
     const challenge = {
       principalId: "prn_01J00000000000000000000000",
       pairingId: "par_01J00000000000000000000000",
@@ -28,15 +28,11 @@ describe("pair desktop card", () => {
       fingerprint: "A1B2C3D4E5F60708",
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
     };
-    const createSession = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("FIXTURE_TEMPORARILY_UNAVAILABLE"))
-      .mockResolvedValueOnce({
-        jobId: "job_01J00000000000000000000000",
-        browserSessionId: "brs_01J00000000000000000000000",
-        hostId: "hst_01J00000000000000000000000",
-        fixtureBrowserSessionId: "brs_01J00000000000000000000001",
-      });
+    const createSession = vi.fn().mockResolvedValueOnce({
+      jobId: "job_01J00000000000000000000000",
+      browserSessionId: "brs_01J00000000000000000000000",
+      hostId: "hst_01J00000000000000000000000",
+    });
     const client = {
       begin: vi.fn().mockResolvedValue(challenge),
       confirm: vi.fn().mockResolvedValue(undefined),
@@ -65,21 +61,9 @@ describe("pair desktop card", () => {
     );
 
     expect(
-      await screen.findByText(
-        /desktop is paired, but browser setup is incomplete/i,
-      ),
-    ).toBeTruthy();
-    expect(screen.queryByText(/copy a fresh request/i)).toBeNull();
-    fireEvent.click(
-      screen.getByRole("button", { name: "Retry browser setup" }),
-    );
-
-    expect(
       await screen.findByRole("link", { name: "Open assigned browser" }),
     ).toBeTruthy();
-    expect(
-      screen.getByRole("link", { name: "Open without continuity" }),
-    ).toBeTruthy();
-    expect(createSession).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(/continuity/i)).toBeNull();
+    expect(createSession).toHaveBeenCalledOnce();
   });
 });

@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   PairingSetupClient,
   pairingCompletionUrl,
-  pairingLegacySessionUrl,
   pairingSessionUrl,
   parsePublicPairingRequest,
   readVillageCsrfCookie,
@@ -70,7 +69,7 @@ describe("pairing setup client", () => {
     });
   });
 
-  it("begins, confirms, polls, and creates distinct personal and continuity sessions with CSRF", async () => {
+  it("begins, confirms, polls, and creates one local LinkedIn session with CSRF", async () => {
     const request = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -83,13 +82,6 @@ describe("pairing setup client", () => {
       .mockResolvedValueOnce(
         Response.json(
           { ok: true, jobId: "job_01J00000000000000000000000" },
-          { status: 201 },
-        ),
-      )
-      .mockResolvedValueOnce(Response.json({ ok: true }, { status: 201 }))
-      .mockResolvedValueOnce(
-        Response.json(
-          { ok: true, jobId: "job_01J00000000000000000000001" },
           { status: 201 },
         ),
       )
@@ -111,25 +103,14 @@ describe("pairing setup client", () => {
       `https://village.test/api/pairing/${challenge.pairingId}`,
       "https://village.test/api/jobs",
       "https://village.test/api/jobs/job_01J00000000000000000000000/browser-sessions",
-      "https://village.test/api/jobs",
-      "https://village.test/api/jobs/job_01J00000000000000000000001/browser-sessions",
     ]);
     const sessionBody = JSON.parse(String(request.mock.calls[4]![1]?.body));
     expect(sessionBody).toMatchObject({
       deviceId: publicRequest.deviceId,
       site: "LINKEDIN",
     });
-    const continuityBody = JSON.parse(String(request.mock.calls[6]![1]?.body));
-    expect(continuityBody).toMatchObject({
-      deviceId: publicRequest.deviceId,
-      site: "OWNED_FIXTURE",
-    });
     expect(session.browserSessionId).toMatch(/^brs_[0-9A-HJKMNP-TV-Z]{26}$/);
     expect(session.hostId).toMatch(/^hst_[0-9A-HJKMNP-TV-Z]{26}$/);
-    expect(session.fixtureBrowserSessionId).toMatch(
-      /^brs_[0-9A-HJKMNP-TV-Z]{26}$/,
-    );
-    expect(session.fixtureBrowserSessionId).not.toBe(session.browserSessionId);
     expect(
       new Headers(request.mock.calls[0]![1]?.headers).get("x-village-csrf"),
     ).toBe("csrf-token-that-is-at-least-thirty-two-bytes-long");
@@ -141,51 +122,21 @@ describe("pairing setup client", () => {
       jobId: "job_01J00000000000000000000000",
       browserSessionId: "brs_01J00000000000000000000000",
       hostId: "hst_01J00000000000000000000000",
-      fixtureBrowserSessionId: "brs_01J00000000000000000000001",
     });
     expect(completion).toContain(`pairingId=${challenge.pairingId}`);
     expect(session).toContain(
       "browserSessionId=brs_01J00000000000000000000000",
     );
-    expect(session).toContain(
-      "fixtureBrowserSessionId=brs_01J00000000000000000000001",
-    );
+    expect(session).not.toContain("fixtureBrowserSessionId");
     expect(`${completion}${session}`).not.toContain("secret");
   });
 
-  it("offers a legacy session link without enabling continuity", () => {
-    const session = pairingLegacySessionUrl(challenge, {
-      jobId: "job_01J00000000000000000000000",
-      browserSessionId: "brs_01J00000000000000000000000",
-      hostId: "hst_01J00000000000000000000000",
-      fixtureBrowserSessionId: "brs_01J00000000000000000000001",
-    });
-
-    expect(session).toContain(
-      "browserSessionId=brs_01J00000000000000000000000",
-    );
-    expect(session).not.toContain("fixtureBrowserSessionId");
-  });
-
-  it("resumes fixture provisioning without repeating the personal session", async () => {
+  it("reuses the personal session after a completed provisioning call", async () => {
     const request = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
         Response.json(
           { ok: true, jobId: "job_01J00000000000000000000000" },
-          { status: 201 },
-        ),
-      )
-      .mockResolvedValueOnce(Response.json({ ok: true }, { status: 201 }))
-      .mockResolvedValueOnce(
-        Response.json(
-          { ok: false, code: "FIXTURE_TEMPORARILY_UNAVAILABLE" },
-          { status: 503 },
-        ),
-      )
-      .mockResolvedValueOnce(
-        Response.json(
-          { ok: true, jobId: "job_01J00000000000000000000001" },
           { status: 201 },
         ),
       )
@@ -196,24 +147,23 @@ describe("pairing setup client", () => {
       () => "csrf-token-that-is-at-least-thirty-two-bytes-long",
     );
 
-    await expect(client.createSession(publicRequest.deviceId)).rejects.toThrow(
-      "FIXTURE_TEMPORARILY_UNAVAILABLE",
+    const first = await client.createSession(publicRequest.deviceId);
+    await expect(client.createSession(publicRequest.deviceId)).resolves.toEqual(
+      first,
     );
-    await expect(
-      client.createSession(publicRequest.deviceId),
-    ).resolves.toMatchObject({
+    expect(first).toMatchObject({
       jobId: "job_01J00000000000000000000000",
-      fixtureBrowserSessionId: expect.stringMatching(/^brs_/),
     });
 
     expect(
       request.mock.calls.filter(([url]) => String(url).endsWith("/api/jobs")),
-    ).toHaveLength(3);
+    ).toHaveLength(1);
     expect(
       request.mock.calls.filter(([, options]) => {
         if (!options?.body) return false;
         return JSON.parse(String(options.body)).site === "LINKEDIN";
       }),
     ).toHaveLength(1);
+    expect(JSON.stringify(request.mock.calls)).not.toContain("OWNED_FIXTURE");
   });
 });
