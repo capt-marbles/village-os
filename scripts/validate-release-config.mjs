@@ -36,6 +36,7 @@ export function validateReleaseFiles({
   desktopPackage,
   releaseConfig,
   e2eConfig,
+  e2eConfigs = [{ name: "electron-builder.e2e.yml", config: e2eConfig }],
 }) {
   const errors = [];
   const electron = desktopPackage.devDependencies?.electron;
@@ -46,6 +47,11 @@ export function validateReleaseFiles({
     ["appId", releaseConfig.appId, "com.village.desktop"],
     ["productName", releaseConfig.productName, "Village"],
     ["electronVersion", releaseConfig.electronVersion, "43.2.0"],
+    [
+      "extraMetadata.villageUpdateSignerSha256",
+      releaseConfig.extraMetadata?.villageUpdateSignerSha256,
+      "${env.VILLAGE_RELEASE_SIGNER_SHA256}",
+    ],
     [
       "electronFuses.resetAdHocDarwinSignature",
       releaseConfig.electronFuses?.resetAdHocDarwinSignature,
@@ -99,36 +105,56 @@ export function validateReleaseFiles({
   if (releaseConfig.mac?.identity === "-") {
     errors.push("Release config cannot use an ad-hoc signing identity");
   }
-  const expectedE2e = [
-    ["extends", e2eConfig.extends, "./electron-builder.yml"],
-    ["publish", e2eConfig.publish, null],
-    ["mac.identity", e2eConfig.mac?.identity, "-"],
-    ["mac.notarize", e2eConfig.mac?.notarize, false],
-    ["mac.target", e2eConfig.mac?.target, "dir"],
-  ];
-  for (const [field, actual, expected] of expectedE2e) {
-    if (actual !== expected)
-      errors.push(
-        `Local E2E config has invalid ${field}: expected ${expected}`,
-      );
+  for (const { name, config } of e2eConfigs) {
+    const expectedE2e = [
+      ["extends", config.extends, "./electron-builder.yml"],
+      ["publish", config.publish, null],
+      [
+        "extraMetadata.villageUpdateSignerSha256",
+        config.extraMetadata?.villageUpdateSignerSha256,
+        null,
+      ],
+      ["mac.identity", config.mac?.identity, "-"],
+      ["mac.notarize", config.mac?.notarize, false],
+      ["mac.target", config.mac?.target, "dir"],
+    ];
+    for (const [field, actual, expected] of expectedE2e) {
+      if (actual !== expected) {
+        errors.push(
+          `${name} has invalid ${field}: expected ${String(expected)}`,
+        );
+      }
+    }
   }
   return errors;
 }
 
 async function validateFiles() {
-  const [desktopPackage, releaseConfig, e2eConfig] = await Promise.all([
+  const e2eConfigNames = [
+    "electron-builder.e2e.yml",
+    "electron-builder.ritual-e2e.yml",
+    "electron-builder.continuity-e2e.yml",
+    "electron-builder.credential-e2e.yml",
+  ];
+  const [desktopPackage, releaseConfig, ...e2eConfigs] = await Promise.all([
     readFile(path.join(root, "apps/desktop/package.json"), "utf8").then(
       JSON.parse,
     ),
     readFile(path.join(root, "apps/desktop/electron-builder.yml"), "utf8").then(
       parse,
     ),
-    readFile(
-      path.join(root, "apps/desktop/electron-builder.e2e.yml"),
-      "utf8",
-    ).then(parse),
+    ...e2eConfigNames.map((name) =>
+      readFile(path.join(root, "apps/desktop", name), "utf8").then(parse),
+    ),
   ]);
-  return validateReleaseFiles({ desktopPackage, releaseConfig, e2eConfig });
+  return validateReleaseFiles({
+    desktopPackage,
+    releaseConfig,
+    e2eConfigs: e2eConfigNames.map((name, index) => ({
+      name,
+      config: e2eConfigs[index],
+    })),
+  });
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

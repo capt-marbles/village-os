@@ -4,8 +4,15 @@ export const diagnosticFieldAllowlist = [
   "retriable",
 ] as const;
 
-export type DiagnosticComponent =
-  "SESSION_ERASURE" | "BROWSER_HOST" | "CONTROL_TRANSFER" | "CONTINUITY";
+export const diagnosticComponents = [
+  "SESSION_ERASURE",
+  "BROWSER_HOST",
+  "CONTROL_TRANSFER",
+  "CONTINUITY",
+  "UPDATER",
+] as const;
+
+export type DiagnosticComponent = (typeof diagnosticComponents)[number];
 
 export interface LocalDiagnostic {
   component: DiagnosticComponent;
@@ -27,12 +34,7 @@ export class CrashReporter {
       Object.keys(input).some(
         (key) => !diagnosticFieldAllowlist.includes(key as never),
       ) ||
-      ![
-        "SESSION_ERASURE",
-        "BROWSER_HOST",
-        "CONTROL_TRANSFER",
-        "CONTINUITY",
-      ].includes(input.component) ||
+      !diagnosticComponents.includes(input.component) ||
       !/^[A-Z][A-Z0-9_]{0,63}$/.test(input.code) ||
       typeof input.retriable !== "boolean"
     ) {

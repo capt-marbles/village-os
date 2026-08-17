@@ -53,6 +53,16 @@ export function assertReleaseSigner(actual, expected) {
   if (actual !== expected) throw new Error("PACKAGED_SIGNER_MISMATCH");
 }
 
+export function assertPackagedUpdateSigner(metadata, expected) {
+  if (
+    metadata?.name !== "@village/desktop" ||
+    !/^[a-f0-9]{64}$/.test(metadata?.villageUpdateSignerSha256 ?? "") ||
+    metadata.villageUpdateSignerSha256 !== expected
+  ) {
+    throw new Error("PACKAGED_UPDATE_SIGNER_MISMATCH");
+  }
+}
+
 async function signingCertificateSha256(applicationPath) {
   const temporaryDirectory = await mkdtemp(
     path.join(os.tmpdir(), "village-signing-certificate-"),
@@ -122,7 +132,17 @@ export async function verifyPackagedMac(
   }
   if (verifyReleaseContents) {
     const archive = path.join(applicationPath, "Contents/Resources/app.asar");
-    assertReleaseAsarContents(loadAsar().listPackage(archive));
+    const asar = loadAsar();
+    assertReleaseAsarContents(asar.listPackage(archive));
+    let metadata;
+    try {
+      metadata = JSON.parse(
+        asar.extractFile(archive, "package.json").toString(),
+      );
+    } catch {
+      throw new Error("PACKAGED_UPDATE_METADATA_UNREADABLE");
+    }
+    assertPackagedUpdateSigner(metadata, expectedSignerSha256);
   }
   return { signature: "VALID", fuses: "VALID" };
 }

@@ -6,9 +6,12 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const telemetryModules = ["apps/desktop/src/main/crash-reporting.ts"];
 const allowedOutboundModules = [
   "apps/desktop/src/research/exa-search-provider.ts",
+  "apps/desktop/src/main/update-runtime.ts",
 ];
 const exaEgressContract =
   /const EXA_SEARCH_ENDPOINT = ["']https:\/\/api\.exa\.ai\/search["'];[\s\S]*this\.request\(EXA_SEARCH_ENDPOINT,/;
+const updaterEgressContract =
+  /export function desktopUpdateFetch[\s\S]*return globalThis\.fetch\(input, init\);[\s\S]*beginTimedFetch\(\s*this\.dependencies\.fetch,\s*this\.dependencies\.policy\.endpoint,[\s\S]*prevalidateManifest\([\s\S]*beginTimedFetch\(\s*this\.dependencies\.fetch,\s*manifest\.artifactUrl,/;
 const sourceRoots = ["apps/desktop/src", "packages/ui/src"];
 
 const outboundTransport =
@@ -30,6 +33,12 @@ export function auditTelemetrySource(source, file) {
     !exaEgressContract.test(source)
   ) {
     errors.push(`${file} must retain the fixed Exa egress contract`);
+  }
+  if (
+    file === "apps/desktop/src/main/update-runtime.ts" &&
+    !updaterEgressContract.test(source)
+  ) {
+    errors.push(`${file} must retain the policy-gated updater egress contract`);
   }
   if (thirdPartyTelemetry.test(source))
     errors.push(`${file} imports a forbidden telemetry SDK`);

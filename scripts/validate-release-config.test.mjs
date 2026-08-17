@@ -28,6 +28,9 @@ test("static release config requires Electron 43, hardened fuses and a separate 
     appId: "com.village.desktop",
     productName: "Village",
     electronVersion: "43.2.0",
+    extraMetadata: {
+      villageUpdateSignerSha256: "${env.VILLAGE_RELEASE_SIGNER_SHA256}",
+    },
     electronFuses: {
       resetAdHocDarwinSignature: true,
       runAsNode: false,
@@ -70,6 +73,7 @@ test("static release config requires Electron 43, hardened fuses and a separate 
   const e2eConfig = {
     extends: "./electron-builder.yml",
     publish: null,
+    extraMetadata: { villageUpdateSignerSha256: null },
     mac: { identity: "-", notarize: false, target: "dir" },
   };
   assert.deepEqual(
@@ -86,6 +90,13 @@ test("static release config requires Electron 43, hardened fuses and a separate 
       releaseConfig,
       e2eConfig,
     }).includes("Electron major 43 is required"),
+  );
+  assert.ok(
+    validateReleaseFiles({
+      desktopPackage: { devDependencies: { electron: "43.2.0" } },
+      releaseConfig: { ...releaseConfig, extraMetadata: undefined },
+      e2eConfig,
+    }).some((error) => error.includes("villageUpdateSignerSha256")),
   );
   assert.ok(
     validateReleaseFiles({
@@ -140,6 +151,24 @@ test("static release config requires Electron 43, hardened fuses and a separate 
       e2eConfig,
     }).includes(
       "Release config must exclude !dist/main/internal-paired-bootstrap*",
+    ),
+  );
+  assert.ok(
+    validateReleaseFiles({
+      desktopPackage: { devDependencies: { electron: "43.2.0" } },
+      releaseConfig,
+      e2eConfigs: [
+        { name: "electron-builder.e2e.yml", config: e2eConfig },
+        {
+          name: "electron-builder.ritual-e2e.yml",
+          config: {
+            ...e2eConfig,
+            extraMetadata: { villageUpdateSignerSha256: "unexpected-pin" },
+          },
+        },
+      ],
+    }).includes(
+      "electron-builder.ritual-e2e.yml has invalid extraMetadata.villageUpdateSignerSha256: expected null",
     ),
   );
 });

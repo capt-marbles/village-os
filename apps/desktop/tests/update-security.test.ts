@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  VILLAGE_UPDATE_ARTIFACT_BASE_URL,
   VILLAGE_UPDATE_ENDPOINT,
+  parseUpdateManifest,
   validateUpdateCandidate,
   type UpdateTrustPolicy,
 } from "../src/main/updater.js";
@@ -22,6 +24,8 @@ const trustedCandidate = {
   signerSha256: trustedPolicy.signerSha256,
   expectedSha512: "a".repeat(128),
   downloadedSha512: "a".repeat(128),
+  artifactRequestedUrl: `${VILLAGE_UPDATE_ARTIFACT_BASE_URL}village-1.1.0-alpha.1-arm64.zip`,
+  artifactFinalUrl: `${VILLAGE_UPDATE_ARTIFACT_BASE_URL}village-1.1.0-alpha.1-arm64.zip`,
 };
 
 describe("desktop update trust policy", () => {
@@ -47,6 +51,18 @@ describe("desktop update trust policy", () => {
       "redirect",
       { finalUrl: "https://cdn.invalid/manifest.json" },
       "REDIRECT_DENIED",
+    ],
+    [
+      "artifact outside the pinned release directory",
+      { artifactRequestedUrl: "https://cdn.invalid/village.zip" },
+      "ARTIFACT_ENDPOINT_MISMATCH",
+    ],
+    [
+      "artifact redirect",
+      {
+        artifactFinalUrl: `${VILLAGE_UPDATE_ARTIFACT_BASE_URL}redirected.zip`,
+      },
+      "ARTIFACT_REDIRECT_DENIED",
     ],
     ["wrong signer", { signerSha256: "f".repeat(64) }, "SIGNER_MISMATCH"],
     [
@@ -81,5 +97,33 @@ describe("desktop update trust policy", () => {
       ok: false,
       code: "INVALID_UPDATE_METADATA",
     });
+  });
+
+  it("parses only the bounded Village manifest shape", () => {
+    expect(
+      parseUpdateManifest({
+        productId: "com.village.desktop",
+        channel: "alpha",
+        version: "1.1.0-alpha.1",
+        artifactUrl: `${VILLAGE_UPDATE_ARTIFACT_BASE_URL}village-1.1.0-alpha.1-arm64.zip`,
+        sha512: "a".repeat(128),
+      }),
+    ).toEqual({
+      productId: "com.village.desktop",
+      channel: "alpha",
+      version: "1.1.0-alpha.1",
+      artifactUrl: `${VILLAGE_UPDATE_ARTIFACT_BASE_URL}village-1.1.0-alpha.1-arm64.zip`,
+      sha512: "a".repeat(128),
+    });
+    expect(
+      parseUpdateManifest({
+        productId: "com.village.desktop",
+        channel: "alpha",
+        version: "1.1.0-alpha.1",
+        artifactUrl: `${VILLAGE_UPDATE_ARTIFACT_BASE_URL}village-1.1.0-alpha.1-arm64.zip`,
+        sha512: "a".repeat(128),
+        releaseNotes: "unbounded prose is not part of the trust boundary",
+      }),
+    ).toBeUndefined();
   });
 });

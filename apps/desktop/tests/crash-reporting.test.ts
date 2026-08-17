@@ -5,6 +5,24 @@ import {
 } from "../src/main/crash-reporting.js";
 
 describe("local diagnostics", () => {
+  it("accepts bounded updater diagnostics without opening an upload path", () => {
+    const reporter = new CrashReporter();
+
+    expect(
+      reporter.capture({
+        component: "UPDATER",
+        code: "UPDATE_SIGNER_MISMATCH",
+        retriable: false,
+      }),
+    ).toEqual({
+      upload: "DISABLED",
+      preview: {
+        component: "UPDATER",
+        code: "UPDATE_SIGNER_MISMATCH",
+        retriable: false,
+      },
+    });
+  });
   it("emits a bounded local preview with uploads disabled by default", () => {
     const reporter = new CrashReporter();
     const captured = reporter.capture({
