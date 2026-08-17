@@ -24,16 +24,14 @@ describe("Ritual Builder application route", () => {
     vi.clearAllMocks();
   });
 
-  it("exposes the Ritual Builder from the ordinary application menu", async () => {
+  it("keeps the Steward available from the application menu", async () => {
     const open = vi.fn(async () => undefined);
     installRitualBuilderMenu(open);
 
     const village = electron.template[0] as {
       submenu: Array<{ label?: string; click?: () => void }>;
     };
-    village.submenu
-      .find((item) => item.label === "Open Ritual Builder")
-      ?.click?.();
+    village.submenu.find((item) => item.label === "Open Steward")?.click?.();
     await vi.waitFor(() => expect(open).toHaveBeenCalledOnce());
     expect(electron.setApplicationMenu).toHaveBeenCalledWith(electron.menu);
   });

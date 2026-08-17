@@ -11,7 +11,7 @@ import {
 import { DeviceIdentityVault } from "./device-identity-vault.js";
 import { ElectronSafeStorageProtector } from "./electron-safe-storage.js";
 import {
-  installVillageProtocol,
+  ensureVillageProtocolInstalled,
   registerVillageScheme,
 } from "./local-app-protocol.js";
 import {
@@ -76,10 +76,6 @@ interface RitualRuntimeServices {
   scheduler: RitualScheduler;
   exaCredentials: ExaCredentialController;
 }
-app.on("open-url", (event, url) => {
-  event.preventDefault();
-  pairingInbox.accept(url);
-});
 app.on(
   "before-quit",
   createRitualShutdownHandler(
@@ -91,6 +87,10 @@ app.on(
     },
   ),
 );
+
+export function acceptRuntimePairingLink(value: string): boolean {
+  return pairingInbox.accept(value);
+}
 
 export function resolveRuntimeControlPlaneUrl(storedOrigin?: string): URL {
   const configured = storedOrigin ?? process.env.VILLAGE_CONTROL_PLANE_URL;
@@ -112,7 +112,7 @@ export async function startVillageRuntime(
     modelProviders?: RuntimeModelProviderComposition;
   },
 ): Promise<VillageAppWindow> {
-  installVillageProtocol(
+  ensureVillageProtocolInstalled(
     protocol,
     fileURLToPath(new URL("../renderer", import.meta.url)),
   );
@@ -274,7 +274,6 @@ export async function runVillageApplication(
 ): Promise<VillageAppWindow> {
   await app.whenReady();
   await ensureRitualServices();
-  for (const argument of process.argv) pairingInbox.accept(argument);
   app.on("window-all-closed", () => app.quit());
   const villageWindow = await startVillageRuntime(
     pairedIdentitySource,
@@ -289,7 +288,7 @@ export async function runVillageApplication(
 export async function runRitualBuilderApplication(): Promise<RitualBuilderWindow> {
   await app.whenReady();
   await ensureRitualServices();
-  installVillageProtocol(
+  ensureVillageProtocolInstalled(
     protocol,
     fileURLToPath(new URL("../renderer", import.meta.url)),
   );

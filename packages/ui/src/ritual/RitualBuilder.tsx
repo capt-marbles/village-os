@@ -82,17 +82,31 @@ export function RitualBuilder({
         aria-label="Conversation with Steward"
       >
         <header className="ritual-conversation__header">
-          <p className="ritual-eyebrow">Steward&rsquo;s workroom</p>
-          <h1>Shape a Ritual with your Steward</h1>
-          <p>
-            Describe the outcome. Your Steward will turn it into a reviewable
-            agreement without making you configure a workflow.
+          <div className="ritual-steward-identity">
+            <span aria-hidden="true">S</span>
+            <div>
+              <p className="ritual-eyebrow">Village</p>
+              <h1>Your Steward</h1>
+            </div>
+          </div>
+          <p className="ritual-steward-status">
+            <span aria-hidden="true" /> Local and ready
           </p>
         </header>
 
-        {stewardDesk}
-
-        {researchSetup}
+        {state.phase === "DESCRIBE_PURPOSE" ? (
+          <section
+            className="ritual-welcome"
+            aria-labelledby="ritual-welcome-title"
+          >
+            <p className="ritual-eyebrow">Start with the outcome</p>
+            <h2 id="ritual-welcome-title">What should we make repeatable?</h2>
+            <p>
+              Talk it through. Your Steward will shape the work into a clear
+              agreement for you to review before anything runs.
+            </p>
+          </section>
+        ) : null}
 
         <ol className="ritual-messages" aria-live="polite">
           {state.messages.map((entry) => (
@@ -339,11 +353,20 @@ export function RitualBuilder({
         {state.error && !state.draft ? <p role="alert">{state.error}</p> : null}
       </section>
 
-      <aside className="ritual-draft" aria-label="Ritual draft side pane">
+      <aside
+        className="ritual-draft"
+        aria-label="Ritual agreement and activity"
+      >
+        {stewardDesk || researchSetup ? (
+          <div className="ritual-desk-tools">
+            {stewardDesk}
+            {researchSetup}
+          </div>
+        ) : null}
         <header className="ritual-draft__header">
           <div>
-            <p className="ritual-eyebrow">Ritual draft</p>
-            <h2>{state.draft?.name ?? "Waiting for an outcome"}</h2>
+            <p className="ritual-eyebrow">Working agreement</p>
+            <h2>{state.draft?.name ?? "No Ritual yet"}</h2>
           </div>
           <span className="ritual-revision">
             {state.approved

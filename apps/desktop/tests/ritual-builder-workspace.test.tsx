@@ -7,6 +7,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import {
   createRitualRun,
@@ -370,7 +371,10 @@ describe("RitualBuilderWorkspace", () => {
     });
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
 
-    await screen.findByText("Steward inbox");
+    const agreement = await screen.findByRole("complementary", {
+      name: "Ritual agreement and activity",
+    });
+    expect(within(agreement).getByText("Steward inbox")).toBeTruthy();
     expect(screen.getByText("2 needs attention")).toBeTruthy();
     expect(screen.getAllByText("Approve")[0]).toBeTruthy();
     expect(screen.getByText(runReceipt.summary)).toBeTruthy();
@@ -556,7 +560,10 @@ describe("RitualBuilderWorkspace", () => {
 
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
 
-    await screen.findByText("Exa research is waiting");
+    const agreement = await screen.findByRole("complementary", {
+      name: "Ritual agreement and activity",
+    });
+    expect(within(agreement).getByText("Exa research is waiting")).toBeTruthy();
     expect(screen.getByText(/Add or replace the Exa key/u)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry research" }));
     await screen.findByText("Run Receipt");
@@ -811,7 +818,7 @@ describe("RitualBuilderWorkspace", () => {
   it("does not call the Steward when local purpose validation fails", async () => {
     const activeBridge = bridge();
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
-    await screen.findByText("Shape a Ritual with your Steward");
+    await screen.findByText("What should we make repeatable?");
     fireEvent.change(screen.getByLabelText("What should become repeatable?"), {
       target: { value: "   " },
     });
@@ -823,7 +830,7 @@ describe("RitualBuilderWorkspace", () => {
   it("sends the curated 30-day starter through the strict Steward boundary", async () => {
     const activeBridge = bridge();
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
-    await screen.findByText("Shape a Ritual with your Steward");
+    await screen.findByText("What should we make repeatable?");
 
     fireEvent.click(
       screen.getByRole("button", { name: /30-day signal brief/u }),
@@ -855,7 +862,7 @@ describe("RitualBuilderWorkspace", () => {
       reason: "MALFORMED_PROVIDER_OUTPUT",
     });
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
-    await screen.findByText("Shape a Ritual with your Steward");
+    await screen.findByText("What should we make repeatable?");
     fireEvent.change(screen.getByLabelText("What should become repeatable?"), {
       target: { value: "Prepare my pipeline review." },
     });
@@ -879,7 +886,7 @@ describe("RitualBuilderWorkspace", () => {
         }),
     );
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
-    await screen.findByText("Shape a Ritual with your Steward");
+    await screen.findByText("What should we make repeatable?");
 
     fireEvent.change(screen.getByLabelText("What should become repeatable?"), {
       target: { value: "Prepare my pipeline review." },

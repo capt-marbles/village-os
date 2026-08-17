@@ -1,6 +1,12 @@
 // @vitest-environment happy-dom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { useReducer } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -71,18 +77,26 @@ function draftedState(purpose: string): RitualBuilderState {
 
 describe("Ritual Builder", () => {
   it("presents the Steward conversation and Ritual draft as one labelled workspace", () => {
-    const html = renderToStaticMarkup(
+    render(
       <RitualBuilder
         identity={identity}
         state={createRitualBuilderState()}
         onEvent={vi.fn()}
+        stewardDesk={<div>Steward inbox</div>}
       />,
     );
-    expect(html).toContain("Shape a Ritual with your Steward");
-    expect(html).toContain("Ritual draft");
-    expect(html).toContain('aria-label="Conversation with Steward"');
-    expect(html).toContain('aria-label="Ritual draft side pane"');
-    expect(html).toContain("What regular work should I take care of?");
+    expect(screen.getByText("Your Steward")).toBeTruthy();
+    expect(screen.getByText("What should we make repeatable?")).toBeTruthy();
+    expect(
+      screen.getByRole("region", { name: "Conversation with Steward" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/What regular work should I take care of\?/u),
+    ).toBeTruthy();
+    const agreement = screen.getByRole("complementary", {
+      name: "Ritual agreement and activity",
+    });
+    expect(within(agreement).getByText("Steward inbox")).toBeTruthy();
   });
 
   it("offers a bounded 30-day signal starter without hiding the source limits", () => {
@@ -122,6 +136,7 @@ describe("Ritual Builder", () => {
     );
     expect(triggerHtml).toContain("Weekdays");
     expect(triggerHtml).toContain("When new work arrives");
+    expect(triggerHtml).not.toContain("What should we make repeatable?");
 
     state = reduceRitualBuilder(state, {
       type: "SELECT_TRIGGER",

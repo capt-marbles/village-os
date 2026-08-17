@@ -1,9 +1,17 @@
-export type RuntimeSurface = "WORKSPACE" | "RITUAL_BUILDER";
-
-export function resolveRuntimeSurface(
+export function activateRuntimeSurface(
   arguments_: readonly string[],
-): RuntimeSurface {
-  return arguments_.includes("--ritual-builder")
-    ? "RITUAL_BUILDER"
-    : "WORKSPACE";
+  actions: {
+    acceptPairingLink(value: string): boolean;
+    openBrowserWorkspace(): void;
+  },
+): boolean {
+  let pairingAccepted = false;
+  for (const argument of arguments_) {
+    pairingAccepted = actions.acceptPairingLink(argument) || pairingAccepted;
+  }
+  if (!arguments_.includes("--browser-workspace") && !pairingAccepted) {
+    return false;
+  }
+  actions.openBrowserWorkspace();
+  return true;
 }
