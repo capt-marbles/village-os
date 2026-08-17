@@ -25,8 +25,10 @@ import {
   reduceRitualRun,
   validateRitualRunReceipt,
   ritualRunReceiptSchema,
+  ritualResearchReportSchema,
   ritualRunRequestSchema,
   ritualRunSchema,
+  ritualRunStepStateSchema,
   ritualScheduleSchema,
   ritualScheduleUpdateRequestSchema,
   createRitualTestReceipt,
@@ -78,6 +80,61 @@ const draft = {
 };
 
 describe("Ritual contracts", () => {
+  it("accepts a bounded cited research report and rejects unknown source citations", () => {
+    const report = {
+      headline: "Agent tooling shifted toward governed background work",
+      summary:
+        "Recent announcements emphasize durable work, explicit review, and local control.",
+      findings: [
+        {
+          claim:
+            "Background execution is becoming a visible product primitive.",
+          sourceNumbers: [1, 2],
+        },
+      ],
+      uncertainties: [
+        "Public announcements do not prove production reliability.",
+      ],
+    };
+
+    expect(
+      ritualResearchReportSchema.parse({ ...report, availableSourceCount: 2 }),
+    ).toEqual({ ...report, availableSourceCount: 2 });
+    expect(() =>
+      ritualResearchReportSchema.parse({
+        ...report,
+        availableSourceCount: 1,
+      }),
+    ).toThrow();
+    expect(() =>
+      ritualRunStepStateSchema.parse({
+        stepKey: "prepare-report",
+        title: "Prepare report",
+        actor: { kind: "STEWARD", role: "Steward" },
+        approval: "NONE",
+        status: "COMPLETED",
+        startedAt: "2026-08-17T12:00:00.000Z",
+        approvedAt: null,
+        completedAt: "2026-08-17T12:01:00.000Z",
+        research: {
+          provider: "EXA",
+          requestId: "exa-report-binding",
+          sources: [
+            {
+              title: "One source",
+              url: "https://example.com/one",
+              publishedAt: null,
+              author: null,
+              highlights: ["Bounded evidence."],
+              taint: "UNTRUSTED_WEB",
+            },
+          ],
+        },
+        report: { ...report, availableSourceCount: 2 },
+      }),
+    ).toThrow();
+  });
+
   it("restores an earlier approved Ritual as a new immutable revision", () => {
     const original = approveRitualDraft(draft, {
       schemaVersion: 1,
@@ -786,11 +843,17 @@ describe("Ritual contracts", () => {
       runId: "rrn_01J00000000000000000000009",
       createdAt: "2026-08-16T12:00:00.000Z",
     });
-    const { waitingReason: _waitingReason, ...withoutWaitingReason } = modern;
+    const {
+      waitingReason: _waitingReason,
+      waitingSource: _waitingSource,
+      ...withoutWaitingReason
+    } = modern;
     const legacy = {
       ...withoutWaitingReason,
       executionProvider: "DETERMINISTIC_FIXTURE",
-      steps: modern.steps.map(({ research: _research, ...step }) => step),
+      steps: modern.steps.map(
+        ({ research: _research, report: _report, ...step }) => step,
+      ),
     };
 
     expect(ritualRunSchema.safeParse(legacy).success).toBe(true);

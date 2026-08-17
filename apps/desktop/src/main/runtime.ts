@@ -384,17 +384,17 @@ async function createRitualServices(): Promise<RitualRuntimeServices> {
   const repository = new RitualRepository(
     join(app.getPath("userData"), "rituals", "approved.json"),
   );
-  let scheduler: RitualScheduler | undefined;
-  const controller = new RitualBuilderController(
-    new CodexRitualStewardProvider(() => new CodexStdioTransport()),
-    repository,
-    {
-      runExecutor: new LocalRitualRunExecutor({
-        research: new ExaSearchProvider({ credentials: exaApiKeyStore }),
-      }),
-      onScheduleChanged: () => scheduler?.wake(),
-    },
+  const stewardProvider = new CodexRitualStewardProvider(
+    () => new CodexStdioTransport(),
   );
+  let scheduler: RitualScheduler | undefined;
+  const controller = new RitualBuilderController(stewardProvider, repository, {
+    runExecutor: new LocalRitualRunExecutor({
+      research: new ExaSearchProvider({ credentials: exaApiKeyStore }),
+      synthesis: stewardProvider,
+    }),
+    onScheduleChanged: () => scheduler?.wake(),
+  });
   scheduler = new RitualScheduler(repository, controller);
   return {
     controller,

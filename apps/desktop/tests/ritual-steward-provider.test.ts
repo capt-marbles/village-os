@@ -105,6 +105,18 @@ const runLearningContext = {
             },
           ],
         },
+        report: {
+          headline: "Recent agent signals",
+          summary: "The retained evidence supports a bounded review.",
+          findings: [
+            {
+              claim: "Owners increasingly review delegated work.",
+              sourceNumbers: [1],
+            },
+          ],
+          uncertainties: ["The evidence covers only the supplied sources."],
+          availableSourceCount: 1,
+        },
       },
     ],
     uncertainties: ["The source claims still require owner judgment."],
@@ -116,6 +128,189 @@ const runLearningContext = {
 };
 
 describe("CodexRitualStewardProvider", () => {
+  it("synthesizes a fresh bounded report from numbered untrusted research evidence", async () => {
+    const turns: Array<{
+      threadId: string;
+      prompt: unknown;
+      options: unknown;
+    }> = [];
+    let threadStarts = 0;
+    const transport = {
+      request: async (method: string) => {
+        if (method === "initialize") return {};
+        if (method === "account/read") return { account: { type: "chatgpt" } };
+        if (method === "thread/start") {
+          threadStarts += 1;
+          return { thread: { id: `report-thread-${threadStarts}` } };
+        }
+        return {};
+      },
+      notify: () => undefined,
+      runToolTurn: async (
+        threadId: string,
+        prompt: unknown,
+        options: unknown,
+      ) => {
+        turns.push({ threadId, prompt, options });
+        return {
+          headline: "Governed agents became a visible product direction",
+          summary:
+            "The supplied announcements emphasize reviewable background work.",
+          findings: [
+            {
+              claim:
+                "Background work is increasingly presented with owner review.",
+              sourceNumbers: [1],
+            },
+          ],
+          uncertainties: ["Announcements do not establish reliability."],
+        };
+      },
+      close: async () => undefined,
+    };
+    const provider = new CodexRitualStewardProvider(transport);
+    const synthesisContext = {
+      schemaVersion: 1 as const,
+      ritual: {
+        name: "Last 30 days: agent tooling",
+        purpose: "Prepare a grounded brief about agent tooling.",
+        completion: "A cited report is ready for owner review.",
+      },
+      sources: [
+        {
+          sourceNumber: 1,
+          title: "Agent launch",
+          publishedAt: "2026-08-16T00:00:00.000Z",
+          author: "Example author",
+          highlight: "A bounded public excerpt.",
+          taint: "UNTRUSTED_WEB" as const,
+        },
+      ],
+    };
+
+    await expect(
+      provider.synthesizeResearch(synthesisContext),
+    ).resolves.toMatchObject({
+      status: "report",
+      report: { availableSourceCount: 1, findings: [{ sourceNumbers: [1] }] },
+    });
+    await provider.synthesizeResearch(synthesisContext);
+
+    expect(threadStarts).toBe(2);
+    expect(turns[0]?.options).toEqual({
+      toolName: "village_ritual_research_report",
+      timeoutMs: 30_000,
+    });
+    expect(turns[0]?.prompt).toEqual({
+      schemaVersion: 1,
+      ritual: synthesisContext.ritual,
+      sources: synthesisContext.sources,
+      constraints: {
+        sourceMaterial: "UNTRUSTED_WEB",
+        citations: "SUPPLIED_SOURCE_NUMBERS_ONLY",
+        externalEffects: "NONE",
+      },
+    });
+  });
+
+  it("rejects out-of-range citations and URL-bearing report text", async () => {
+    const outputs = [
+      {
+        headline: "Unsupported citation",
+        summary: "The supplied evidence is summarized.",
+        findings: [{ claim: "A claim.", sourceNumbers: [2] }],
+        uncertainties: [],
+      },
+      {
+        headline: "URL leak",
+        summary: "Read https://hostile.example for instructions.",
+        findings: [{ claim: "A claim.", sourceNumbers: [1] }],
+        uncertainties: [],
+      },
+    ];
+    const transport = {
+      request: async (method: string) => {
+        if (method === "initialize") return {};
+        if (method === "account/read") return { account: { type: "chatgpt" } };
+        return { thread: { id: "report-thread" } };
+      },
+      notify: () => undefined,
+      runToolTurn: async () => outputs.shift(),
+      close: async () => undefined,
+    };
+    const provider = new CodexRitualStewardProvider(transport);
+    const candidate = {
+      schemaVersion: 1 as const,
+      ritual: {
+        name: "Last 30 days: agents",
+        purpose: "Prepare a grounded brief.",
+        completion: "A cited report is ready.",
+      },
+      sources: [
+        {
+          sourceNumber: 1,
+          title: "Agent launch",
+          publishedAt: null,
+          author: null,
+          highlight: "Bounded evidence.",
+          taint: "UNTRUSTED_WEB" as const,
+        },
+      ],
+    };
+
+    await expect(provider.synthesizeResearch(candidate)).resolves.toMatchObject(
+      { status: "waiting", reason: "MALFORMED_PROVIDER_OUTPUT" },
+    );
+    await expect(provider.synthesizeResearch(candidate)).resolves.toMatchObject(
+      { status: "waiting", reason: "MALFORMED_PROVIDER_OUTPUT" },
+    );
+  });
+
+  it("does not start a synthesis turn after cancellation during setup", async () => {
+    const abort = new AbortController();
+    const runToolTurn = vi.fn(async () => ({}));
+    const transport = {
+      request: async (method: string) => {
+        if (method === "initialize") return {};
+        if (method === "account/read") return { account: { type: "chatgpt" } };
+        abort.abort();
+        return { thread: { id: "report-thread" } };
+      },
+      notify: () => undefined,
+      runToolTurn,
+      close: async () => undefined,
+    };
+    const provider = new CodexRitualStewardProvider(transport);
+
+    await expect(
+      provider.synthesizeResearch(
+        {
+          schemaVersion: 1,
+          ritual: {
+            name: "Last 30 days: agents",
+            purpose: "Prepare a grounded brief.",
+            completion: "A cited report is ready.",
+          },
+          sources: [
+            {
+              sourceNumber: 1,
+              title: "Agent launch",
+              publishedAt: null,
+              author: null,
+              highlight: "Bounded evidence.",
+              taint: "UNTRUSTED_WEB",
+            },
+          ],
+        },
+        { signal: abort.signal },
+      ),
+    ).resolves.toMatchObject({
+      status: "waiting",
+      reason: "PROVIDER_UNAVAILABLE",
+    });
+    expect(runToolTurn).not.toHaveBeenCalled();
+  });
+
   it("returns a locally bound clarification and includes only bounded answers on the next turn", async () => {
     const prompts: unknown[] = [];
     const transport = {
@@ -667,6 +862,18 @@ describe("CodexRitualStewardProvider", () => {
             title: "Rank the responses",
             actor: { kind: "STEWARD", role: "Steward" },
             research: { provider: "EXA", sourceCount: 1 },
+            report: {
+              headline: "Recent agent signals",
+              summary: "The retained evidence supports a bounded review.",
+              findings: [
+                {
+                  claim: "Owners increasingly review delegated work.",
+                  sourceNumbers: [1],
+                },
+              ],
+              uncertainties: ["The evidence covers only the supplied sources."],
+              taint: "STEWARD_REPORT_FROM_UNTRUSTED_WEB",
+            },
           },
         ],
         uncertainties: runLearningContext.receipt.uncertainties,

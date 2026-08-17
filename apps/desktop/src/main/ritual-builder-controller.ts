@@ -164,6 +164,24 @@ export class RitualBuilderController {
       if (this.activeRuns.has(snapshot.run.runId) || isPendingScheduleRun) {
         return snapshot;
       }
+      const checkpointedStep = snapshot.run.steps.find(
+        (step) =>
+          step.stepKey === snapshot.run?.currentStepKey &&
+          step.status === "RUNNING" &&
+          step.research != null &&
+          step.report == null,
+      );
+      if (checkpointedStep?.research) {
+        const waiting = reduceRitualRun(snapshot.run, snapshot.approved, {
+          type: "WAIT_FOR_RESOURCE",
+          reason: "PROVIDER_UNAVAILABLE",
+          source: "STEWARD",
+          research: checkpointedStep.research,
+          occurredAt: this.dependencies.now(),
+        });
+        await this.repository.saveRun(waiting);
+        return { ...snapshot, run: waiting };
+      }
       const interrupted = reduceRitualRun(snapshot.run, snapshot.approved, {
         type: "FAIL",
         failureCode: "INTERRUPTED",
@@ -667,10 +685,23 @@ export class RitualBuilderController {
         if (executed.externalEffects.length !== 0) {
           throw new Error("RITUAL_RUN_POLICY_DENIED");
         }
+        if (executed.status === "checkpointed") {
+          run = reduceRitualRun(run, ritual, {
+            type: "CHECKPOINT_RESEARCH",
+            stepKey: executed.stepKey,
+            research: executed.research,
+            occurredAt: this.dependencies.now(),
+          });
+          await this.repository.saveRun(run);
+          durableRun = run;
+          continue;
+        }
         if (executed.status === "waiting") {
           run = reduceRitualRun(run, ritual, {
             type: "WAIT_FOR_RESOURCE",
             reason: executed.reason,
+            source: executed.source,
+            ...(executed.research ? { research: executed.research } : {}),
             occurredAt: this.dependencies.now(),
           });
           await this.repository.saveRun(run);
@@ -680,6 +711,7 @@ export class RitualBuilderController {
           type: "COMPLETE_STEP",
           stepKey: executed.stepKey,
           ...(executed.research ? { research: executed.research } : {}),
+          ...(executed.report ? { report: executed.report } : {}),
           occurredAt: this.dependencies.now(),
         });
         await this.repository.saveRun(run);
@@ -725,9 +757,13 @@ export class RitualBuilderController {
           approved: ritual,
           run,
           receiptId: this.dependencies.createId("rcp"),
-          summary: run.steps.some((step) => step.research)
+          summary: run.steps.some(
+            (step) => (step.research?.sources.length ?? 0) > 0,
+          )
             ? `The local Run completed ${run.steps.length} approved ${run.steps.length === 1 ? "step" : "steps"} with bounded Exa evidence.`
-            : `The local Run completed all ${run.steps.length} approved orchestration ${run.steps.length === 1 ? "step" : "steps"}.`,
+            : run.steps.some((step) => step.research != null)
+              ? "Exa completed the approved search, but no qualifying sources were found."
+              : `The local Run completed all ${run.steps.length} approved orchestration ${run.steps.length === 1 ? "step" : "steps"}.`,
           recordedAt: this.dependencies.now(),
         });
         await this.repository.completeRun(run, receipt, { signal });
