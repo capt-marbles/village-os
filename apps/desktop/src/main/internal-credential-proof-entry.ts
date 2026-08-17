@@ -341,10 +341,13 @@ async function waitForDestination(
 
 async function run(): Promise<void> {
   const profilePath = requiredPath("--village-fixture-secret-profile");
+  const crashDumpPath = join(profilePath, "crash-dumps");
   const restartErasureReport = optionalPath(
     "--village-fixture-erasure-restart-report",
   );
+  await mkdir(crashDumpPath, { recursive: true, mode: 0o700 });
   app.setPath("userData", profilePath);
+  app.setPath("crashDumps", crashDumpPath);
   installGlobalSecurityPolicy(app);
   await app.whenReady();
   await session.defaultSession.protocol.handle("village", async (request) => {
@@ -801,6 +804,7 @@ async function run(): Promise<void> {
         browserCrashWaiting,
         trustedRendererRecovered,
         crashDiagnosticsBounded,
+        crashDumpSinkScoped: app.getPath("crashDumps") === crashDumpPath,
         bindingMatrixRejected,
         absentTokenRejected,
         expiredTokenRejected:

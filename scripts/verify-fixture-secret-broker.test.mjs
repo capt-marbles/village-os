@@ -23,6 +23,7 @@ const passingReport = {
   browserCrashWaiting: true,
   trustedRendererRecovered: true,
   crashDiagnosticsBounded: true,
+  crashDumpSinkScoped: true,
   bindingMatrixRejected: true,
   absentTokenRejected: true,
   expiredTokenRejected: true,
@@ -131,6 +132,15 @@ test("rejects leaked or broadened packaged evidence", () => {
         passingRestartReport,
       ),
     /PACKAGED_FIXTURE_SECRET_DESTINATION_NOT_EXCLUSIVE/,
+  );
+  assert.throws(
+    () =>
+      assertFixtureSecretBrokerEvidence(
+        { ...passingReport, crashDumpSinkScoped: false },
+        { matches: [] },
+        passingRestartReport,
+      ),
+    /PACKAGED_FIXTURE_SECRET_EVIDENCE_INCOMPLETE/,
   );
   assert.throws(
     () =>

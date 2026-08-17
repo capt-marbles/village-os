@@ -29,6 +29,17 @@ test("rejects outbound transports, forbidden page-derived fields and dynamic pro
   assert.ok(errors.some((error) => error.includes("dynamic projection")));
 });
 
+test("rejects Electron native crash collection even when uploads are disabled", () => {
+  const errors = auditTelemetrySource(
+    `
+      import { crashReporter as collector } from "electron";
+      collector.start({ uploadToServer: false });
+    `,
+    "apps/desktop/src/main/runtime.ts",
+  );
+  assert.ok(errors.some((error) => error.includes("native crash collection")));
+});
+
 test("allows only the fixed Exa research egress contract", () => {
   const file = "apps/desktop/src/research/exa-search-provider.ts";
   assert.deepEqual(

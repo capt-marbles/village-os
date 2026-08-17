@@ -94,6 +94,7 @@ export function assertFixtureSecretBrokerEvidence(
     report.browserCrashWaiting !== true ||
     report.trustedRendererRecovered !== true ||
     report.crashDiagnosticsBounded !== true ||
+    report.crashDumpSinkScoped !== true ||
     report.bindingMatrixRejected !== true ||
     report.absentTokenRejected !== true ||
     report.expiredTokenRejected !== true ||
