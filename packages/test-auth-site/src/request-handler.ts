@@ -20,7 +20,7 @@ export interface OwnedFixtureRequestHandlerOptions {
 
 type JsonRecord = Record<string, unknown>;
 
-function json(body: unknown, status = 200): Response {
+export function fixtureJson(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
@@ -32,21 +32,21 @@ function json(body: unknown, status = 200): Response {
 
 function errorResponse(error: unknown): Response {
   if (!(error instanceof FixtureServiceError)) {
-    return json({ code: "INVALID_FIXTURE_REQUEST" }, 400);
+    return fixtureJson({ code: "INVALID_FIXTURE_REQUEST" }, 400);
   }
   if (error.code === "FIXTURE_BINDING_DENIED") {
-    return json({ code: error.code }, 403);
+    return fixtureJson({ code: error.code }, 403);
   }
   if (
     error.code === "EFFECT_BINDING_CONFLICT" ||
     error.code === "AMBIGUOUS_EFFECT_REQUIRES_OWNER"
   ) {
-    return json({ code: error.code }, 409);
+    return fixtureJson({ code: error.code }, 409);
   }
   if (error.code === "RESPONSE_LOST_AFTER_EFFECT") {
-    return json({ code: error.code }, 503);
+    return fixtureJson({ code: error.code }, 503);
   }
-  return json({ code: error.code }, 400);
+  return fixtureJson({ code: error.code }, 400);
 }
 
 function exactKeys(
@@ -86,14 +86,14 @@ export function createOwnedFixtureRequestHandler(
     try {
       url = new URL(request.url);
     } catch {
-      return json({ code: "FIXTURE_ORIGIN_DENIED" }, 403);
+      return fixtureJson({ code: "FIXTURE_ORIGIN_DENIED" }, 403);
     }
     if (
       url.origin !== OWNED_FIXTURE_ORIGIN ||
       url.username !== "" ||
       url.password !== ""
     ) {
-      return json({ code: "FIXTURE_ORIGIN_DENIED" }, 403);
+      return fixtureJson({ code: "FIXTURE_ORIGIN_DENIED" }, 403);
     }
 
     try {
@@ -111,7 +111,7 @@ export function createOwnedFixtureRequestHandler(
             (key) => key !== "effectId" && key !== "logicalStep",
           )
         ) {
-          return json({ code: "INVALID_FIXTURE_REQUEST" }, 400);
+          return fixtureJson({ code: "INVALID_FIXTURE_REQUEST" }, 400);
         }
         return new Response(
           renderOwnedFixtureAccount(
@@ -141,14 +141,14 @@ export function createOwnedFixtureRequestHandler(
           typeof body.role !== "string" ||
           typeof body.preferredFocus !== "string"
         ) {
-          return json({ code: "INVALID_FIXTURE_REQUEST" }, 400);
+          return fixtureJson({ code: "INVALID_FIXTURE_REQUEST" }, 400);
         }
         const stepBinding: FixtureStepBinding = {
           ...binding,
           logicalStep: setupLogicalStepSchema.parse(body.logicalStep),
           effectId: effectIdSchema.parse(body.effectId),
         };
-        return json(
+        return fixtureJson(
           await service.applyOwnerState(stepBinding, {
             displayName: body.displayName,
             role: body.role,
@@ -161,9 +161,9 @@ export function createOwnedFixtureRequestHandler(
         const logicalStep = url.searchParams.get("logicalStep");
         const effectId = url.searchParams.get("effectId");
         if (!logicalStep || !effectId || url.searchParams.size !== 2) {
-          return json({ code: "INVALID_FIXTURE_REQUEST" }, 400);
+          return fixtureJson({ code: "INVALID_FIXTURE_REQUEST" }, 400);
         }
-        return json(
+        return fixtureJson(
           await service.observe({ ...binding, logicalStep, effectId } as never),
         );
       }
@@ -171,17 +171,17 @@ export function createOwnedFixtureRequestHandler(
       if (request.method === "GET" && url.pathname === "/api/attempts") {
         const effectId = url.searchParams.get("effectId");
         if (!effectId || url.searchParams.size !== 1) {
-          return json({ code: "INVALID_FIXTURE_REQUEST" }, 400);
+          return fixtureJson({ code: "INVALID_FIXTURE_REQUEST" }, 400);
         }
-        return json(await service.attempts({ ...binding, effectId }));
+        return fixtureJson(await service.attempts({ ...binding, effectId }));
       }
 
       if (request.method === "POST" && url.pathname === "/api/action") {
         const body = await strictJson(request);
         if (!exactKeys(body, ["logicalStep", "effectId", "capability"])) {
-          return json({ code: "INVALID_FIXTURE_REQUEST" }, 400);
+          return fixtureJson({ code: "INVALID_FIXTURE_REQUEST" }, 400);
         }
-        return json(
+        return fixtureJson(
           await service.execute({
             ...binding,
             ...body,
@@ -195,13 +195,13 @@ export function createOwnedFixtureRequestHandler(
           !exactKeys(body, ["effectId"]) ||
           typeof body.effectId !== "string"
         ) {
-          return json({ code: "INVALID_FIXTURE_REQUEST" }, 400);
+          return fixtureJson({ code: "INVALID_FIXTURE_REQUEST" }, 400);
         }
-        return json(
+        return fixtureJson(
           await service.reset({ ...binding, effectId: body.effectId }),
         );
       }
-      return json({ code: "FIXTURE_ROUTE_NOT_FOUND" }, 404);
+      return fixtureJson({ code: "FIXTURE_ROUTE_NOT_FOUND" }, 404);
     } catch (error) {
       return errorResponse(error);
     }

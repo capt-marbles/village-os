@@ -1,10 +1,12 @@
 import { execFile } from "node:child_process";
 import { access, mkdtemp, rm } from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import electronFuses from "@electron/fuses";
+import { releaseInternalModulePrefixes } from "./release-internal-boundary.mjs";
 
 const { FuseV1Options, getCurrentFuseWire } = electronFuses;
 const fuseDisabled = 48;
@@ -12,6 +14,32 @@ const fuseEnabled = 49;
 
 const execFileAsync = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+function loadAsar() {
+  const desktopRequire = createRequire(
+    path.join(root, "apps/desktop/package.json"),
+  );
+  const builderPackage = desktopRequire.resolve(
+    "electron-builder/package.json",
+  );
+  const asarPath = desktopRequire.resolve("@electron/asar", {
+    paths: [path.dirname(builderPackage)],
+  });
+  return desktopRequire(asarPath);
+}
+
+export function assertReleaseAsarContents(entries) {
+  if (
+    !Array.isArray(entries) ||
+    entries.some((entry) => {
+      const normalized = String(entry).replace(/^\//, "");
+      return releaseInternalModulePrefixes.some((prefix) =>
+        normalized.startsWith(prefix),
+      );
+    })
+  ) {
+    throw new Error("PACKAGED_RELEASE_CONTAINS_INTERNAL_PROOF");
+  }
+}
 
 export function parseCertificateFingerprint(output) {
   const match = /sha256 Fingerprint=([0-9A-F:]{95})/i.exec(output);
@@ -61,7 +89,7 @@ export async function verifyPackagedMac(
     process.arch === "arm64" ? "mac-arm64" : "mac",
     "Village.app",
   ),
-  { expectedSignerSha256 } = {},
+  { expectedSignerSha256, verifyReleaseContents = false } = {},
 ) {
   await access(applicationPath);
   await execFileAsync("/usr/bin/codesign", [
@@ -92,6 +120,10 @@ export async function verifyPackagedMac(
       expectedSignerSha256,
     );
   }
+  if (verifyReleaseContents) {
+    const archive = path.join(applicationPath, "Contents/Resources/app.asar");
+    assertReleaseAsarContents(loadAsar().listPackage(archive));
+  }
   return { signature: "VALID", fuses: "VALID" };
 }
 
@@ -104,6 +136,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     expectedSignerSha256: release
       ? process.env.VILLAGE_RELEASE_SIGNER_SHA256
       : undefined,
+    verifyReleaseContents: release,
   });
   console.log("Packaged macOS signature and fuses are valid.");
 }

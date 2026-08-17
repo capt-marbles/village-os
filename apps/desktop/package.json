@@ -9,6 +9,7 @@
     "preview:ritual-builder": "pnpm build && electron . --ritual-builder",
     "package:mac:e2e": "pnpm --dir ../.. exec tsc -b --force packages/contracts packages/ui packages/test-auth-site apps/desktop && pnpm build && electron-builder --dir --config electron-builder.e2e.yml --mac && node ../../scripts/verify-packaged-mac.mjs",
     "package:mac:continuity-e2e": "pnpm --dir ../.. exec tsc -b --force packages/contracts apps/desktop && pnpm build && electron-builder --dir --config electron-builder.continuity-e2e.yml --mac --config.directories.output=release/continuity-e2e && node ../../scripts/verify-site-session-continuity.mjs",
+    "package:mac:credential-e2e": "pnpm --dir ../.. exec tsc -b --force packages/contracts packages/ui packages/test-auth-site && pnpm build && electron-builder --dir --config electron-builder.credential-e2e.yml --mac && node ../../scripts/verify-fixture-secret-broker.mjs",
     "package:mac:ritual-e2e": "pnpm --dir ../.. exec tsc -b --force packages/contracts packages/ui apps/desktop && pnpm build && electron-builder --dir --config electron-builder.ritual-e2e.yml --mac && node ../../scripts/verify-packaged-mac.mjs dist/ritual-e2e/mac-arm64/Village.app",
     "verify:provider-boundary": "node ../../scripts/verify-provider-boundary.mjs",
     "verify:delegated-workflow": "node ../../scripts/verify-delegated-workflow.mjs",
