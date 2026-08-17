@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   assertReleaseAsarContents,
   assertReleaseSigner,
+  assertPackagedUpdateSigner,
   parseCertificateFingerprint,
 } from "./verify-packaged-mac.mjs";
 
@@ -25,6 +26,29 @@ test("requires the packaged signer to match the release pin", () => {
   assert.throws(
     () => assertReleaseSigner("ab".repeat(32), "not-a-fingerprint"),
     /INVALID_RELEASE_SIGNER_PIN/,
+  );
+});
+
+test("requires the updater pin embedded in the package to match the signed app", () => {
+  assert.doesNotThrow(() =>
+    assertPackagedUpdateSigner(
+      {
+        name: "@village/desktop",
+        villageUpdateSignerSha256: "ab".repeat(32),
+      },
+      "ab".repeat(32),
+    ),
+  );
+  assert.throws(
+    () =>
+      assertPackagedUpdateSigner(
+        {
+          name: "@village/desktop",
+          villageUpdateSignerSha256: "cd".repeat(32),
+        },
+        "ab".repeat(32),
+      ),
+    /PACKAGED_UPDATE_SIGNER_MISMATCH/,
   );
 });
 

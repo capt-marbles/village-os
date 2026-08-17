@@ -1,4 +1,4 @@
-import { app, protocol, session, shell } from "electron";
+import { app, autoUpdater, dialog, protocol, session, shell } from "electron";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,6 +63,16 @@ import { installRitualBuilderMenu } from "./ritual-builder-menu.js";
 import { LocalRitualRunExecutor } from "./ritual-run-executor.js";
 import { RitualScheduler } from "./ritual-scheduler.js";
 import { createRitualShutdownHandler } from "./ritual-runtime-shutdown.js";
+import {
+  DesktopUpdateService,
+  desktopUpdateFetch,
+  loadPackagedUpdateTrustPolicy,
+  startPackagedDesktopUpdates,
+} from "./update-runtime.js";
+import {
+  ElectronMacUpdateInstaller,
+  MacOsUpdateArtifactVerifier,
+} from "./macos-update-adapter.js";
 
 registerVillageScheme(protocol);
 installGlobalSecurityPolicy(app);
@@ -262,8 +272,45 @@ export async function startVillageRuntime(
       }
     },
   });
+  const updateAwareWindow =
+    app.isPackaged && !internalComposition
+      ? startPackagedDesktopUpdates(villageWindow, {
+          loadPolicy: () => loadPackagedUpdateTrustPolicy(app.getAppPath()),
+          createService: (policy) =>
+            new DesktopUpdateService({
+              policy,
+              currentVersion: app.getVersion(),
+              stagingRoot: join(userDataPath, "updates"),
+              fetch: desktopUpdateFetch,
+              verifier: new MacOsUpdateArtifactVerifier(),
+              installer: new ElectronMacUpdateInstaller(autoUpdater, {
+                onBackgroundError: () => {
+                  villageWindow.reportLocalDiagnostic({
+                    component: "UPDATER",
+                    code: "UPDATE_INSTALLER_BACKGROUND_ERROR",
+                    retriable: false,
+                  });
+                },
+              }),
+            }),
+          confirmInstall: async (version) => {
+            const result = await dialog.showMessageBox({
+              type: "info",
+              buttons: ["Restart and update", "Later"],
+              defaultId: 0,
+              cancelId: 1,
+              noLink: true,
+              title: "Village update ready",
+              message: `Village ${version} is ready to install.`,
+              detail:
+                "Village verified the update package and signer. Choose Later to skip it for now; Village will check again next time it starts.",
+            });
+            return result.response === 0;
+          },
+        })
+      : villageWindow;
   return startNonBlockingContinuityEnrollment(
-    villageWindow,
+    updateAwareWindow,
     enrollContinuityRecipient,
   );
 }

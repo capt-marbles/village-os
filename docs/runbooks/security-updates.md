@@ -4,7 +4,7 @@ Village alpha supports Electron major 43 on macOS. A dependency upgrade to anoth
 
 ## Release prerequisites
 
-The distributable configuration requires hardened runtime, ASAR integrity validation, app-only ASAR loading, encrypted cookies, disabled Node CLI/environment escape hatches, Developer ID signing, and Apple notarization. Automatic publication is disabled until a main-process updater routes every downloaded candidate through the pinned endpoint, signer, checksum, product, channel, and downgrade policy.
+The distributable configuration requires hardened runtime, ASAR integrity validation, app-only ASAR loading, encrypted cookies, disabled Node CLI/environment escape hatches, Developer ID signing, and Apple notarization. The main-process updater routes every downloaded candidate through the pinned endpoint, signer, checksum, product, channel, and downgrade policy. Automatic publication remains disabled until the signed packaged update ceremony below passes against the owned endpoint.
 
 Before packaging, provide signing material through Electron Builder's supported `CSC_LINK` or `CSC_NAME` mechanism, one supported Apple notarization credential set, and `VILLAGE_RELEASE_SIGNER_SHA256` with the reviewed certificate fingerprint. Run:
 
@@ -30,16 +30,19 @@ Before installation, the trusted update boundary rejects:
 - product identifier other than `com.village.desktop`;
 - channel other than `alpha`;
 - a request outside `https://updates.village.run/desktop/alpha/manifest.json`;
-- any redirect, including another HTTPS host;
+- an artifact outside the direct-child ZIP namespace at `https://updates.village.run/desktop/alpha/`;
+- any manifest or artifact redirect, including another HTTPS host;
 - a certificate fingerprint different from the compiled trust policy;
 - malformed or mismatched SHA-512 artifact digest; and
 - an equal, lower, or malformed semantic version.
 
-The current module validates update evidence but is not yet wired to a production downloader or installer. The endpoint's ownership, TLS behavior, availability, and no-redirect behavior must be verified from a packaged build before enabling updates.
+Only a release package embeds `VILLAGE_RELEASE_SIGNER_SHA256` into its packaged metadata; ad-hoc and proof packages explicitly contain no usable pin and do not start the updater. The runtime fetches a strict, bounded JSON manifest without following redirects, streams the bounded ZIP into a private staging directory, rejects unsafe archive paths before extraction, verifies the app bundle with `codesign`, derives the leaf-certificate SHA-256 fingerprint and bundle identifier from the artifact, and compares the actual checksum. Only then does it give Electron a private `file:` feed for Squirrel.Mac's own staging and signature check. A native main-process prompt controls immediate restart; choosing Later keeps the staged update for the next restart.
+
+The endpoint's ownership, TLS behavior, availability, no-redirect behavior, and manifest publication process have not yet been proven from a signed package. Until that ceremony passes, do not publish a manifest. The manifest has exactly these fields: `productId`, `channel`, `version`, `artifactUrl`, and lowercase hexadecimal `sha512`; release notes and other unbounded data are not accepted at this trust boundary.
 
 ## Artifact verification
 
-For each candidate release, archive evidence for the source commit, dependency audit, static configuration gate, tests, package hash, `codesign` identity and entitlements, notarization result, Gatekeeper assessment, Electron fuse state, update manifest, redirect behavior, and clean-install/update/downgrade tests. A source configuration is not proof that the produced artifact has those properties.
+For each candidate release, archive evidence for the source commit, dependency audit, static configuration gate, tests, package hash, `codesign` identity and entitlements, notarization result, Gatekeeper assessment, Electron fuse state, the updater pin extracted from packaged `package.json`, update manifest, redirect behavior, and clean-install/update/downgrade tests. The packaged verifier requires the updater pin to equal the certificate fingerprint it observed on the app. A source configuration is not proof that the produced artifact has those properties.
 
 `pnpm audit:sbom` fails closed when an installed production component or the bundled Electron runtime lacks a version, license, or complete dependency reference. A successful release package writes the deterministic CycloneDX 1.6 inventory to `release/sbom/village.cdx.json` after artifact verification. Archive that file beside the signed release artifacts; it contains package URLs and safe distribution references but no local filesystem paths.
 

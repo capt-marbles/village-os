@@ -53,3 +53,37 @@ test("allows only the fixed Exa research egress contract", () => {
     ).some((error) => error.includes("fixed Exa egress contract")),
   );
 });
+
+test("allows only the updater's policy-gated fetch seam", () => {
+  const file = "apps/desktop/src/main/update-runtime.ts";
+  assert.deepEqual(
+    auditTelemetrySource(
+      `
+        export function desktopUpdateFetch(input, init) {
+          return globalThis.fetch(input, init);
+        }
+        const manifestResponse = await beginTimedFetch(
+          this.dependencies.fetch,
+          this.dependencies.policy.endpoint,
+          "application/json",
+          "MANIFEST_UNAVAILABLE",
+        );
+        prevalidateManifest(policy, currentVersion, manifest, manifestUrl);
+        const artifactResponse = await beginTimedFetch(
+          this.dependencies.fetch,
+          manifest.artifactUrl,
+          "application/zip",
+          "ARTIFACT_UNAVAILABLE",
+        );
+      `,
+      file,
+    ),
+    [],
+  );
+  assert.ok(
+    auditTelemetrySource(
+      `export const desktopUpdateFetch = globalThis.fetch;`,
+      file,
+    ).some((error) => error.includes("policy-gated updater egress contract")),
+  );
+});
