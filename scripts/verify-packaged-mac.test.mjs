@@ -61,6 +61,7 @@ test("rejects internal proof and fixture automation in the release ASAR", () => 
   );
   for (const prohibited of [
     "/dist/main/browser-host-manager.js",
+    "/dist/main/continuity-recipient.js",
     "/dist/main/desktop-delegated-workflow.js",
     "/dist/main/fixture-session-handler.js",
     "/dist/main/internal-fixture-provisioner.js",
@@ -75,8 +76,11 @@ test("rejects internal proof and fixture automation in the release ASAR", () => 
     "/dist/main/abrupt-exit-barrier.js",
     "/dist/main/internal-paired-bootstrap.js",
     "/dist/main/lazy-delegated-workflow.js",
+    "/dist/main/linkedin-session-continuity.js",
     "/dist/main/paired-proof-coordination.js",
     "/dist/main/proof-projection.js",
+    "/dist/main/runtime-continuity-activation.js",
+    "/dist/main/site-session-continuity.js",
   ]) {
     assert.throws(
       () =>

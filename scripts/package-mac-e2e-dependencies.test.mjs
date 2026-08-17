@@ -47,6 +47,20 @@ const credentialPackageConfig = parse(
     "utf8",
   ),
 );
+const releasePackageConfig = parse(
+  await readFile(
+    new URL("../apps/desktop/electron-builder.yml", import.meta.url),
+    "utf8",
+  ),
+);
+const productionRuntime = await readFile(
+  new URL("../apps/desktop/src/main/runtime.ts", import.meta.url),
+  "utf8",
+);
+const observerChatPage = await readFile(
+  new URL("../apps/web/src/components/chat/ChatPage.tsx", import.meta.url),
+  "utf8",
+);
 
 test("the packaged desktop command builds its complete workspace graph", () => {
   assert.match(
@@ -134,9 +148,11 @@ test("the continuity smoke package uses only its isolated proof entry", () => {
   );
   for (const excludedOutput of [
     "!dist/mac*/**",
+    "!dist/steward-default/**",
     "!dist/ritual-e2e/**",
     "!dist/e2e/**",
     "!dist/continuity-e2e/**",
+    "!dist/credential-e2e/**",
   ]) {
     assert.ok(continuityPackageConfig.files.includes(excludedOutput));
   }
@@ -185,4 +201,24 @@ test("only the internal credential proof may replace the macOS Keychain", async 
   );
   assert.match(internalEntry, /appendSwitch\("use-mock-keychain"\)/u);
   assert.doesNotMatch(productionEntry, /use-mock-keychain/u);
+});
+
+test("the shipped alpha excludes deferred cross-machine session continuity", () => {
+  for (const excludedOutput of [
+    "!dist/main/continuity-*",
+    "!dist/main/linkedin-session-continuity*",
+    "!dist/main/runtime-continuity-*",
+    "!dist/main/site-session-continuity*",
+  ]) {
+    assert.ok(releasePackageConfig.files.includes(excludedOutput));
+  }
+  assert.doesNotMatch(
+    productionRuntime,
+    /RuntimeContinuity|ContinuityRecipient/u,
+  );
+  assert.doesNotMatch(
+    productionRuntime,
+    /startNonBlockingContinuityEnrollment/u,
+  );
+  assert.doesNotMatch(observerChatPage, /ContinuitySetupCard/u);
 });

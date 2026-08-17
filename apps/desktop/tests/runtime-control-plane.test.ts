@@ -12,12 +12,14 @@ import { deviceIdForPublicKey } from "../src/main/pairing-bootstrap.js";
 import {
   assertDistinctBrowserSessionIdentity,
   createPairedWorkflowRuntimeComposition,
-  createRuntimeContinuityMailboxClient,
-  createRuntimeContinuityRecipient,
-  createRuntimeFixtureContinuityRecipient,
   createRuntimeControlPlaneAutomationFence,
   createRuntimeControlPlaneComposition,
 } from "../src/main/runtime-control-plane.js";
+import {
+  createRuntimeContinuityMailboxClient,
+  createRuntimeContinuityRecipient,
+  createRuntimeFixtureContinuityRecipient,
+} from "../src/main/runtime-continuity-composition.js";
 
 describe("packaged runtime control-plane composition", () => {
   const temporaryDirectories: string[] = [];

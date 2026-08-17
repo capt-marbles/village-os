@@ -4,7 +4,6 @@ import {
   dialog,
   Notification,
   protocol,
-  session,
   shell,
 } from "electron";
 import { hostname } from "node:os";
@@ -34,10 +33,7 @@ import {
 import { PairingClient } from "./pairing-client.js";
 import { PairingDeepLinkInbox } from "./pairing-deep-link.js";
 import { createPairingWindow } from "./pairing-window.js";
-import {
-  configureBrowserSession,
-  installGlobalSecurityPolicy,
-} from "./security.js";
+import { installGlobalSecurityPolicy } from "./security.js";
 import { verifyMacOsOwnerPresence } from "./step-up-auth.js";
 import {
   completePendingSessionErasure,
@@ -48,19 +44,9 @@ import {
   createRuntimeModelProviderComposition,
   type RuntimeModelProviderComposition,
 } from "./runtime-model-provider.js";
-import {
-  createRuntimeControlPlaneAutomationFence,
-  createRuntimeFixtureContinuityRecipient,
-} from "./runtime-control-plane.js";
-import { ContinuityRecipientKeyVault } from "./continuity-recipient-key-vault.js";
-import { startNonBlockingContinuityEnrollment } from "./runtime-continuity-enrollment.js";
-import { RuntimeContinuityActivation } from "./runtime-continuity-activation.js";
+import { createRuntimeControlPlaneAutomationFence } from "./runtime-control-plane.js";
 import { LocalBrowserHost } from "../browser/local-browser-host.js";
-import {
-  assertMacOsProfileEncryptionAvailable,
-  ensureProtectedProfile,
-  ProfileLock,
-} from "../browser/profile-protection.js";
+import { assertMacOsProfileEncryptionAvailable } from "../browser/profile-protection.js";
 import {
   createRitualBuilderWindow,
   type RitualBuilderWindow,
@@ -216,7 +202,6 @@ export async function startVillageRuntime(
     internalComposition?.modelProviders ??
     createRuntimeModelProviderComposition((url) => shell.openExternal(url));
   let automationFence;
-  let enrollContinuityRecipient: (() => Promise<unknown>) | undefined;
   if (app.isPackaged && !internalComposition) {
     const controlPlaneUrl = resolveRuntimeControlPlaneUrl(
       identity.controlPlaneOrigin,
@@ -241,50 +226,6 @@ export async function startVillageRuntime(
         }).show();
       },
     });
-    const recipientKeySource = new ContinuityRecipientKeyVault(
-      join(identityDirectory, "continuity-recipient.json"),
-      packagedProtector!,
-    );
-    enrollContinuityRecipient = async () => {
-      const continuity = await createRuntimeFixtureContinuityRecipient({
-        controlPlaneUrl,
-        userDataPath,
-        identity,
-        deviceIdentitySource,
-        recipientKeySource,
-      });
-      if (continuity.state === "NOT_CONFIGURED") return continuity;
-      const fixtureBrowserSessionId = identity.fixtureBrowserSessionId!;
-      const profile = await ensureProtectedProfile(
-        LocalBrowserHost.profileRoot(userDataPath),
-        {
-          principalId: identity.principalId,
-          deviceId: identity.deviceId,
-          site: "OWNED_FIXTURE",
-        },
-      );
-      const profileLock = await ProfileLock.acquire(profile.path);
-      try {
-        const fixtureSession = session.fromPath(profile.path, { cache: true });
-        configureBrowserSession(fixtureSession);
-        const activation = new RuntimeContinuityActivation({
-          identity: {
-            principalId: identity.principalId,
-            deviceId: identity.deviceId,
-            browserSessionId: fixtureBrowserSessionId,
-            site: "OWNED_FIXTURE",
-          },
-          journalRoot: join(userDataPath, "continuity", "runtime"),
-          devicePrivateKey: deviceIdentity.privateKey,
-          recipientPrivateKey: continuity.recipientKey.privateKey,
-          cookieStore: fixtureSession.cookies,
-          mailbox: continuity.mailboxClient,
-        });
-        return await activation.synchronize();
-      } finally {
-        await profileLock.release();
-      }
-    };
   }
   const villageWindow = await createVillageAppWindow({
     ...identity,
@@ -354,10 +295,7 @@ export async function startVillageRuntime(
           },
         })
       : villageWindow;
-  return startNonBlockingContinuityEnrollment(
-    updateAwareWindow,
-    enrollContinuityRecipient,
-  );
+  return updateAwareWindow;
 }
 
 export async function runVillageApplication(

@@ -6,9 +6,11 @@ extraMetadata:
 files:
   - dist/**
   - "!dist/mac*/**"
+  - "!dist/steward-default/**"
   - "!dist/ritual-e2e/**"
   - "!dist/e2e/**"
   - "!dist/continuity-e2e/**"
+  - "!dist/credential-e2e/**"
   - package.json
 mac:
   target: dir
