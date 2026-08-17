@@ -392,8 +392,8 @@ export class SiteSessionMailbox extends DurableObject<Environment> {
       return { ok: false as const, code: "MAILBOX_NOT_FOUND" };
     }
     await this.ctx.storage.deleteAlarm();
-    this.destroyed = true;
     await this.ctx.storage.deleteAll();
+    this.destroyed = true;
     return { ok: true as const, deleted: true as const };
   }
 
