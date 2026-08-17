@@ -26,26 +26,31 @@ describe("macOS update adapter", () => {
     const archive = join(root, "Village.zip");
     await writeFile(archive, Buffer.from("PK\u0003\u0004fixture"));
     const certificate = Buffer.from("leaf-certificate");
-    const verifier = new MacOsUpdateArtifactVerifier({
-      listArchiveEntries: async () => [
-        "Village.app/",
-        "Village.app/Contents/Info.plist",
-      ],
-      readArchiveTotals: async () => ({
-        entryCount: 2,
-        uncompressedBytes: 1_024,
-      }),
-      extractArchive: async (_archive, destination) => {
-        await mkdir(join(destination, "Village.app"));
+    const verifier = new MacOsUpdateArtifactVerifier(
+      {
+        listArchiveEntries: async () => [
+          "Village.app/",
+          "Village.app/Contents/Info.plist",
+        ],
+        readArchiveTotals: async () => ({
+          entryCount: 2,
+          uncompressedBytes: 1_024,
+        }),
+        extractArchive: async (_archive, destination) => {
+          await mkdir(join(destination, "Village.app"));
+        },
+        verifyCodeSignature: vi.fn(async () => undefined),
+        extractLeafCertificate: async (_appPath, certificatePrefix) => {
+          await writeFile(`${certificatePrefix}0`, certificate);
+        },
+        readBundleValue: vi.fn(async (_path, key) =>
+          key === "CFBundleIdentifier"
+            ? "com.village.desktop"
+            : "1.1.0-alpha.1",
+        ),
       },
-      verifyCodeSignature: vi.fn(async () => undefined),
-      extractLeafCertificate: async (_appPath, certificatePrefix) => {
-        await writeFile(`${certificatePrefix}0`, certificate);
-      },
-      readBundleValue: vi.fn(async (_path, key) =>
-        key === "CFBundleIdentifier" ? "com.village.desktop" : "1.1.0-alpha.1",
-      ),
-    });
+      { platform: "darwin" },
+    );
 
     await expect(verifier.inspect(archive)).resolves.toEqual({
       productId: "com.village.desktop",
@@ -60,22 +65,27 @@ describe("macOS update adapter", () => {
     directories.push(root);
     const archive = join(root, "Village.zip");
     await writeFile(archive, Buffer.from("PK\u0003\u0004fixture"));
-    const verifier = new MacOsUpdateArtifactVerifier({
-      listArchiveEntries: async () => ["Village.app/", "Other.app/"],
-      readArchiveTotals: async () => ({
-        entryCount: 2,
-        uncompressedBytes: 1_024,
-      }),
-      extractArchive: async (_archive, destination) => {
-        await mkdir(join(destination, "Village.app"));
-        await mkdir(join(destination, "Other.app"));
+    const verifier = new MacOsUpdateArtifactVerifier(
+      {
+        listArchiveEntries: async () => ["Village.app/", "Other.app/"],
+        readArchiveTotals: async () => ({
+          entryCount: 2,
+          uncompressedBytes: 1_024,
+        }),
+        extractArchive: async (_archive, destination) => {
+          await mkdir(join(destination, "Village.app"));
+          await mkdir(join(destination, "Other.app"));
+        },
+        verifyCodeSignature: vi.fn(async () => undefined),
+        extractLeafCertificate: vi.fn(async () => undefined),
+        readBundleValue: vi.fn(async (_path, key) =>
+          key === "CFBundleIdentifier"
+            ? "com.village.desktop"
+            : "1.1.0-alpha.1",
+        ),
       },
-      verifyCodeSignature: vi.fn(async () => undefined),
-      extractLeafCertificate: vi.fn(async () => undefined),
-      readBundleValue: vi.fn(async (_path, key) =>
-        key === "CFBundleIdentifier" ? "com.village.desktop" : "1.1.0-alpha.1",
-      ),
-    });
+      { platform: "darwin" },
+    );
 
     await expect(verifier.inspect(archive)).rejects.toThrowError(
       "UPDATE_ARCHIVE_SHAPE_INVALID",
@@ -88,19 +98,24 @@ describe("macOS update adapter", () => {
     const archive = join(root, "Village.zip");
     await writeFile(archive, Buffer.from("PK\u0003\u0004fixture"));
     const extractArchive = vi.fn(async () => undefined);
-    const verifier = new MacOsUpdateArtifactVerifier({
-      listArchiveEntries: async () => ["../escape", "Village.app/"],
-      readArchiveTotals: async () => ({
-        entryCount: 2,
-        uncompressedBytes: 1_024,
-      }),
-      extractArchive,
-      verifyCodeSignature: vi.fn(async () => undefined),
-      extractLeafCertificate: vi.fn(async () => undefined),
-      readBundleValue: vi.fn(async (_path, key) =>
-        key === "CFBundleIdentifier" ? "com.village.desktop" : "1.1.0-alpha.1",
-      ),
-    });
+    const verifier = new MacOsUpdateArtifactVerifier(
+      {
+        listArchiveEntries: async () => ["../escape", "Village.app/"],
+        readArchiveTotals: async () => ({
+          entryCount: 2,
+          uncompressedBytes: 1_024,
+        }),
+        extractArchive,
+        verifyCodeSignature: vi.fn(async () => undefined),
+        extractLeafCertificate: vi.fn(async () => undefined),
+        readBundleValue: vi.fn(async (_path, key) =>
+          key === "CFBundleIdentifier"
+            ? "com.village.desktop"
+            : "1.1.0-alpha.1",
+        ),
+      },
+      { platform: "darwin" },
+    );
 
     await expect(verifier.inspect(archive)).rejects.toThrowError(
       "UPDATE_ARCHIVE_SHAPE_INVALID",
@@ -114,19 +129,24 @@ describe("macOS update adapter", () => {
     const archive = join(root, "Village.zip");
     await writeFile(archive, Buffer.from("PK\u0003\u0004fixture"));
     const extractArchive = vi.fn(async () => undefined);
-    const verifier = new MacOsUpdateArtifactVerifier({
-      listArchiveEntries: async () => ["Village.app/"],
-      readArchiveTotals: async () => ({
-        entryCount: 1,
-        uncompressedBytes: 2 * 1024 * 1024 * 1024 + 1,
-      }),
-      extractArchive,
-      verifyCodeSignature: vi.fn(async () => undefined),
-      extractLeafCertificate: vi.fn(async () => undefined),
-      readBundleValue: vi.fn(async (_path, key) =>
-        key === "CFBundleIdentifier" ? "com.village.desktop" : "1.1.0-alpha.1",
-      ),
-    });
+    const verifier = new MacOsUpdateArtifactVerifier(
+      {
+        listArchiveEntries: async () => ["Village.app/"],
+        readArchiveTotals: async () => ({
+          entryCount: 1,
+          uncompressedBytes: 2 * 1024 * 1024 * 1024 + 1,
+        }),
+        extractArchive,
+        verifyCodeSignature: vi.fn(async () => undefined),
+        extractLeafCertificate: vi.fn(async () => undefined),
+        readBundleValue: vi.fn(async (_path, key) =>
+          key === "CFBundleIdentifier"
+            ? "com.village.desktop"
+            : "1.1.0-alpha.1",
+        ),
+      },
+      { platform: "darwin" },
+    );
 
     await expect(verifier.inspect(archive)).rejects.toThrowError(
       "UPDATE_ARCHIVE_SHAPE_INVALID",
