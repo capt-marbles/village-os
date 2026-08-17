@@ -532,7 +532,7 @@ export function RitualBuilderWorkspace({
           schemaVersion: 1,
           ritualId: next.approved.ritualId,
           ritualRevision: next.approved.ritualRevision,
-          receiptId: next.receipt.receiptId,
+          receiptId: next.source.receipt.receiptId,
           feedback: next.pendingFeedback,
         })
         .then((result) => {

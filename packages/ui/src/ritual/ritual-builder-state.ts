@@ -35,6 +35,10 @@ interface RitualBuilderStateBase {
   requestRevision: number;
 }
 
+type RitualLearningSource =
+  | { kind: "TEST"; receipt: RitualTestReceipt }
+  | { kind: "RUN"; receipt: RitualRunReceipt; run: RitualRun };
+
 export type RitualBuilderState =
   | (RitualBuilderStateBase & {
       phase: "DESCRIBE_PURPOSE";
@@ -127,27 +131,27 @@ export type RitualBuilderState =
       phase: "GIVE_FEEDBACK";
       draft: RitualDraft;
       approved: ApprovedRitualRevision;
-      receipt: RitualTestReceipt;
+      source: RitualLearningSource;
     })
   | (RitualBuilderStateBase & {
       phase: "SHAPING_LEARNING";
       draft: RitualDraft;
       approved: ApprovedRitualRevision;
-      receipt: RitualTestReceipt;
+      source: RitualLearningSource;
       pendingFeedback: string;
     })
   | (RitualBuilderStateBase & {
       phase: "REVIEW_LEARNING";
       draft: RitualDraft;
       approved: ApprovedRitualRevision;
-      receipt: RitualTestReceipt;
+      source: RitualLearningSource;
       proposal: RitualLearningProposal;
     })
   | (RitualBuilderStateBase & {
       phase: "SAVING_LEARNING";
       draft: RitualDraft;
       approved: ApprovedRitualRevision;
-      receipt: RitualTestReceipt;
+      source: RitualLearningSource;
       proposal: RitualLearningProposal;
       pendingRevision: ApprovedRitualRevision;
     });
@@ -969,16 +973,24 @@ export function reduceRitualBuilder(
       return { ...state, error: event.message };
     }
     case "START_FEEDBACK": {
-      if (state.phase !== "REVIEW_TEST") return state;
+      if (state.phase !== "REVIEW_TEST" && state.phase !== "REVIEW_RUN") {
+        return state;
+      }
       return {
-        ...state,
         phase: "GIVE_FEEDBACK",
+        draft: state.draft,
+        approved: state.approved,
+        source:
+          state.phase === "REVIEW_RUN"
+            ? { kind: "RUN", receipt: state.runReceipt, run: state.run }
+            : { kind: "TEST", receipt: state.receipt },
         messages: message(
           state.messages,
           "STEWARD",
           "What should I keep or change for the next Run? I’ll propose a revision for you to review.",
         ),
         error: null,
+        requestRevision: state.requestRevision,
       };
     }
     case "SUBMIT_FEEDBACK": {
@@ -987,7 +999,7 @@ export function reduceRitualBuilder(
         schemaVersion: 1,
         ritualId: state.approved.ritualId,
         ritualRevision: state.approved.ritualRevision,
-        receiptId: state.receipt.receiptId,
+        receiptId: state.source.receipt.receiptId,
         feedback: event.feedback,
       });
       if (!parsed.success) {
@@ -1019,7 +1031,7 @@ export function reduceRitualBuilder(
         !parsed.success ||
         parsed.data.ritualId !== state.approved.ritualId ||
         parsed.data.fromRevision !== state.approved.ritualRevision ||
-        parsed.data.receiptId !== state.receipt.receiptId ||
+        parsed.data.receiptId !== state.source.receipt.receiptId ||
         parsed.data.ownerFeedback !== state.pendingFeedback
       ) {
         return {
@@ -1128,11 +1140,28 @@ export function reduceRitualBuilder(
     }
     case "REJECT_LEARNING": {
       if (state.phase !== "REVIEW_LEARNING") return state;
+      if (state.source.kind === "RUN") {
+        return {
+          phase: "REVIEW_RUN",
+          draft: state.draft,
+          approved: state.approved,
+          receipt: null,
+          run: state.source.run,
+          runReceipt: state.source.receipt,
+          messages: message(
+            state.messages,
+            "SYSTEM",
+            "Learning proposal rejected. The approved Ritual is unchanged.",
+          ),
+          error: null,
+          requestRevision: state.requestRevision,
+        };
+      }
       return {
         phase: "REVIEW_TEST",
         draft: state.draft,
         approved: state.approved,
-        receipt: state.receipt,
+        receipt: state.source.receipt,
         messages: message(
           state.messages,
           "SYSTEM",

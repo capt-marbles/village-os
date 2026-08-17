@@ -24,6 +24,7 @@ import {
   type ApprovedRitualRevision,
   type RitualStore,
   type RitualLearningProposal,
+  type RitualLearningReceipt,
   type RitualInboxItem,
   type RitualRun,
   type RitualRunReceipt,
@@ -236,6 +237,7 @@ export class RitualRepository {
       if (latest && ritual.ritualRevision !== latest.ritualRevision + 1) {
         throw new Error("STALE_RITUAL_REVISION");
       }
+      assertLearningLineage(current, ritual, latest);
       if (current.rituals.length >= 100) throw new Error("RITUAL_STORE_FULL");
       await this.write({
         ...current,
@@ -268,9 +270,11 @@ export class RitualRepository {
       if (!ritual || ritual.ritualRevision !== receipt.ritualRevision) {
         throw new Error("STALE_RITUAL_TEST_RUN");
       }
-      const stored = current.receipts.find(
-        (entry) => entry.receiptId === receipt.receiptId,
-      );
+      const storedReceipt = findLearningReceipt(current, receipt.receiptId);
+      if (storedReceipt?.mode === "RUN") {
+        throw new Error("RITUAL_RECEIPT_CONFLICT");
+      }
+      const stored = storedReceipt?.mode === "TEST" ? storedReceipt : null;
       if (stored && JSON.stringify(stored) === JSON.stringify(receipt)) return;
       if (stored) throw new Error("RITUAL_RECEIPT_CONFLICT");
       if (current.receipts.length >= 100) {
@@ -295,13 +299,10 @@ export class RitualRepository {
     });
   }
 
-  findReceipt(receiptId: string): Promise<RitualTestReceipt | null> {
+  findReceipt(receiptId: string): Promise<RitualLearningReceipt | null> {
     return this.enqueue(async () => {
-      return (
-        (await this.read()).receipts.find(
-          (receipt) => receipt.receiptId === receiptId,
-        ) ?? null
-      );
+      const store = await this.read();
+      return findLearningReceipt(store, receiptId);
     });
   }
 
@@ -314,9 +315,7 @@ export class RitualRepository {
           entry.ritualId === proposal.ritualId &&
           entry.ritualRevision === proposal.fromRevision,
       );
-      const receipt = current.receipts.find(
-        (entry) => entry.receiptId === proposal.receiptId,
-      );
+      const receipt = findLearningReceipt(current, proposal.receiptId);
       if (
         !ritual ||
         !receipt ||
@@ -431,9 +430,11 @@ export class RitualRepository {
       if (!ritual || !storedRun) {
         throw new Error("STALE_RITUAL_RUN_RECEIPT");
       }
-      const stored = current.runReceipts.find(
-        (entry) => entry.receiptId === receipt.receiptId,
-      );
+      const storedReceipt = findLearningReceipt(current, receipt.receiptId);
+      if (storedReceipt?.mode === "TEST") {
+        throw new Error("RITUAL_RECEIPT_CONFLICT");
+      }
+      const stored = storedReceipt?.mode === "RUN" ? storedReceipt : null;
       const storedForRun = current.runReceipts.find(
         (entry) => entry.runId === run.runId,
       );
@@ -606,6 +607,7 @@ function retainStoreWithinByteBudget(
   explicitlyProtectedRunId?: RitualRun["runId"],
 ): RitualStore {
   let retained = store;
+  const lineageProtectedRunIds = learningLineageRunIds(store);
   while (
     Buffer.byteLength(JSON.stringify(retained), "utf8") >
     MAX_PERSISTED_STORE_BYTES
@@ -622,7 +624,8 @@ function retainStoreWithinByteBudget(
       (run) =>
         isTerminalRun(run) &&
         run.runId !== explicitlyProtectedRunId &&
-        run.runId !== latestApprovedRunId,
+        run.runId !== latestApprovedRunId &&
+        !lineageProtectedRunIds.has(run.runId),
     );
     if (index < 0) throw new Error("RITUAL_STORE_FULL");
     const runs = [...retained.runs];
@@ -636,6 +639,20 @@ function retainStoreWithinByteBudget(
     };
   }
   return retained;
+}
+
+function findLearningReceipt(
+  store: RitualStore,
+  receiptId: string,
+): RitualLearningReceipt | null {
+  const testReceipt = store.receipts.find(
+    (receipt) => receipt.receiptId === receiptId,
+  );
+  const runReceipt = store.runReceipts.find(
+    (receipt) => receipt.receiptId === receiptId,
+  );
+  if (testReceipt && runReceipt) throw new Error("RITUAL_RECEIPT_CONFLICT");
+  return testReceipt ?? runReceipt ?? null;
 }
 
 function isTerminalRun(run: RitualRun): boolean {
@@ -684,6 +701,7 @@ function evictTerminalRunsForNewRun(store: RitualStore): {
   let runs = [...store.runs];
   let runReceipts = [...store.runReceipts];
   const currentApproved = store.rituals.at(-1);
+  const lineageProtectedRunIds = learningLineageRunIds(store);
   const protectedRunId = currentApproved
     ? runs.findLast(
         (run) =>
@@ -694,7 +712,10 @@ function evictTerminalRunsForNewRun(store: RitualStore): {
 
   while (runs.length >= 100) {
     const index = runs.findIndex(
-      (run) => isTerminalRun(run) && run.runId !== protectedRunId,
+      (run) =>
+        isTerminalRun(run) &&
+        run.runId !== protectedRunId &&
+        !lineageProtectedRunIds.has(run.runId),
     );
     if (index < 0) return null;
     const [evicted] = runs.splice(index, 1);
@@ -703,6 +724,43 @@ function evictTerminalRunsForNewRun(store: RitualStore): {
     );
   }
   return { runs, runReceipts };
+}
+
+function learningLineageRunIds(store: RitualStore): ReadonlySet<string> {
+  const protectedReceiptIds = new Set([
+    ...store.learningProposals.map((proposal) => proposal.receiptId),
+    ...store.rituals.flatMap((ritual) =>
+      ritual.basedOnReceiptId ? [ritual.basedOnReceiptId] : [],
+    ),
+  ]);
+  return new Set(
+    store.runReceipts
+      .filter((receipt) => protectedReceiptIds.has(receipt.receiptId))
+      .map((receipt) => receipt.runId),
+  );
+}
+
+function assertLearningLineage(
+  store: RitualStore,
+  ritual: ApprovedRitualRevision,
+  prior: ApprovedRitualRevision | undefined,
+): void {
+  if (!ritual.learningProposalId || !ritual.basedOnReceiptId) return;
+  const proposal = store.learningProposals.find(
+    (entry) => entry.proposalId === ritual.learningProposalId,
+  );
+  const receipt = findLearningReceipt(store, ritual.basedOnReceiptId);
+  if (
+    !prior ||
+    !proposal ||
+    proposal.receiptId !== ritual.basedOnReceiptId ||
+    proposal.ritualId !== prior.ritualId ||
+    proposal.fromRevision !== prior.ritualRevision ||
+    receipt?.ritualId !== prior.ritualId ||
+    receipt.ritualRevision !== prior.ritualRevision
+  ) {
+    throw new Error("STALE_RITUAL_LEARNING_REVISION");
+  }
 }
 
 function assertRunSuccessor(stored: RitualRun, candidate: RitualRun): void {

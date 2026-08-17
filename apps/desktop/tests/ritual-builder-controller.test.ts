@@ -1325,4 +1325,107 @@ describe("RitualBuilderController", () => {
       }),
     ).rejects.toThrow("STALE_RITUAL_LEARNING_PROPOSAL");
   });
+
+  it("locates and validates exact Run Receipt evidence before learning", async () => {
+    const runReceipt = {
+      schemaVersion: 1 as const,
+      receiptId: "rcp_01J00000000000000000000009",
+      runId: "rrn_01J00000000000000000000009",
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      mode: "RUN" as const,
+      executionProvider: "LOCAL_RITUAL_V1" as const,
+      outcome: "NEEDS_REVIEW" as const,
+      summary: "The completed Run needs an owner review.",
+      stepEvidence: [
+        {
+          stepKey: approved.steps[0]!.stepKey,
+          title: approved.steps[0]!.title,
+          actor: approved.steps[0]!.actor,
+          research: null,
+        },
+      ],
+      uncertainties: [
+        "No external provider was invoked; this Receipt proves orchestration only.",
+      ],
+      externalEffects: [] as const,
+      startedAt: "2026-08-16T12:00:01.000Z",
+      recordedAt: "2026-08-16T12:00:04.000Z",
+    };
+    const provider = {
+      ...unavailableProvider(),
+      learn: vi.fn(async (context) => ({
+        status: "proposal" as const,
+        proposalId: context.proposalId,
+        ritualId: context.ritual.ritualId,
+        fromRevision: context.ritual.ritualRevision,
+        receiptId: context.receipt.receiptId,
+        ownerFeedback: context.ownerFeedback,
+        stewardMessage: "I propose a more concise result.",
+        rationale: "The completed Run and owner feedback support this change.",
+        proposedDefinition: {
+          name: context.ritual.name,
+          purpose: context.ritual.purpose,
+          trigger: context.ritual.trigger,
+          steps: context.ritual.steps,
+          permissions: context.ritual.permissions,
+          completion: "A concise reviewable result is ready.",
+          reviewPolicy: context.ritual.reviewPolicy,
+        },
+      })),
+    };
+    const repository = {
+      latestSnapshot: vi.fn(async () => ({
+        approved,
+        receipt: null,
+        run: null,
+        runReceipt,
+      })),
+      find: vi.fn(async () => approved),
+      findReceipt: vi.fn(async () => runReceipt),
+      findLearningProposal: vi.fn(async () => null),
+      save: vi.fn(async () => undefined),
+      saveReceipt: vi.fn(async () => undefined),
+      saveLearningProposal: vi.fn(async () => undefined),
+      ...unusedRunPersistence(),
+    };
+    const controller = new RitualBuilderController(provider, repository, {
+      createId: () => "rlp_01J00000000000000000000009",
+      now: () => "2026-08-16T12:05:00.000Z",
+    });
+
+    await expect(
+      controller.proposeLearning({
+        schemaVersion: 1,
+        ritualId: approved.ritualId,
+        ritualRevision: approved.ritualRevision,
+        receiptId: runReceipt.receiptId,
+        feedback: "Keep the evidence but make the next result more concise.",
+      }),
+    ).resolves.toMatchObject({
+      status: "proposal",
+      receiptId: runReceipt.receiptId,
+    });
+    expect(provider.learn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        receipt: expect.objectContaining({ mode: "RUN" }),
+      }),
+    );
+    expect(repository.saveLearningProposal).toHaveBeenCalledOnce();
+
+    repository.findReceipt.mockResolvedValueOnce({
+      ...runReceipt,
+      ritualRevision: approved.ritualRevision + 1,
+    });
+    await expect(
+      controller.proposeLearning({
+        schemaVersion: 1,
+        ritualId: approved.ritualId,
+        ritualRevision: approved.ritualRevision,
+        receiptId: runReceipt.receiptId,
+        feedback: "Keep the evidence but make the next result more concise.",
+      }),
+    ).rejects.toThrow("STALE_RITUAL_LEARNING_PROPOSAL");
+    expect(provider.learn).toHaveBeenCalledOnce();
+  });
 });
