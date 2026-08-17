@@ -2,6 +2,7 @@
   "name": "@village/desktop",
   "version": "0.0.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "main": "dist/main/production-entry.js",
   "scripts": {
@@ -17,7 +18,7 @@
     "verify:delegated-workflow:abrupt-recovery": "node ../../scripts/verify-delegated-workflow.mjs --abrupt-recovery",
     "verify:delegated-workflow:owner-recovery": "node ../../scripts/verify-delegated-workflow.mjs --owner-recovery",
     "verify:delegated-workflow:observer-recovery": "node ../../scripts/verify-delegated-workflow.mjs --observer-recovery",
-    "package:mac:release": "pnpm --dir ../.. audit:provenance && pnpm --dir ../.. audit:licenses && pnpm --dir ../.. audit:assets && pnpm --dir ../.. audit:boundaries && pnpm --dir ../.. audit:secret-sinks && pnpm --dir ../.. audit:telemetry-egress && node ../../scripts/validate-release-config.mjs --release && VILLAGE_BUILD_CHANNEL=release pnpm build && electron-builder --config electron-builder.yml --mac && node ../../scripts/verify-packaged-mac.mjs --release",
+    "package:mac:release": "pnpm --dir ../.. audit:provenance && pnpm --dir ../.. audit:licenses && pnpm --dir ../.. audit:assets && pnpm --dir ../.. audit:boundaries && pnpm --dir ../.. audit:secret-sinks && pnpm --dir ../.. audit:telemetry-egress && pnpm --dir ../.. audit:sbom && node ../../scripts/validate-release-config.mjs --release && VILLAGE_BUILD_CHANNEL=release pnpm build && electron-builder --config electron-builder.yml --mac && node ../../scripts/verify-packaged-mac.mjs --release && pnpm --dir ../.. generate:sbom",
     "start": "electron .",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
