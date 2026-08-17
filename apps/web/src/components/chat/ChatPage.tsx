@@ -6,7 +6,6 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ObserverBrowserCard } from "../browser/ObserverBrowserCard.js";
 import { PairDesktopCard } from "../browser/PairDesktopCard.js";
-import { ContinuitySetupCard } from "../browser/ContinuitySetupCard.js";
 import { VillageIdentityGate } from "../identity/VillageIdentityGate.js";
 import {
   ObserverApiClient,
@@ -136,7 +135,6 @@ export function ChatPage({
       <div>
         <VillageIdentityGate>
           <PairDesktopCard />
-          <ContinuitySetupCard />
         </VillageIdentityGate>
         {status !== "READY" ? (
           <p className="observer-connection" role="status">

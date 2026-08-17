@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import {
   PairingSetupClient,
   pairingCompletionUrl,
-  pairingLegacySessionUrl,
   pairingSessionUrl,
   parsePublicPairingRequest,
   type PairedBrowserSession,
@@ -187,7 +186,7 @@ export function PairDesktopCard({ client }: { client?: PairingSetupClient }) {
         <>
           <p>
             The secure desktop pairing is complete. Village only needs to finish
-            assigning its browser sessions.
+            assigning its browser session.
           </p>
           <button
             type="button"
@@ -209,16 +208,6 @@ export function PairDesktopCard({ client }: { client?: PairingSetupClient }) {
             href={pairingSessionUrl(challenge, session)}
           >
             Open assigned browser
-          </a>
-          <p>
-            Using an older Village Desktop? Continuity will remain off until you
-            upgrade.
-          </p>
-          <a
-            className="pair-desktop-card__link"
-            href={pairingLegacySessionUrl(challenge, session)}
-          >
-            Open without continuity
           </a>
         </>
       ) : null}

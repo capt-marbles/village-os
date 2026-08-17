@@ -12,6 +12,7 @@ import {
   type UnsignedCommandEnvelope,
 } from "@village/contracts";
 import { authenticateRequest } from "../auth.js";
+import { routeRequest } from "../routes.js";
 
 const principalId = "prn_01J00000000000000000000000";
 const otherPrincipalId = "prn_01J00000000000000000000001";
@@ -653,6 +654,21 @@ describe("authenticated pairing routes", () => {
         VILLAGE_ENVIRONMENT: "production",
       }),
     ).toEqual({ ok: false, code: "UNAUTHENTICATED" });
+  });
+
+  it("keeps experimental Site Session continuity absent from the standard alpha", async () => {
+    const response = await routeRequest(
+      new Request("https://village.test/api/site-session-continuity/setup", {
+        headers: ownerHeaders,
+      }),
+      { ...env, VILLAGE_EXPERIMENTAL_CONTINUITY: "disabled" },
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      code: "ROUTE_NOT_FOUND",
+    });
   });
 
   it("authenticates a connector claim and keeps event cursors owner-scoped", async () => {

@@ -144,6 +144,17 @@ export async function routeRequest(
       status: "ok",
     });
   }
+  if (
+    url.pathname.startsWith("/api/site-session-continuity/") &&
+    environment.VILLAGE_EXPERIMENTAL_CONTINUITY !== "enabled"
+  ) {
+    return json(
+      request,
+      environment,
+      { ok: false, code: "ROUTE_NOT_FOUND" },
+      404,
+    );
+  }
 
   try {
     if (request.method === "GET" && url.pathname === "/api/identity") {
