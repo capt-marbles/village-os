@@ -16,7 +16,11 @@ Cancel blocks future automation after reconciliation but deliberately preserves 
 
 ## Cloud records
 
-Projections, ordered events, checkpoints, and receipts are principal-scoped. The alpha policy declares 30-day retention, provider-managed encryption at rest, owner export availability, cascade on principal deletion, tombstone plus absence verification, and expiry from backups according to the backup provider's retention window.
+Cloud records are principal-scoped. `GET /api/owner/data-export` returns an owner-authenticated, sanitized export of D1 records plus a record-count summary from every authoritative Browser Session coordinator. It excludes identity subjects, device public keys, pairing hashes, raw payload JSON, and continuity ciphertext.
+
+Cloud deletion is deliberately two-stage. `POST /api/owner/deletion-requests` requires exact-origin CSRF protection and the closed confirmation phrase. The matching confirmation route derives the principal from authentication, destroys every enumerated Browser Session coordinator and continuity mailbox, deletes D1 owner data, and marks its surviving tombstone complete only after absence verification. A lost success response can be retried without recreating the deleted principal. Another principal's coordinator and records are never selected by either operation.
+
+The bounded-history policy currently applies 30-day retention to projections, ordered events, checkpoints, receipts, workflow effects, actor markers, and cancellations for terminal Jobs. The remaining record-class inventory, ephemeral quota/replay cleanup, and continuity-grant cron cleanup remain release gates; the owner routes do not imply those gates are complete.
 
 Cloud deletion is not browser-profile deletion because the cloud never owns that profile. Conversely, deleting a local profile does not erase principal-scoped control-plane history. An owner requesting complete removal must complete both lifecycles.
 

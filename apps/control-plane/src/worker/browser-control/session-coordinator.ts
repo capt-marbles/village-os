@@ -186,6 +186,8 @@ type WorkflowEffectRow = {
 };
 
 export class BrowserSessionCoordinator extends DurableObject<Environment> {
+  private destroyed = false;
+
   constructor(ctx: DurableObjectState, env: Environment) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
@@ -1673,6 +1675,72 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
           action: JSON.parse(row.action_json) as BrowserAction,
         }
       : { ok: false as const, code: "ACTION_NOT_FOUND" };
+  }
+
+  lifecycleStatus(principalId: unknown) {
+    const principal = principalIdSchema.safeParse(principalId);
+    if (!principal.success) {
+      return { ok: false as const, code: "INVALID_PRINCIPAL" };
+    }
+    if (this.destroyed) return { ok: true as const, state: "ABSENT" as const };
+    const metadata = this.metadata();
+    if (!metadata) return { ok: true as const, state: "ABSENT" as const };
+    if (metadata.principal_id !== principal.data) {
+      return { ok: false as const, code: "IDENTITY_MISMATCH" };
+    }
+    return { ok: true as const, state: "PRESENT" as const };
+  }
+
+  lifecycleSummary(principalId: unknown) {
+    const principal = principalIdSchema.safeParse(principalId);
+    if (!principal.success) {
+      return { ok: false as const, code: "INVALID_PRINCIPAL" };
+    }
+    if (this.destroyed) return { ok: false as const, code: "NOT_INITIALIZED" };
+    const metadata = this.metadata();
+    if (!metadata) return { ok: false as const, code: "NOT_INITIALIZED" };
+    if (metadata.principal_id !== principal.data) {
+      return { ok: false as const, code: "IDENTITY_MISMATCH" };
+    }
+    const count = (table: string) =>
+      this.ctx.storage.sql
+        .exec<{ count: number }>(`SELECT COUNT(*) AS count FROM ${table}`)
+        .one().count;
+    return {
+      ok: true as const,
+      browserSessionId: metadata.browser_session_id,
+      site: metadata.site,
+      eventSequence: metadata.event_sequence,
+      projectedSequence: metadata.projected_sequence,
+      records: {
+        events: count("coordinator_events"),
+        outbox: count("projection_outbox"),
+        actions: count("accepted_actions"),
+        workflowEffects: count("workflow_effects"),
+        workflowReceipts: count("workflow_receipts"),
+        workflowCheckpoints: count("workflow_checkpoint"),
+        workflowCancellations: count("workflow_cancellations"),
+      },
+    };
+  }
+
+  async destroy(principalId: unknown) {
+    const principal = principalIdSchema.safeParse(principalId);
+    if (!principal.success) {
+      return { ok: false as const, code: "INVALID_PRINCIPAL" };
+    }
+    const metadata = this.metadata();
+    if (!metadata) return { ok: true as const, deleted: false as const };
+    if (metadata.principal_id !== principal.data) {
+      return { ok: false as const, code: "IDENTITY_MISMATCH" };
+    }
+    for (const webSocket of this.ctx.getWebSockets()) {
+      webSocket.close(1001, "Village cloud data deleted");
+    }
+    await this.ctx.storage.deleteAlarm();
+    await this.ctx.storage.deleteAll();
+    this.destroyed = true;
+    return { ok: true as const, deleted: true as const };
   }
 
   snapshot(principalId: unknown):

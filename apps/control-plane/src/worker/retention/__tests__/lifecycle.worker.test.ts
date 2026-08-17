@@ -9,6 +9,7 @@ import {
 } from "../deletion.js";
 import { executeRetentionBatch, recordRetentionPolicies } from "../policy.js";
 import type { SiteSessionMailbox } from "../../site-session-continuity/mailbox.js";
+import type { BrowserControlState } from "@village/contracts";
 
 const principalId = "prn_01J00000000000000000000020";
 const otherPrincipalId = "prn_01J00000000000000000000021";
@@ -272,6 +273,49 @@ describe("principal data lifecycle", () => {
 
   it("plans, executes, and verifies a deletion idempotently without deleting another principal", async () => {
     const mailbox = await seedContinuityMailbox();
+    const coordinator =
+      env.BROWSER_SESSION_COORDINATOR.getByName(browserSessionId);
+    const control: BrowserControlState = {
+      principalId,
+      deviceId: "dev_01J00000000000000000000020",
+      jobId,
+      browserSessionId,
+      controller: "NONE",
+      connection: "ONLINE",
+      leaseEpoch: 0,
+      leaseExpiresAt: null,
+      lastAcceptedSequence: 0,
+      automationBlocked: true,
+      takeover: "NONE",
+      profile: "PRESENT",
+    };
+    await coordinator.initialize({
+      principalId,
+      browserSessionId,
+      site: "OWNED_FIXTURE",
+      initializedAt: now,
+      control,
+    });
+    const otherCoordinator = env.BROWSER_SESSION_COORDINATOR.getByName(
+      "brs_01J00000000000000000000021",
+    );
+    await otherCoordinator.initialize({
+      principalId: otherPrincipalId,
+      browserSessionId: "brs_01J00000000000000000000021",
+      site: "OWNED_FIXTURE",
+      initializedAt: now,
+      control: {
+        ...control,
+        principalId: otherPrincipalId,
+        deviceId: "dev_01J00000000000000000000021",
+        jobId: "job_01J00000000000000000000021",
+        browserSessionId: "brs_01J00000000000000000000021",
+      },
+    });
+    await expect(coordinator.lifecycleStatus(principalId)).resolves.toEqual({
+      ok: true,
+      state: "PRESENT",
+    });
     const request = {
       principalId,
       deletionRequestId: "del_01J00000000000000000000020",
@@ -321,6 +365,15 @@ describe("principal data lifecycle", () => {
       ok: false,
       code: "MAILBOX_NOT_FOUND",
     });
+    await expect(coordinator.lifecycleStatus(principalId)).resolves.toEqual({
+      ok: true,
+      state: "ABSENT",
+    });
+    await expect(
+      env.BROWSER_SESSION_COORDINATOR.getByName(
+        "brs_01J00000000000000000000021",
+      ).lifecycleStatus(otherPrincipalId),
+    ).resolves.toEqual({ ok: true, state: "PRESENT" });
     await expect(
       exportPrincipalRecords(env.VILLAGE_DB, otherPrincipalId),
     ).resolves.toMatchObject({

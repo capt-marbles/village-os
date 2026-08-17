@@ -1508,4 +1508,142 @@ describe("authenticated pairing routes", () => {
       ],
     });
   });
+
+  it("exports owner-scoped cloud data and completes a two-stage verified deletion", async () => {
+    const created = await SELF.fetch(
+      new Request("https://village.test/api/jobs", {
+        method: "POST",
+        headers: ownerHeaders,
+      }),
+    );
+    const { jobId } = await created.json<{ jobId: string }>();
+    const deviceId = "dev_01J00000000000000000000090";
+    const browserSessionId = "brs_01J00000000000000000000090";
+    await env.VILLAGE_DB.prepare(
+      `INSERT INTO devices
+       (principal_id, device_id, public_key, credential_status, protocol_version,
+        last_accepted_sequence, created_at)
+       VALUES (?, ?, '{}', 'ACTIVE', 1, 0, ?)`,
+    )
+      .bind(principalId, deviceId, new Date().toISOString())
+      .run();
+    expect(
+      (
+        await SELF.fetch(
+          new Request(
+            `https://village.test/api/jobs/${jobId}/browser-sessions`,
+            {
+              method: "POST",
+              headers: ownerHeaders,
+              body: JSON.stringify({
+                deviceId,
+                browserSessionId,
+                hostId: "hst_01J00000000000000000000090",
+                site: "OWNED_FIXTURE",
+              }),
+            },
+          ),
+        )
+      ).status,
+    ).toBe(201);
+
+    const exported = await SELF.fetch(
+      new Request("https://village.test/api/owner/data-export", {
+        headers: ownerHeaders,
+      }),
+    );
+    expect(exported.status).toBe(200);
+    expect(exported.headers.get("cache-control")).toBe("no-store");
+    const exportBody = await exported.json<Record<string, unknown>>();
+    expect(exportBody).toMatchObject({
+      schemaVersion: 1,
+      principalId,
+      coordinators: expect.arrayContaining([
+        expect.objectContaining({ browserSessionId, site: "OWNED_FIXTURE" }),
+      ]),
+    });
+    expect(JSON.stringify(exportBody)).not.toMatch(
+      /public_key|secret_hash|ciphertext|other@example/i,
+    );
+
+    const { "x-village-csrf": _csrfHeader, ...missingCsrfHeaders } =
+      ownerHeaders;
+    const missingCsrf = await SELF.fetch(
+      new Request("https://village.test/api/owner/deletion-requests", {
+        method: "POST",
+        headers: missingCsrfHeaders,
+        body: JSON.stringify({ confirmation: "DELETE_CLOUD_DATA" }),
+      }),
+    );
+    expect(missingCsrf.status).toBe(403);
+    const invalidPlan = await SELF.fetch(
+      new Request("https://village.test/api/owner/deletion-requests", {
+        method: "POST",
+        headers: ownerHeaders,
+        body: JSON.stringify({ confirmation: "delete" }),
+      }),
+    );
+    expect(invalidPlan.status).toBe(400);
+    const planned = await SELF.fetch(
+      new Request("https://village.test/api/owner/deletion-requests", {
+        method: "POST",
+        headers: ownerHeaders,
+        body: JSON.stringify({ confirmation: "DELETE_CLOUD_DATA" }),
+      }),
+    );
+    expect(planned.status).toBe(201);
+    const plan = await planned.json<{ deletionRequestId: string }>();
+    const confirmationUrl = `https://village.test/api/owner/deletion-requests/${plan.deletionRequestId}/confirm`;
+    const foreign = await SELF.fetch(
+      new Request(confirmationUrl, {
+        method: "POST",
+        headers: {
+          ...ownerHeaders,
+          "x-village-development-principal": otherPrincipalId,
+        },
+        body: JSON.stringify({ confirmation: "DELETE_CLOUD_DATA" }),
+      }),
+    );
+    expect(foreign.status).toBe(404);
+    const confirmed = await SELF.fetch(
+      new Request(confirmationUrl, {
+        method: "POST",
+        headers: ownerHeaders,
+        body: JSON.stringify({ confirmation: "DELETE_CLOUD_DATA" }),
+      }),
+    );
+    expect(confirmed.status).toBe(200);
+    await expect(confirmed.json()).resolves.toMatchObject({
+      ok: true,
+      status: "COMPLETED",
+      verification: { verified: true, remainingRecords: 0 },
+    });
+    const replayedConfirmation = await SELF.fetch(
+      new Request(confirmationUrl, {
+        method: "POST",
+        headers: ownerHeaders,
+        body: JSON.stringify({ confirmation: "DELETE_CLOUD_DATA" }),
+      }),
+    );
+    expect(replayedConfirmation.status).toBe(200);
+    await expect(replayedConfirmation.json()).resolves.toMatchObject({
+      ok: true,
+      status: "COMPLETED",
+    });
+    await expect(
+      env.BROWSER_SESSION_COORDINATOR.getByName(
+        browserSessionId,
+      ).lifecycleStatus(principalId),
+    ).resolves.toEqual({ ok: true, state: "ABSENT" });
+    const deletedIdentity = await SELF.fetch(
+      new Request("https://village.test/api/identity", {
+        headers: ownerHeaders,
+      }),
+    );
+    expect(deletedIdentity.status).toBe(410);
+    await expect(deletedIdentity.json()).resolves.toEqual({
+      ok: false,
+      code: "ACCOUNT_DELETED",
+    });
+  });
 });

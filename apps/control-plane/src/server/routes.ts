@@ -54,6 +54,19 @@ import {
   corsHeaders,
   issueBrowserCsrfCookie,
 } from "./security.js";
+import {
+  executePrincipalDeletion,
+  exportPrincipalCloudData,
+  planPrincipalDeletion,
+} from "../worker/retention/deletion.js";
+
+const deletionConfirmation = "DELETE_CLOUD_DATA";
+const deletionIdAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+function createDeletionRequestId(): string {
+  const random = crypto.getRandomValues(new Uint8Array(26));
+  return `del_${Array.from(random, (byte) => deletionIdAlphabet[byte & 31]).join("")}`;
+}
 
 function json(
   request: Request,
@@ -109,11 +122,114 @@ export async function routeRequest(
   try {
     if (request.method === "GET" && url.pathname === "/api/identity") {
       const auth = await authenticateRequest(request, environment);
-      if (!auth.ok) return json(request, environment, auth, 401);
+      if (!auth.ok)
+        return json(
+          request,
+          environment,
+          auth,
+          auth.code === "ACCOUNT_DELETED" ? 410 : 401,
+        );
       const headers = corsHeaders(request, environment);
       const csrfCookie = issueBrowserCsrfCookie(request);
       if (csrfCookie) headers.set("set-cookie", csrfCookie);
       return Response.json(auth.identity, { headers });
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/owner/data-export") {
+      const auth = await authenticateRequest(request, environment);
+      if (!auth.ok) return json(request, environment, auth, 401);
+      const body = await exportPrincipalCloudData(
+        environment,
+        auth.principalId,
+        new Date().toISOString(),
+      );
+      const headers = corsHeaders(request, environment);
+      headers.set("cache-control", "no-store");
+      return Response.json(body, { headers });
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/owner/deletion-requests"
+    ) {
+      const csrf = authorizeBrowserMutation(request, environment);
+      if (!csrf.ok) return json(request, environment, csrf, 403);
+      const auth = await authenticateRequest(request, environment);
+      if (!auth.ok) return json(request, environment, auth, 401);
+      const body = z
+        .strictObject({ confirmation: z.literal(deletionConfirmation) })
+        .safeParse(await boundedJson(request));
+      if (!body.success) {
+        return json(
+          request,
+          environment,
+          { ok: false, code: "INVALID_DELETION_CONFIRMATION" },
+          400,
+        );
+      }
+      const requestedAt = new Date().toISOString();
+      const deletionRequestId = createDeletionRequestId();
+      const planned = await planPrincipalDeletion(environment.VILLAGE_DB, {
+        principalId: auth.principalId,
+        deletionRequestId,
+        requestedAt,
+      });
+      return json(
+        request,
+        environment,
+        planned.ok ? { ...planned, deletionRequestId, requestedAt } : planned,
+        planned.ok ? 201 : 409,
+      );
+    }
+
+    const deletionConfirmationRoute = url.pathname.match(
+      /^\/api\/owner\/deletion-requests\/(del_[A-Za-z0-9]{26})\/confirm$/,
+    );
+    if (request.method === "POST" && deletionConfirmationRoute) {
+      const csrf = authorizeBrowserMutation(request, environment);
+      if (!csrf.ok) return json(request, environment, csrf, 403);
+      const auth = await authenticateRequest(
+        request,
+        environment,
+        new Date().toISOString(),
+        { allowDeleted: true },
+      );
+      if (!auth.ok) return json(request, environment, auth, 401);
+      const body = z
+        .strictObject({ confirmation: z.literal(deletionConfirmation) })
+        .safeParse(await boundedJson(request));
+      if (!body.success) {
+        return json(
+          request,
+          environment,
+          { ok: false, code: "INVALID_DELETION_CONFIRMATION" },
+          400,
+        );
+      }
+      const plan = await environment.VILLAGE_DB.prepare(
+        `SELECT requested_at AS requestedAt FROM principal_deletion_plans
+         WHERE principal_id = ? AND deletion_request_id = ?`,
+      )
+        .bind(auth.principalId, deletionConfirmationRoute[1])
+        .first<{ requestedAt: string }>();
+      if (!plan) {
+        return json(
+          request,
+          environment,
+          { ok: false, code: "DELETION_REQUEST_NOT_FOUND" },
+          404,
+        );
+      }
+      const result = await executePrincipalDeletion(
+        environment,
+        {
+          principalId: auth.principalId,
+          deletionRequestId: deletionConfirmationRoute[1],
+          requestedAt: plan.requestedAt,
+        },
+        new Date().toISOString(),
+      );
+      return json(request, environment, result, result.ok ? 200 : 503);
     }
 
     if (

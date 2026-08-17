@@ -30,6 +30,7 @@ async function principalForSubject(
   provider: string,
   subject: string,
   now: string,
+  allowDeleted: boolean,
 ): Promise<string> {
   const existing = await db
     .prepare(
@@ -37,7 +38,13 @@ async function principalForSubject(
     )
     .bind(provider, subject)
     .first<{ principal_id: string }>();
-  if (existing) return principalIdSchema.parse(existing.principal_id);
+  if (existing) {
+    const principalId = principalIdSchema.parse(existing.principal_id);
+    if ((await principalWasDeleted(db, principalId)) && !allowDeleted) {
+      throw new Error("ACCOUNT_DELETED");
+    }
+    return principalId;
+  }
   const digest = new Uint8Array(
     await crypto.subtle.digest(
       "SHA-256",
@@ -47,6 +54,11 @@ async function principalForSubject(
   const principalId = principalIdSchema.parse(
     `prn_${encodePrincipalHash(digest.slice(0, 16))}`,
   );
+  const deleted = await principalWasDeleted(db, principalId);
+  if (deleted && !allowDeleted) {
+    throw new Error("ACCOUNT_DELETED");
+  }
+  if (deleted) return principalId;
   await db.batch([
     db
       .prepare(
@@ -63,10 +75,25 @@ async function principalForSubject(
   return principalId;
 }
 
+async function principalWasDeleted(
+  db: D1Database,
+  principalId: string,
+): Promise<boolean> {
+  const tombstone = await db
+    .prepare(
+      `SELECT 1 AS present FROM principal_deletion_plans
+       WHERE principal_id = ? AND status = 'COMPLETED' LIMIT 1`,
+    )
+    .bind(principalId)
+    .first<{ present: number }>();
+  return tombstone !== null;
+}
+
 export async function authenticateRequest(
   request: Request,
   environment: Environment,
   now = new Date().toISOString(),
+  options: { allowDeleted?: boolean } = {},
 ): Promise<
   | {
       ok: true;
@@ -85,11 +112,20 @@ export async function authenticateRequest(
     const candidate = request.headers.get("x-village-development-principal");
     const parsed = principalIdSchema.safeParse(candidate);
     if (!parsed.success) return { ok: false, code: "UNAUTHENTICATED" };
-    await environment.VILLAGE_DB.prepare(
-      "INSERT OR IGNORE INTO principals (principal_id, created_at) VALUES (?, ?)",
-    )
-      .bind(parsed.data, now)
-      .run();
+    const deleted = await principalWasDeleted(
+      environment.VILLAGE_DB,
+      parsed.data,
+    );
+    if (deleted && !options.allowDeleted) {
+      return { ok: false, code: "ACCOUNT_DELETED" };
+    }
+    if (!deleted) {
+      await environment.VILLAGE_DB.prepare(
+        "INSERT OR IGNORE INTO principals (principal_id, created_at) VALUES (?, ?)",
+      )
+        .bind(parsed.data, now)
+        .run();
+    }
     const identity = villageIdentitySessionSchema.parse({
       authenticated: true,
       principalId: parsed.data,
@@ -126,13 +162,17 @@ export async function authenticateRequest(
         issuer,
         payload.sub,
         now,
+        options.allowDeleted === true,
       ),
       provider: "CLOUDFLARE_ACCESS",
       email: payload.email,
       signOutPath: "/cdn-cgi/access/logout",
     });
     return { ok: true, principalId: identity.principalId, identity };
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === "ACCOUNT_DELETED") {
+      return { ok: false, code: "ACCOUNT_DELETED" };
+    }
     return { ok: false, code: "UNAUTHENTICATED" };
   }
 }
