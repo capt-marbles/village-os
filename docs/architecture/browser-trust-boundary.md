@@ -26,6 +26,6 @@ Browser-derived input is hostile even after it becomes a bounded Observation. It
 
 - macOS is the only declared alpha platform. Unsupported platforms fail profile-protection checks.
 - File permissions and Chromium OS cryptography are part of the posture; backup and indexing exclusion must be verified on the packaged target before release and are not claimed merely from source tests.
-- Local diagnostics have no upload transport. Support may ask the owner to read or copy the bounded preview explicitly.
+- Local diagnostics have no upload transport. Village does not start Electron's native crash collector or ship an alpha support-bundle uploader. The packaged forced-crash proof redirects any native crash artifacts into its disposable, recursively scanned profile boundary. Support may ask the owner to read or copy the bounded preview explicitly.
 - The update policy validator is fail-closed, but runtime download/install wiring and a provisioned update service still require packaged release evidence.
 - No release is represented as signed or notarized until Apple credentials, certificate identity, notarization output, package signature, fuses, and update metadata are verified on the produced artifacts.

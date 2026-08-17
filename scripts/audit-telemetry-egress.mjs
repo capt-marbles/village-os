@@ -18,6 +18,7 @@ const outboundTransport =
   /\bglobalThis\s*\.\s*fetch\b|\bfetch\s*\(|\bsendBeacon\s*\(|\bXMLHttpRequest\b|\bcaptureException\s*\(|\b(?:http|https)\s*\.\s*request\s*\(/;
 const thirdPartyTelemetry =
   /(?:from\s+|require\s*\()["'](?:@sentry|posthog|analytics-node|@segment|datadog|amplitude)(?:\/[^"']*)?["']/i;
+const nativeCrashCollection = /\bcrashReporter\b/;
 const pageDerivedField =
   /\b(?:pageUrl|rawDom|html|cookie|token|formValue|screenshot|profile|privateKey|secret)\s*:/i;
 const dynamicProjection = /\.\.\.\s*[A-Za-z_$]|\[[^\]]+\]\s*:/;
@@ -42,6 +43,8 @@ export function auditTelemetrySource(source, file) {
   }
   if (thirdPartyTelemetry.test(source))
     errors.push(`${file} imports a forbidden telemetry SDK`);
+  if (nativeCrashCollection.test(source))
+    errors.push(`${file} enables forbidden native crash collection`);
   if (pageDerivedField.test(source))
     errors.push(`${file} contains forbidden page-derived field`);
   if (dynamicProjection.test(source))
@@ -85,6 +88,7 @@ export async function auditTelemetryEgress() {
         if (telemetryModules.includes(relative)) return true;
         if (allowedOutboundModules.includes(relative)) return true;
         if (error.includes("outbound transport")) return true;
+        if (error.includes("native crash collection")) return true;
         return error.includes("telemetry SDK");
       },
     );
