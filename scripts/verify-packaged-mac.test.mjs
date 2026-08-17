@@ -67,6 +67,7 @@ test("rejects internal proof and fixture automation in the release ASAR", () => 
     "/dist/main/internal-delegated-proof.js",
     "/dist/main/internal-continuity-proof-entry.js",
     "/dist/main/internal-credential-proof-entry.js",
+    "/dist/main/internal-profile-protection.js",
     "/dist/main/internal-proof-entry.js",
     "/dist/main/internal-proof-ids.js",
     "/dist/main/owned-fixture-credential-fill.js",

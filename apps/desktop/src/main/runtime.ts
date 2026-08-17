@@ -53,6 +53,7 @@ import { startNonBlockingContinuityEnrollment } from "./runtime-continuity-enrol
 import { RuntimeContinuityActivation } from "./runtime-continuity-activation.js";
 import { LocalBrowserHost } from "../browser/local-browser-host.js";
 import {
+  assertMacOsProfileEncryptionAvailable,
   ensureProtectedProfile,
   ProfileLock,
 } from "../browser/profile-protection.js";
@@ -128,6 +129,8 @@ export async function startVillageRuntime(
     delegatedWorkflow: InternalDelegatedWorkflowOperations;
     /** One owner for account, personal-task, and delegated provider access. */
     modelProviders?: RuntimeModelProviderComposition;
+    /** Supplied only by the internal packaged proof harness. */
+    profileProtection?: import("../browser/profile-protection.js").MacProfileProtection;
   },
 ): Promise<VillageAppWindow> {
   ensureVillageProtocolInstalled(
@@ -140,6 +143,12 @@ export async function startVillageRuntime(
   const packagedProtector = app.isPackaged
     ? new ElectronSafeStorageProtector()
     : undefined;
+  if (packagedProtector) {
+    assertMacOsProfileEncryptionAvailable(
+      await packagedProtector.availability(),
+      true,
+    );
+  }
   let identity;
   if (!app.isPackaged) {
     identity = await resolveRuntimeIdentity({ isPackaged: false });
@@ -277,6 +286,9 @@ export async function startVillageRuntime(
     ...(automationFence ? { automationFence } : {}),
     ...(internalComposition
       ? { delegatedWorkflow: internalComposition.delegatedWorkflow }
+      : {}),
+    ...(internalComposition?.profileProtection
+      ? { profileProtection: internalComposition.profileProtection }
       : {}),
     verifyStepUp: () => verifyMacOsOwnerPresence(),
     // LinkedIn authentication is human-only: Village never persists a

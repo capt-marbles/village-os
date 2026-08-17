@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
+import { execFile } from "node:child_process";
 import {
   access,
   chmod,
+  lstat,
   mkdir,
   open,
   readFile,
@@ -16,6 +18,41 @@ export interface ProfileScope {
   deviceId: string;
   site: BrowserSite;
 }
+
+export interface MacProfileProtection {
+  runTmutil(arguments_: string[]): Promise<{ stdout: string }>;
+}
+
+export interface ProfileEncryptionAvailability {
+  available: boolean;
+  backend: string;
+  secure: boolean;
+}
+
+export const profileProtectionFailureCopy = {
+  title: "Village could not protect the browser profile",
+  message:
+    "Village stopped before opening the browser because this Mac could not confirm Keychain encryption, private profile storage, Spotlight exclusion, or Time Machine exclusion. Review the local profile-protection setup, then reopen Village.",
+} as const;
+
+export function isProfileProtectionFailure(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith("PROFILE_");
+}
+
+const defaultMacProfileProtection: MacProfileProtection = {
+  runTmutil: (arguments_) =>
+    new Promise((resolve, reject) => {
+      execFile(
+        "/usr/bin/tmutil",
+        arguments_,
+        { encoding: "utf8", timeout: 10_000, maxBuffer: 64 * 1024 },
+        (error, stdout) => {
+          if (error) reject(new Error("PROFILE_BACKUP_EXCLUSION_FAILED"));
+          else resolve({ stdout });
+        },
+      );
+    }),
+};
 
 function scopeHash(scope: ProfileScope): string {
   return createHash("sha256")
@@ -32,16 +69,83 @@ export async function ensureProtectedProfile(
   root: string,
   scope: ProfileScope,
   supportedPlatform: NodeJS.Platform = process.platform,
+  macProfileProtection: MacProfileProtection = defaultMacProfileProtection,
 ): Promise<{ path: string; partition: string }> {
   if (supportedPlatform !== "darwin") {
     throw new Error("PROFILE_PROTECTION_UNSUPPORTED_PLATFORM");
   }
-  await mkdir(root, { recursive: true, mode: 0o700 });
-  await chmod(root, 0o700);
+  await ensurePrivateDirectory(root);
+  await ensureSpotlightExclusion(root);
+  await macProfileProtection.runTmutil(["addexclusion", root]).catch(() => {
+    throw new Error("PROFILE_BACKUP_EXCLUSION_FAILED");
+  });
+  const exclusion = await macProfileProtection
+    .runTmutil(["isexcluded", root])
+    .catch(() => {
+      throw new Error("PROFILE_BACKUP_EXCLUSION_UNVERIFIED");
+    });
+  if (!/^\[Excluded\]\s+/m.test(exclusion.stdout)) {
+    throw new Error("PROFILE_BACKUP_EXCLUSION_UNVERIFIED");
+  }
   const path = join(root, scopeHash(scope));
-  await mkdir(path, { recursive: true, mode: 0o700 });
-  await chmod(path, 0o700);
+  await ensurePrivateDirectory(path);
   return { path, partition: profilePartition(scope) };
+}
+
+export function assertMacOsProfileEncryptionAvailable(
+  availability: ProfileEncryptionAvailability,
+  isPackaged: boolean,
+  supportedPlatform: NodeJS.Platform = process.platform,
+): void {
+  if (!isPackaged) return;
+  if (supportedPlatform !== "darwin") {
+    throw new Error("PROFILE_PROTECTION_UNSUPPORTED_PLATFORM");
+  }
+  if (
+    !availability.available ||
+    !availability.secure ||
+    availability.backend !== "keychain"
+  ) {
+    throw new Error("PROFILE_OS_CRYPT_UNAVAILABLE");
+  }
+}
+
+async function ensurePrivateDirectory(path: string): Promise<void> {
+  await mkdir(path, { recursive: true, mode: 0o700 });
+  let metadata = await lstat(path);
+  if (
+    !metadata.isDirectory() ||
+    metadata.isSymbolicLink() ||
+    (typeof process.getuid === "function" && metadata.uid !== process.getuid())
+  ) {
+    throw new Error("PROFILE_PATH_UNSAFE");
+  }
+  await chmod(path, 0o700);
+  metadata = await lstat(path);
+  if ((metadata.mode & 0o077) !== 0) {
+    throw new Error("PROFILE_PERMISSIONS_UNSAFE");
+  }
+}
+
+async function ensureSpotlightExclusion(root: string): Promise<void> {
+  const markerPath = join(root, ".metadata_never_index");
+  try {
+    const handle = await open(markerPath, "wx", 0o600);
+    await handle.close();
+  } catch (error) {
+    if (!(
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "EEXIST"
+    )) {
+      throw new Error("PROFILE_INDEX_EXCLUSION_FAILED");
+    }
+  }
+  const marker = await lstat(markerPath).catch(() => undefined);
+  if (!marker?.isFile() || marker.isSymbolicLink()) {
+    throw new Error("PROFILE_INDEX_EXCLUSION_UNVERIFIED");
+  }
+  await chmod(markerPath, 0o600);
 }
 
 /** Only callers already holding an exact scope path may invoke this helper. */
