@@ -40,7 +40,7 @@ describe("Exa search provider", () => {
         startPublishedDate: request.publishedAfter,
         includeDomains: request.includeDomains,
         moderation: true,
-        contents: { highlights: true },
+        contents: { highlights: { maxCharacters: 2_000 } },
       });
       return Response.json({
         requestId: "exa-request-1",
@@ -81,6 +81,34 @@ describe("Exa search provider", () => {
       "https://api.exa.ai/search",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("compacts highlights when Exa exceeds the requested character budget", async () => {
+    const provider = new ExaSearchProvider({
+      credentials: credentialSource(),
+      fetch: vi.fn(async () =>
+        Response.json({
+          requestId: "highlight-budget-proof",
+          results: [
+            {
+              title: "Bounded evidence",
+              url: "https://blog.cloudflare.com/bounded-evidence",
+              publishedDate: null,
+              highlights: ["a".repeat(4_000), "must not exceed the budget"],
+            },
+          ],
+        }),
+      ),
+    });
+
+    const result = await provider.search(request);
+
+    expect(result).toMatchObject({
+      status: "result",
+      requestId: "highlight-budget-proof",
+    });
+    if (result.status !== "result") throw new Error("EXPECTED_EXA_RESULT");
+    expect(result.sources[0]?.highlights).toEqual(["a".repeat(2_000)]);
   });
 
   it.each([

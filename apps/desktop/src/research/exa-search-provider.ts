@@ -10,6 +10,7 @@ import type { ExaCredentialSource } from "./exa-credential-source.js";
 
 const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
 const MAX_RESPONSE_BYTES = 512 * 1_024;
+const MAX_HIGHLIGHT_CHARACTERS = 2_000;
 
 const exaResponseSchema = z.object({
   requestId: z.string().trim().min(1).max(200),
@@ -21,7 +22,7 @@ const exaResponseSchema = z.object({
         publishedDate: z.string().nullable().optional(),
         author: z.string().trim().min(1).max(160).nullable().optional(),
         highlights: z
-          .array(z.string().trim().min(1).max(2_000))
+          .array(z.string().trim().min(1).max(MAX_RESPONSE_BYTES))
           .max(8)
           .optional(),
       }),
@@ -124,7 +125,9 @@ export class ExaSearchProvider implements WebResearchProvider {
           ? { includeDomains: request.includeDomains }
           : {}),
         moderation: true,
-        contents: { highlights: true },
+        contents: {
+          highlights: { maxCharacters: MAX_HIGHLIGHT_CHARACTERS },
+        },
       };
       let response: Response;
       try {
@@ -174,7 +177,7 @@ export class ExaSearchProvider implements WebResearchProvider {
             url,
             publishedAt: normalizePublishedAt(source.publishedDate),
             author: source.author ?? null,
-            highlights: source.highlights ?? [],
+            highlights: compactHighlights(source.highlights ?? []),
             taint: "UNTRUSTED_WEB",
           };
         }),
@@ -193,6 +196,19 @@ export class ExaSearchProvider implements WebResearchProvider {
       apiKey = "";
     }
   }
+}
+
+function compactHighlights(highlights: readonly string[]): string[] {
+  const compacted: string[] = [];
+  let remaining = MAX_HIGHLIGHT_CHARACTERS;
+  for (const highlight of highlights) {
+    if (remaining === 0) break;
+    const bounded = highlight.slice(0, remaining).trim();
+    if (!bounded) continue;
+    compacted.push(bounded);
+    remaining -= bounded.length;
+  }
+  return compacted;
 }
 
 function reasonForStatus(status: number): WebResearchWaitingReason {
