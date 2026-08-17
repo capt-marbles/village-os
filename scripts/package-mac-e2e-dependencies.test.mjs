@@ -94,6 +94,10 @@ test("CI delegates packaged dependency preparation to the package command", () =
   assert.match(ciWorkflow, /pnpm --filter @village\/desktop package:mac:e2e/);
   assert.match(
     ciWorkflow,
+    /pnpm --filter @village\/desktop verify:clean-install/,
+  );
+  assert.match(
+    ciWorkflow,
     /pnpm --filter @village\/desktop package:mac:continuity-e2e/,
   );
   assert.match(
@@ -187,10 +191,17 @@ test("the fixture secret smoke package uses its isolated proof entry and verifie
   }
 });
 
-test("only the internal credential proof may replace the macOS Keychain", async () => {
-  const internalEntry = await readFile(
+test("only explicit internal proofs may replace the macOS Keychain", async () => {
+  const credentialEntry = await readFile(
     new URL(
       "../apps/desktop/src/main/internal-credential-proof-entry.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const delegatedEntry = await readFile(
+    new URL(
+      "../apps/desktop/src/main/internal-proof-entry.ts",
       import.meta.url,
     ),
     "utf8",
@@ -199,7 +210,11 @@ test("only the internal credential proof may replace the macOS Keychain", async 
     new URL("../apps/desktop/src/main/production-entry.ts", import.meta.url),
     "utf8",
   );
-  assert.match(internalEntry, /appendSwitch\("use-mock-keychain"\)/u);
+  assert.match(credentialEntry, /appendSwitch\("use-mock-keychain"\)/u);
+  assert.match(
+    delegatedEntry,
+    /includes\("--village-proof-mock-keychain"\)[\s\S]*appendSwitch\("use-mock-keychain"\)/u,
+  );
   assert.doesNotMatch(productionEntry, /use-mock-keychain/u);
 });
 

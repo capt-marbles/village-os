@@ -19,9 +19,10 @@ For local packaged E2E only, use:
 
 ```sh
 pnpm --filter @village/desktop package:mac:e2e
+pnpm --filter @village/desktop verify:clean-install
 ```
 
-That command uses the explicit ad-hoc, non-notarized, non-publishing configuration. Its artifact is not distributable release evidence.
+The first command uses the explicit ad-hoc, non-notarized, non-publishing configuration. The second copies that bundle into a fresh temporary `Applications` directory, re-verifies its signature and fuses, launches it with isolated state, and requires the trusted packaged workflow to reach one receipted terminal result. The temporary install and profile are removed afterward. This is clean-install compatibility evidence, not distributable signing, notarization, or Gatekeeper evidence.
 
 ## Update acceptance
 
