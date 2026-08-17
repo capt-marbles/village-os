@@ -1,6 +1,6 @@
 import { browserSessionIdSchema } from "@village/contracts";
 import { delegatedWorkflowReadySnapshot } from "@village/ui";
-import { app, shell, type WebContents } from "electron";
+import { app, session, shell, type WebContents } from "electron";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
@@ -31,6 +31,13 @@ import { LazyDelegatedWorkflow } from "./lazy-delegated-workflow.js";
 import { InternalPairedBootstrap } from "./internal-paired-bootstrap.js";
 import type { InternalDelegatedWorkflowOperations } from "./app-window.js";
 import { exitWithoutContinuation } from "./abrupt-exit-barrier.js";
+import { LocalBrowserHost } from "../browser/local-browser-host.js";
+import {
+  assertMacOsProfileEncryptionAvailable,
+  ensureProtectedProfile,
+  ProfileLock,
+} from "../browser/profile-protection.js";
+import { internalProofProfileProtection } from "./internal-profile-protection.js";
 
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -223,13 +230,95 @@ async function waitForWorkflowLabel(
 
 async function run(): Promise<void> {
   const proofProfilePath = argument("--village-proof-profile");
+  const profileProtectionReport = argument(
+    "--village-profile-protection-report",
+  );
   if (proofProfilePath) {
     if (!isAbsolute(proofProfilePath)) {
       throw new Error("PACKAGED_DELEGATED_WORKFLOW_PROFILE_UNSAFE");
     }
     app.setPath("userData", proofProfilePath);
   }
+  if (profileProtectionReport) {
+    if (!isAbsolute(profileProtectionReport) || !proofProfilePath) {
+      throw new Error("PACKAGED_PROFILE_PROTECTION_PATH_UNSAFE");
+    }
+    await writePrivateJson(profileProtectionReport, {
+      status: "WAITING_FOR_APP_READY",
+    });
+  }
   await app.whenReady();
+  if (profileProtectionReport) {
+    if (!proofProfilePath) {
+      throw new Error("PACKAGED_PROFILE_PROTECTION_PATH_UNSAFE");
+    }
+    const sentinel = process.env.VILLAGE_PROFILE_PROTECTION_SENTINEL;
+    if (!sentinel || !/^[a-f0-9]{64}$/.test(sentinel)) {
+      throw new Error("PACKAGED_PROFILE_PROTECTION_SENTINEL_INVALID");
+    }
+    await writePrivateJson(profileProtectionReport, {
+      status: "WAITING_FOR_KEYCHAIN",
+    });
+    const protector = new ElectronSafeStorageProtector();
+    const availability = await protector.availability();
+    assertMacOsProfileEncryptionAvailable(availability, true);
+    await writePrivateJson(profileProtectionReport, {
+      status: "PREPARING_PROFILE",
+    });
+    const profile = await ensureProtectedProfile(
+      LocalBrowserHost.profileRoot(proofProfilePath),
+      {
+        principalId: "prn_01J00000000000000000000070",
+        deviceId: "dev_01J00000000000000000000070",
+        site: "OWNED_FIXTURE",
+      },
+    );
+    const lock = await ProfileLock.acquire(profile.path);
+    try {
+      await writePrivateJson(profileProtectionReport, {
+        status: "OPENING_CHROMIUM_SESSION",
+      });
+      const proofSession = session.fromPath(profile.path, { cache: true });
+      await writePrivateJson(profileProtectionReport, {
+        status: "WRITING_COOKIE",
+      });
+      await proofSession.cookies.set({
+        url: "https://fixture.village.test",
+        name: "__Host-village_oscrypt_probe",
+        value: sentinel,
+        secure: true,
+        httpOnly: true,
+        sameSite: "strict",
+        path: "/",
+        expirationDate: Date.now() / 1000 + 86_400,
+      });
+      await writePrivateJson(profileProtectionReport, {
+        status: "FLUSHING_COOKIE",
+      });
+      await proofSession.flushStorageData();
+      await writePrivateJson(profileProtectionReport, {
+        status: "VERIFYING_COOKIE",
+      });
+      const persisted = await proofSession.cookies.get({
+        url: "https://fixture.village.test",
+        name: "__Host-village_oscrypt_probe",
+      });
+      if (persisted.length !== 1 || persisted[0]?.value !== sentinel) {
+        throw new Error("PACKAGED_PROFILE_COOKIE_WRITE_FAILED");
+      }
+      await writePrivateJson(profileProtectionReport, {
+        status: "READY_FOR_DISK_VERIFICATION",
+        cookieName: "__Host-village_oscrypt_probe",
+        osCryptBackend: availability.backend,
+        backupExclusion: "VERIFIED",
+        indexExclusion: "VERIFIED",
+      });
+    } finally {
+      await lock.release();
+      app.quit();
+    }
+    return;
+  }
   const providerMode =
     argument("--village-proof-provider") === "chatgpt"
       ? "CHATGPT_ACCOUNT"
@@ -338,6 +427,7 @@ async function run(): Promise<void> {
             ),
         providerMode,
         modelProvider: modelProviders.provider,
+        profileProtection: internalProofProfileProtection,
         ...(coordination
           ? {
               coordination: {
@@ -383,6 +473,7 @@ async function run(): Promise<void> {
   const application = await runVillageApplication(applicationIdentitySource, {
     delegatedWorkflow: lazyWorkflow,
     modelProviders,
+    profileProtection: internalProofProfileProtection,
   }).catch(async (error: unknown) => {
     await proof.close();
     await modelProviders.modelProviderAccount.close();

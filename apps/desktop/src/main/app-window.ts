@@ -8,6 +8,7 @@ import {
   WebContentsView,
 } from "electron";
 import { LocalActionExecutor } from "../browser/local-action-executor.js";
+import type { MacProfileProtection } from "../browser/profile-protection.js";
 import {
   LocalBrowserHost,
   type BrowserSite,
@@ -78,6 +79,8 @@ export interface VillageAppWindowOptions {
   automationFence?: AuthenticatedAutomationFence;
   /** Internal/dev proof composition. Release runtime never supplies this. */
   delegatedWorkflow?: InternalDelegatedWorkflowOperations;
+  /** Internal proof seam. Release runtime never supplies this. */
+  profileProtection?: MacProfileProtection;
 }
 
 export interface VillageAppWindow {
@@ -161,6 +164,9 @@ export async function createVillageAppWindow(
     site: options.site,
     profileRoot: LocalBrowserHost.profileRoot(options.userDataPath),
     initialUrl: options.initialUrl,
+    ...(options.profileProtection
+      ? { profileProtection: options.profileProtection }
+      : {}),
   });
   let browserHost: LocalBrowserHost | undefined;
   let fixtureBrowserHost: LocalBrowserHost | undefined;

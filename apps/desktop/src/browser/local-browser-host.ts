@@ -5,6 +5,7 @@ import {
   ensureProtectedProfile,
   ProfileLock,
   scopedProfileAbsent,
+  type MacProfileProtection,
   type ProfileScope,
 } from "./profile-protection.js";
 import {
@@ -21,6 +22,8 @@ export interface LocalBrowserHostOptions extends ProfileScope {
   profileRoot: string;
   initialUrl: string;
   prepareSession?: (browserSession: Session) => Promise<() => Promise<void>>;
+  /** Internal packaged proofs may replace only the host backup-status probe. */
+  profileProtection?: MacProfileProtection;
 }
 
 export class LocalBrowserHost {
@@ -41,7 +44,12 @@ export class LocalBrowserHost {
   ): Promise<LocalBrowserHost> {
     const decision = decideNavigation(options.site, options.initialUrl);
     if (!decision.allow) throw new Error(decision.code);
-    const profile = await ensureProtectedProfile(options.profileRoot, options);
+    const profile = await ensureProtectedProfile(
+      options.profileRoot,
+      options,
+      process.platform,
+      options.profileProtection,
+    );
     const profileLock = await ProfileLock.acquire(profile.path);
     let closePreparedSession: (() => Promise<void>) | undefined;
     try {
