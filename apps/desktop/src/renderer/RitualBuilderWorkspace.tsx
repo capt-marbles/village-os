@@ -12,6 +12,10 @@ import type {
   RitualRunReceipt,
   RitualRunRequest,
   RitualRunStepApprovalRequest,
+  RitualSchedule,
+  RitualSchedulePauseRequest,
+  RitualScheduleUpdateRequest,
+  RitualInboxItem,
   RitualTestReceipt,
   RitualTestRunControllerResult,
   RitualTestRunRequest,
@@ -25,6 +29,7 @@ import {
   type RitualBuilderState,
 } from "@village/ui";
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -32,6 +37,7 @@ import {
   type SetStateAction,
 } from "react";
 import { ExaApiKeyCard, type ExaCredentialBridge } from "./ExaApiKeyCard.js";
+import { RitualAutomationPanel } from "./RitualAutomationPanel.js";
 
 export interface RitualBuilderBridge extends ExaCredentialBridge {
   initialize(): Promise<{
@@ -40,7 +46,17 @@ export interface RitualBuilderBridge extends ExaCredentialBridge {
     receipt: RitualTestReceipt | null;
     run: RitualRun | null;
     runReceipt: RitualRunReceipt | null;
+    schedule: RitualSchedule | null;
+    inbox: readonly RitualInboxItem[];
   }>;
+  getAutomationState(): Promise<{
+    schedule: RitualSchedule | null;
+    inbox: readonly RitualInboxItem[];
+  }>;
+  configureSchedule(
+    request: RitualScheduleUpdateRequest,
+  ): Promise<RitualSchedule>;
+  pauseSchedule(request: RitualSchedulePauseRequest): Promise<RitualSchedule>;
   createDraftIdentity(): Promise<RitualBuilderIdentity>;
   draft(context: RitualStewardContext): Promise<RitualStewardResult>;
   approve(ritual: ApprovedRitualRevision): Promise<ApprovedRitualRevision>;
@@ -78,11 +94,40 @@ export function RitualBuilderWorkspace({
     createRitualBuilderState,
   );
   const [startupError, setStartupError] = useState<string | null>(null);
+  const [schedule, setSchedule] = useState<RitualSchedule | null>(null);
+  const [inbox, setInbox] = useState<readonly RitualInboxItem[]>([]);
+  const [automationPending, setAutomationPending] = useState(false);
+  const [automationError, setAutomationError] = useState<string | null>(null);
   const generation = useRef(0);
   const testRunInFlight = useRef(false);
   const learningInFlight = useRef(false);
   const runInFlight = useRef(false);
   const cancelRunInFlight = useRef(false);
+  const automationMutation = useRef(0);
+  const automationInFlight = useRef(false);
+  const mounted = useRef(true);
+  const refreshAutomation = useCallback(async () => {
+    if (!bridge) return;
+    const mutation = automationMutation.current;
+    const automation = await bridge.getAutomationState();
+    if (!mounted.current || mutation !== automationMutation.current) return;
+    setSchedule((current) =>
+      sameScheduleRevision(current, automation.schedule)
+        ? current
+        : automation.schedule,
+    );
+    setInbox((current) =>
+      sameInboxRevision(current, automation.inbox) ? current : automation.inbox,
+    );
+  }, [bridge]);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      automationMutation.current += 1;
+    };
+  }, []);
 
   useEffect(() => {
     if (!bridge) {
@@ -95,6 +140,8 @@ export function RitualBuilderWorkspace({
       .then((initialized) => {
         if (!active) return;
         setIdentity(initialized.identity);
+        setSchedule(initialized.schedule ?? null);
+        setInbox(initialized.inbox ?? []);
         if (initialized.approved) {
           setState((current) => {
             const restored = reduceRitualBuilder(current, {
@@ -133,6 +180,80 @@ export function RitualBuilderWorkspace({
       runInFlight.current = false;
     };
   }, [bridge]);
+
+  useEffect(() => {
+    if (!bridge || schedule?.state !== "ENABLED") return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const refresh = async () => {
+      try {
+        if (active) await refreshAutomation();
+      } catch {
+        // The durable Run view remains usable; the next due-time refresh retries.
+      } finally {
+        if (active)
+          timer = setTimeout(refresh, automationRefreshDelay(schedule));
+      }
+    };
+    timer = setTimeout(refresh, automationRefreshDelay(schedule));
+    return () => {
+      active = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [bridge, refreshAutomation, schedule]);
+
+  const configureSchedule = (request: RitualScheduleUpdateRequest) => {
+    if (!bridge || automationPending || automationInFlight.current) return;
+    automationInFlight.current = true;
+    const mutation = ++automationMutation.current;
+    setAutomationPending(true);
+    setAutomationError(null);
+    void bridge
+      .configureSchedule(request)
+      .then((nextSchedule) => {
+        if (mutation === automationMutation.current) setSchedule(nextSchedule);
+      })
+      .catch(() =>
+        setAutomationError(
+          "The schedule could not be saved. Review the time and try again.",
+        ),
+      )
+      .finally(() => {
+        if (mutation === automationMutation.current) {
+          automationInFlight.current = false;
+          setAutomationPending(false);
+        }
+      });
+  };
+
+  const pauseSchedule = () => {
+    if (!bridge || !schedule || automationPending || automationInFlight.current)
+      return;
+    automationInFlight.current = true;
+    const mutation = ++automationMutation.current;
+    setAutomationPending(true);
+    setAutomationError(null);
+    void bridge
+      .pauseSchedule({
+        schemaVersion: 1,
+        ritualId: schedule.ritualId,
+        ritualRevision: schedule.ritualRevision,
+      })
+      .then((nextSchedule) => {
+        if (mutation === automationMutation.current) setSchedule(nextSchedule);
+      })
+      .catch(() =>
+        setAutomationError(
+          "The schedule could not be paused. Try again before the next Run.",
+        ),
+      )
+      .finally(() => {
+        if (mutation === automationMutation.current) {
+          automationInFlight.current = false;
+          setAutomationPending(false);
+        }
+      });
+  };
 
   const onEvent = (event: RitualBuilderEvent) => {
     if (!bridge || !identity) return;
@@ -281,6 +402,7 @@ export function RitualBuilderWorkspace({
         .then((result) => {
           if (generation.current !== requestGeneration) return;
           publishRunResult(setState, result);
+          void refreshAutomation().catch(() => undefined);
         })
         .catch(() => {
           if (generation.current !== requestGeneration) return;
@@ -316,6 +438,7 @@ export function RitualBuilderWorkspace({
         .then((result) => {
           if (generation.current !== requestGeneration) return;
           publishRunResult(setState, result);
+          void refreshAutomation().catch(() => undefined);
         })
         .catch(() => {
           if (generation.current !== requestGeneration) return;
@@ -354,6 +477,7 @@ export function RitualBuilderWorkspace({
         .then((result) => {
           if (generation.current !== requestGeneration) return;
           publishRunResult(setState, result);
+          void refreshAutomation().catch(() => undefined);
         })
         .catch(() => {
           if (generation.current !== requestGeneration) return;
@@ -429,9 +553,11 @@ export function RitualBuilderWorkspace({
           approvedAt: next.pendingRevision.approvedAt,
         })
         .then(() => {
+          automationMutation.current += 1;
           setState((current) =>
             reduceRitualBuilder(current, { type: "LEARNING_SAVED" }),
           );
+          void refreshAutomation().catch(() => undefined);
         })
         .catch(() => {
           setState((current) =>
@@ -452,11 +578,55 @@ export function RitualBuilderWorkspace({
   return (
     <RitualBuilder
       identity={identity}
+      stewardDesk={
+        <RitualAutomationPanel
+          approved={state.approved}
+          schedule={schedule}
+          inbox={inbox}
+          pending={automationPending}
+          error={automationError}
+          onConfigure={configureSchedule}
+          onPause={pauseSchedule}
+        />
+      }
       state={state}
       onEvent={onEvent}
       researchSetup={<ExaApiKeyCard bridge={bridge} />}
     />
   );
+}
+
+function sameScheduleRevision(
+  left: RitualSchedule | null,
+  right: RitualSchedule | null,
+): boolean {
+  return (
+    left?.ritualId === right?.ritualId &&
+    left?.ritualRevision === right?.ritualRevision &&
+    left?.updatedAt === right?.updatedAt
+  );
+}
+
+function sameInboxRevision(
+  left: readonly RitualInboxItem[],
+  right: readonly RitualInboxItem[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (item, index) =>
+        item.run.runId === right[index]?.run.runId &&
+        item.run.updatedAt === right[index]?.run.updatedAt &&
+        item.receipt?.receiptId === right[index]?.receipt?.receiptId &&
+        item.attention === right[index]?.attention,
+    )
+  );
+}
+
+function automationRefreshDelay(schedule: RitualSchedule): number {
+  const untilDue = Date.parse(schedule.nextRunAt) - Date.now() + 1_000;
+  if (untilDue <= 0) return 30_000;
+  return Math.max(1_000, Math.min(untilDue, 15 * 60_000));
 }
 
 function publishRunResult(

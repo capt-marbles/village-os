@@ -18,6 +18,12 @@ contextBridge.exposeInMainWorld(
       ipcRenderer.invoke("village:ritual-builder:approve-run-step", request),
     cancelRun: (request) =>
       ipcRenderer.invoke("village:ritual-builder:cancel-run", request),
+    getAutomationState: () =>
+      ipcRenderer.invoke("village:ritual-builder:get-automation-state"),
+    configureSchedule: (request) =>
+      ipcRenderer.invoke("village:ritual-builder:configure-schedule", request),
+    pauseSchedule: (request) =>
+      ipcRenderer.invoke("village:ritual-builder:pause-schedule", request),
     proposeLearning: (request) =>
       ipcRenderer.invoke("village:ritual-builder:propose-learning", request),
     approveLearning: (request) =>

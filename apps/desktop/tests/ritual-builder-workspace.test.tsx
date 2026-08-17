@@ -17,7 +17,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { RitualBuilderWorkspace } from "../src/renderer/RitualBuilderWorkspace.js";
 import { resolveDesktopRendererMode } from "../src/renderer/renderer-mode.js";
 
-afterEach(cleanup);
+afterEach(() => {
+  vi.useRealTimers();
+  cleanup();
+});
 
 const identity = {
   draftId: "rtd_01J00000000000000000000000",
@@ -232,6 +235,30 @@ function bridge() {
       receipt: null,
       run: null,
       runReceipt: null,
+      schedule: null,
+      inbox: [],
+    })),
+    getAutomationState: vi.fn(async () => ({ schedule: null, inbox: [] })),
+    configureSchedule: vi.fn(async (request) => ({
+      ...request,
+      state: "ENABLED" as const,
+      nextRunAt: "2026-08-17T11:00:00.000Z",
+      pendingOccurrence: null,
+      lastTriggeredAt: null,
+      updatedAt: "2026-08-16T22:00:00.000Z",
+    })),
+    pauseSchedule: vi.fn(async (request) => ({
+      schemaVersion: 1 as const,
+      ritualId: request.ritualId,
+      ritualRevision: request.ritualRevision,
+      state: "PAUSED" as const,
+      cadence: "DAILY" as const,
+      localTime: "06:00",
+      timeZone: "America/Chicago",
+      nextRunAt: "2026-08-17T11:00:00.000Z",
+      pendingOccurrence: null,
+      lastTriggeredAt: null,
+      updatedAt: "2026-08-16T22:00:00.000Z",
     })),
     createDraftIdentity: vi.fn(async () => nextIdentity),
     draft: vi.fn(async (context) => ({
@@ -321,6 +348,164 @@ describe("RitualBuilderWorkspace", () => {
     expect(screen.getByText("No external effects")).toBeTruthy();
     expect(screen.getByText(/Commercial impact/u)).toBeTruthy();
     expect(screen.queryByLabelText("Representative sample")).toBeNull();
+  });
+
+  it("configures repeatable work and puts attention before Run history", async () => {
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved,
+      receipt: null,
+      run: waitingRun,
+      runReceipt: null,
+      schedule: null,
+      inbox: [
+        { run: waitingRun, receipt: null, attention: "OWNER_APPROVAL" },
+        {
+          run: completedRun,
+          receipt: runReceipt,
+          attention: "REVIEW",
+        },
+      ],
+    });
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+
+    await screen.findByText("Steward inbox");
+    expect(screen.getByText("2 needs attention")).toBeTruthy();
+    expect(screen.getAllByText("Approve")[0]).toBeTruthy();
+    expect(screen.getByText(runReceipt.summary)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Ritual local time"), {
+      target: { value: "06:00" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Enable schedule" }));
+
+    await waitFor(() =>
+      expect(activeBridge.configureSchedule).toHaveBeenCalledWith({
+        schemaVersion: 1,
+        ritualId: approved.ritualId,
+        ritualRevision: approved.ritualRevision,
+        cadence: "WEEKDAYS",
+        localTime: "06:00",
+        timeZone: expect.any(String),
+      }),
+    );
+    expect(await screen.findByRole("button", { name: "Pause" })).toBeTruthy();
+  });
+
+  it("preserves an in-progress schedule edit across an unchanged refresh", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-08-16T22:00:00.000Z");
+    const activeBridge = bridge();
+    const savedSchedule = {
+      schemaVersion: 1 as const,
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      state: "ENABLED" as const,
+      cadence: "WEEKDAYS" as const,
+      localTime: "06:00",
+      timeZone: "America/Chicago",
+      nextRunAt: "2026-08-17T11:00:00.000Z",
+      pendingOccurrence: null,
+      lastTriggeredAt: null,
+      updatedAt: "2026-08-16T21:00:00.000Z",
+    };
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      schedule: savedSchedule,
+      inbox: [],
+    });
+    activeBridge.getAutomationState.mockResolvedValue({
+      schedule: {
+        ...savedSchedule,
+        updatedAt: "2026-08-16T21:01:00.000Z",
+      },
+      inbox: [],
+    });
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+    await act(async () => Promise.resolve());
+    const input = screen.getByLabelText("Ritual local time");
+    fireEvent.change(input, { target: { value: "07:15" } });
+
+    await act(async () => {
+      vi.advanceTimersByTime(15 * 60_000);
+      await Promise.resolve();
+    });
+
+    expect(activeBridge.getAutomationState).toHaveBeenCalledOnce();
+    expect((input as HTMLInputElement).value).toBe("07:15");
+  });
+
+  it("ignores a refresh that began before a schedule update", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-08-16T22:00:00.000Z");
+    const activeBridge = bridge();
+    const savedSchedule = {
+      schemaVersion: 1 as const,
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      state: "ENABLED" as const,
+      cadence: "WEEKDAYS" as const,
+      localTime: "06:00",
+      timeZone: "America/Chicago",
+      nextRunAt: "2026-08-17T11:00:00.000Z",
+      pendingOccurrence: null,
+      lastTriggeredAt: null,
+      updatedAt: "2026-08-16T21:00:00.000Z",
+    };
+    let resolveStale!: (value: {
+      schedule: typeof savedSchedule;
+      inbox: readonly [];
+    }) => void;
+    const stale = new Promise<{
+      schedule: typeof savedSchedule;
+      inbox: readonly [];
+    }>((resolve) => {
+      resolveStale = resolve;
+    });
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      schedule: savedSchedule,
+      inbox: [],
+    });
+    activeBridge.getAutomationState
+      .mockImplementationOnce(async () => stale)
+      .mockResolvedValue({
+        schedule: {
+          ...savedSchedule,
+          localTime: "07:15",
+          updatedAt: "2026-08-16T22:00:00.000Z",
+        },
+        inbox: [],
+      });
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+    await act(async () => Promise.resolve());
+    await act(async () => {
+      vi.advanceTimersByTime(15 * 60_000);
+      await Promise.resolve();
+    });
+    fireEvent.change(screen.getByLabelText("Ritual local time"), {
+      target: { value: "07:15" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Update schedule" }));
+    await act(async () => Promise.resolve());
+    resolveStale({
+      schedule: { ...savedSchedule, state: "PAUSED" },
+      inbox: [],
+    });
+    await act(async () => Promise.resolve());
+
+    expect(screen.getByRole("button", { name: "Pause" })).toBeTruthy();
+    expect(
+      (screen.getByLabelText("Ritual local time") as HTMLInputElement).value,
+    ).toBe("07:15");
   });
 
   it("runs the durable Ritual through an explicit owner gate and Receipt", async () => {
@@ -616,6 +801,9 @@ describe("RitualBuilderWorkspace", () => {
         ritualId: approved.ritualId,
         expectedFromRevision: 1,
       }),
+    );
+    await waitFor(() =>
+      expect(activeBridge.getAutomationState).toHaveBeenCalledOnce(),
     );
     expect(screen.getByText("Approved · Revision 2")).toBeTruthy();
   });

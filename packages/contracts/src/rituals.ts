@@ -510,6 +510,67 @@ export const ritualLearningApprovalRequestSchema = z.strictObject({
   approvedAt: instantSchema,
 });
 
+const ritualLocalTimeSchema = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
+
+const ritualTimeZoneSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z_+-]+(?:\/[A-Za-z0-9_+-]+)*$/);
+
+export const ritualScheduleOccurrenceSchema = z.strictObject({
+  runId: ritualRunIdSchema,
+  dueAt: instantSchema,
+});
+
+export const ritualScheduleSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  ritualId: ritualIdSchema,
+  ritualRevision: z.number().int().positive(),
+  state: z.enum(["ENABLED", "PAUSED"]),
+  cadence: z.enum(["DAILY", "WEEKDAYS"]),
+  localTime: ritualLocalTimeSchema,
+  timeZone: ritualTimeZoneSchema,
+  nextRunAt: instantSchema,
+  pendingOccurrence: ritualScheduleOccurrenceSchema.nullable(),
+  lastTriggeredAt: instantSchema.nullable(),
+  updatedAt: instantSchema,
+});
+
+export const ritualScheduleUpdateRequestSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  ritualId: ritualIdSchema,
+  ritualRevision: z.number().int().positive(),
+  cadence: ritualScheduleSchema.shape.cadence,
+  localTime: ritualLocalTimeSchema,
+  timeZone: ritualTimeZoneSchema,
+});
+
+export const ritualSchedulePauseRequestSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  ritualId: ritualIdSchema,
+  ritualRevision: z.number().int().positive(),
+});
+
+export const ritualScheduledRunRequestSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  ritualId: ritualIdSchema,
+  ritualRevision: z.number().int().positive(),
+  runId: ritualRunIdSchema,
+  dueAt: instantSchema,
+});
+
+export const ritualInboxItemSchema = z.strictObject({
+  run: ritualRunSchema,
+  receipt: ritualRunReceiptSchema.nullable(),
+  attention: z
+    .enum(["OWNER_APPROVAL", "RESOURCE", "REVIEW", "FAILURE"])
+    .nullable(),
+});
+
+export const ritualInboxSchema = z.array(ritualInboxItemSchema).max(20);
+
 export const ritualStoreV2Schema = z.strictObject({
   schemaVersion: z.literal(2),
   rituals: z.array(approvedRitualRevisionSchema).max(100),
@@ -523,13 +584,23 @@ export const ritualStoreV3Schema = z.strictObject({
   learningProposals: z.array(ritualLearningProposalSchema).max(100),
 });
 
-export const ritualStoreSchema = z.strictObject({
+export const ritualStoreV4Schema = z.strictObject({
   schemaVersion: z.literal(4),
   rituals: z.array(approvedRitualRevisionSchema).max(100),
   receipts: z.array(ritualTestReceiptSchema).max(100),
   learningProposals: z.array(ritualLearningProposalSchema).max(100),
   runs: z.array(ritualRunSchema).max(100),
   runReceipts: z.array(ritualRunReceiptSchema).max(100),
+});
+
+export const ritualStoreSchema = z.strictObject({
+  schemaVersion: z.literal(5),
+  rituals: z.array(approvedRitualRevisionSchema).max(100),
+  receipts: z.array(ritualTestReceiptSchema).max(100),
+  learningProposals: z.array(ritualLearningProposalSchema).max(100),
+  runs: z.array(ritualRunSchema).max(100),
+  runReceipts: z.array(ritualRunReceiptSchema).max(100),
+  schedules: z.array(ritualScheduleSchema).max(100),
 });
 
 export const ritualStewardContextSchema = z.strictObject({
@@ -612,6 +683,20 @@ export type RitualRunReceipt = z.infer<typeof ritualRunReceiptSchema>;
 export type RitualRunControllerResult = z.infer<
   typeof ritualRunControllerResultSchema
 >;
+export type RitualScheduleOccurrence = z.infer<
+  typeof ritualScheduleOccurrenceSchema
+>;
+export type RitualSchedule = z.infer<typeof ritualScheduleSchema>;
+export type RitualScheduleUpdateRequest = z.infer<
+  typeof ritualScheduleUpdateRequestSchema
+>;
+export type RitualSchedulePauseRequest = z.infer<
+  typeof ritualSchedulePauseRequestSchema
+>;
+export type RitualScheduledRunRequest = z.infer<
+  typeof ritualScheduledRunRequestSchema
+>;
+export type RitualInboxItem = z.infer<typeof ritualInboxItemSchema>;
 export type RitualStore = z.infer<typeof ritualStoreSchema>;
 export type RitualLearningFeedbackRequest = z.infer<
   typeof ritualLearningFeedbackRequestSchema

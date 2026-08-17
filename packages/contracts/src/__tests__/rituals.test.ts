@@ -19,6 +19,8 @@ import {
   ritualRunReceiptSchema,
   ritualRunRequestSchema,
   ritualRunSchema,
+  ritualScheduleSchema,
+  ritualScheduleUpdateRequestSchema,
   createRitualTestReceipt,
   validateRitualStewardResult,
   validateRitualLearningResult,
@@ -68,6 +70,43 @@ const draft = {
 };
 
 describe("Ritual contracts", () => {
+  it("binds an executable local schedule to one approved Ritual revision", () => {
+    const schedule = ritualScheduleSchema.parse({
+      schemaVersion: 1,
+      ritualId: "rtl_01J00000000000000000000000",
+      ritualRevision: 1,
+      state: "ENABLED",
+      cadence: "DAILY",
+      localTime: "06:00",
+      timeZone: "America/Chicago",
+      nextRunAt: "2026-08-17T11:00:00.000Z",
+      pendingOccurrence: null,
+      lastTriggeredAt: null,
+      updatedAt: "2026-08-16T22:00:00.000Z",
+    });
+
+    expect(schedule.localTime).toBe("06:00");
+    expect(
+      ritualScheduleUpdateRequestSchema.safeParse({
+        schemaVersion: 1,
+        ritualId: schedule.ritualId,
+        ritualRevision: 1,
+        cadence: "WEEKDAYS",
+        localTime: "24:00",
+        timeZone: "America/Chicago",
+      }).success,
+    ).toBe(false);
+    expect(
+      ritualScheduleSchema.safeParse({
+        ...schedule,
+        pendingOccurrence: {
+          runId: "rrn_01J00000000000000000000001",
+          dueAt: schedule.nextRunAt,
+        },
+      }).success,
+    ).toBe(true);
+  });
+
   it("keeps the Steward drafting boundary bounded and rejects stale proposals", () => {
     const context = ritualStewardContextSchema.parse({
       schemaVersion: 1,
