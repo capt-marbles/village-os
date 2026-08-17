@@ -10,6 +10,7 @@ const deletionRequestSchema = z.strictObject({
 
 const deletionCountQueries = [
   "SELECT COUNT(*) AS count FROM principals WHERE principal_id = ?",
+  "SELECT COUNT(*) AS count FROM principal_identities WHERE principal_id = ?",
   "SELECT COUNT(*) AS count FROM devices WHERE principal_id = ?",
   "SELECT COUNT(*) AS count FROM jobs WHERE principal_id = ?",
   "SELECT COUNT(*) AS count FROM job_events WHERE principal_id = ?",
@@ -37,6 +38,17 @@ export async function exportPrincipalRecords(
 ) {
   const principal = principalIdSchema.parse(principalCandidate);
   const [
+    identities,
+    devices,
+    jobs,
+    browserSessions,
+    browserActions,
+    humanGates,
+    outbox,
+    replayWindows,
+    pairingChallenges,
+    deviceQuotaWindows,
+    principalQuotaWindows,
     projections,
     workflowActors,
     events,
@@ -47,6 +59,116 @@ export async function exportPrincipalRecords(
     continuityGrants,
     continuityRecipientKeys,
   ] = await Promise.all([
+    db
+      .prepare(
+        `SELECT provider, created_at AS createdAt FROM principal_identities
+         WHERE principal_id = ? ORDER BY provider, created_at`,
+      )
+      .bind(principal)
+      .all(),
+    db
+      .prepare(
+        `SELECT device_id AS deviceId, credential_status AS credentialStatus,
+                protocol_version AS protocolVersion, created_at AS createdAt,
+                revoked_at AS revokedAt
+         FROM devices WHERE principal_id = ? ORDER BY created_at, device_id`,
+      )
+      .bind(principal)
+      .all(),
+    db
+      .prepare(
+        `SELECT job_id AS jobId, browser_session_id AS browserSessionId, state,
+                version, last_event_sequence AS lastEventSequence,
+                created_at AS createdAt, updated_at AS updatedAt,
+                objective_kind AS objectiveKind, objective_version AS objectiveVersion
+         FROM jobs WHERE principal_id = ? ORDER BY created_at, job_id`,
+      )
+      .bind(principal)
+      .all(),
+    db
+      .prepare(
+        `SELECT browser_session_id AS browserSessionId, job_id AS jobId,
+                device_id AS deviceId, host_id AS hostId, site, controller,
+                connection_state AS connectionState, lease_epoch AS leaseEpoch,
+                automation_blocked AS automationBlocked,
+                takeover_state AS takeoverState, profile_state AS profileState,
+                updated_at AS updatedAt
+         FROM browser_sessions WHERE principal_id = ?
+         ORDER BY browser_session_id`,
+      )
+      .bind(principal)
+      .all(),
+    db
+      .prepare(
+        `SELECT browser_session_id AS browserSessionId, action_id AS actionId,
+                phase, mutation_class AS mutationClass, postcondition,
+                accepted_at AS acceptedAt, updated_at AS updatedAt
+         FROM browser_actions WHERE principal_id = ?
+         ORDER BY browser_session_id, command_sequence`,
+      )
+      .bind(principal)
+      .all(),
+    db
+      .prepare(
+        `SELECT job_id AS jobId, human_gate_id AS humanGateId,
+                browser_session_id AS browserSessionId, reason, state,
+                created_at AS createdAt, resolved_at AS resolvedAt
+         FROM human_gates WHERE principal_id = ? ORDER BY created_at, human_gate_id`,
+      )
+      .bind(principal)
+      .all(),
+    db
+      .prepare(
+        `SELECT job_id AS jobId, event_sequence AS eventSequence,
+                projection_type AS projectionType, projected_at AS projectedAt,
+                created_at AS createdAt
+         FROM projection_outbox WHERE principal_id = ?
+         ORDER BY job_id, event_sequence, projection_type`,
+      )
+      .bind(principal)
+      .all(),
+    db
+      .prepare(
+        `SELECT device_id AS deviceId, browser_session_id AS browserSessionId,
+                highest_command_sequence AS highestCommandSequence,
+                highest_result_sequence AS highestResultSequence,
+                protocol_version AS protocolVersion, updated_at AS updatedAt
+         FROM protocol_replay_windows WHERE principal_id = ?
+         ORDER BY device_id, browser_session_id`,
+      )
+      .bind(principal)
+      .all(),
+    db
+      .prepare(
+        `SELECT pairing_id AS pairingId, device_id AS deviceId,
+                device_display_name AS deviceDisplayName, protection,
+                fingerprint, attempts_remaining AS attemptsRemaining, state,
+                created_at AS createdAt, expires_at AS expiresAt,
+                confirmed_at AS confirmedAt, consumed_at AS consumedAt
+         FROM pairing_challenges WHERE principal_id = ?
+         ORDER BY created_at, pairing_id`,
+      )
+      .bind(principal)
+      .all(),
+    db
+      .prepare(
+        `SELECT device_id AS deviceId, window_started_at AS windowStartedAt,
+                connections, commands, replays, notifications,
+                retained_events AS retainedRecords
+         FROM authenticated_quota_usage WHERE principal_id = ?
+         ORDER BY window_started_at, device_id`,
+      )
+      .bind(principal)
+      .all(),
+    db
+      .prepare(
+        `SELECT window_started_at AS windowStartedAt, connections, commands,
+                replays, notifications, retained_records AS retainedRecords
+         FROM authenticated_principal_quota_usage WHERE principal_id = ?
+         ORDER BY window_started_at`,
+      )
+      .bind(principal)
+      .all(),
     db
       .prepare(
         `SELECT browser_session_id AS browserSessionId, sequence, event_type AS eventType,
@@ -142,6 +264,17 @@ export async function exportPrincipalRecords(
   ]);
   return {
     principalId: principal,
+    identities: identities.results,
+    devices: devices.results,
+    jobs: jobs.results,
+    browserSessions: browserSessions.results,
+    browserActions: browserActions.results,
+    humanGates: humanGates.results,
+    outbox: outbox.results,
+    replayWindows: replayWindows.results,
+    pairingChallenges: pairingChallenges.results,
+    deviceQuotaWindows: deviceQuotaWindows.results,
+    principalQuotaWindows: principalQuotaWindows.results,
     projections: projections.results,
     events: events.results,
     checkpoints: checkpoints.results,
@@ -151,6 +284,38 @@ export async function exportPrincipalRecords(
     cancellations: cancellations.results,
     continuityGrants: continuityGrants.results,
     continuityRecipientKeys: continuityRecipientKeys.results,
+  };
+}
+
+export async function exportPrincipalCloudData(
+  environment: Environment,
+  principalCandidate: unknown,
+  generatedAtCandidate: unknown = new Date().toISOString(),
+) {
+  const principal = principalIdSchema.parse(principalCandidate);
+  const generatedAt = instantSchema.parse(generatedAtCandidate);
+  const records = await exportPrincipalRecords(
+    environment.VILLAGE_DB,
+    principal,
+  );
+  const sessions = await environment.VILLAGE_DB.prepare(
+    `SELECT browser_session_id FROM browser_sessions
+     WHERE principal_id = ? ORDER BY browser_session_id`,
+  )
+    .bind(principal)
+    .all<{ browser_session_id: string }>();
+  const coordinators = [];
+  for (const session of sessions.results) {
+    const summary = await environment.BROWSER_SESSION_COORDINATOR.getByName(
+      session.browser_session_id,
+    ).lifecycleSummary(principal);
+    if (summary.ok) coordinators.push(summary);
+  }
+  return {
+    schemaVersion: 1 as const,
+    generatedAt,
+    ...records,
+    coordinators,
   };
 }
 
@@ -201,6 +366,13 @@ export async function executePrincipalDeletion(
     .first<{ status: "PLANNED" | "COMPLETED" | "VERIFICATION_FAILED" }>();
   if (!plan) return { ok: false as const, code: "DELETION_PLAN_NOT_FOUND" };
   if (plan.status !== "COMPLETED") {
+    const sessions = await db
+      .prepare(
+        `SELECT browser_session_id FROM browser_sessions
+         WHERE principal_id = ?`,
+      )
+      .bind(request.data.principalId)
+      .all<{ browser_session_id: string }>();
     const grants = await db
       .prepare(
         `SELECT grant_id FROM continuity_grants
@@ -216,6 +388,27 @@ export async function executePrincipalDeletion(
         return {
           ok: false as const,
           code: "CONTINUITY_MAILBOX_DELETION_FAILED",
+        };
+      }
+    }
+    for (const session of sessions.results) {
+      const coordinator = environment.BROWSER_SESSION_COORDINATOR.getByName(
+        session.browser_session_id,
+      );
+      const destroyed = await coordinator.destroy(request.data.principalId);
+      if (!destroyed.ok) {
+        return {
+          ok: false as const,
+          code: "BROWSER_COORDINATOR_DELETION_FAILED",
+        };
+      }
+      const status = await coordinator.lifecycleStatus(
+        request.data.principalId,
+      );
+      if (!status.ok || status.state !== "ABSENT") {
+        return {
+          ok: false as const,
+          code: "BROWSER_COORDINATOR_DELETION_FAILED",
         };
       }
     }
