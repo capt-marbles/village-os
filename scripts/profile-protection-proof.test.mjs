@@ -1,6 +1,34 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { assertEncryptedCookieFiles } from "./verify-profile-protection.mjs";
+import {
+  assertEncryptedCookieFiles,
+  assertProfileProtectionReport,
+} from "./verify-profile-protection.mjs";
+
+test("requires the real owner-presence and native-confirmation ceremony", () => {
+  assert.doesNotThrow(() =>
+    assertProfileProtectionReport({
+      status: "READY_FOR_DISK_VERIFICATION",
+      cookieName: "__Host-village_oscrypt_probe",
+      osCryptBackend: "keychain",
+      backupExclusion: "VERIFIED",
+      indexExclusion: "VERIFIED",
+      ownerPresence: "VERIFIED",
+      nativeConfirmation: "VERIFIED",
+    }),
+  );
+  assert.throws(
+    () =>
+      assertProfileProtectionReport({
+        status: "READY_FOR_DISK_VERIFICATION",
+        cookieName: "__Host-village_oscrypt_probe",
+        osCryptBackend: "keychain",
+        backupExclusion: "VERIFIED",
+        indexExclusion: "VERIFIED",
+      }),
+    /PACKAGED_PROFILE_PROTECTION_REPORT_INVALID/,
+  );
+});
 
 test("accepts an encrypted Chromium cookie record without the plaintext value", () => {
   assert.doesNotThrow(() =>

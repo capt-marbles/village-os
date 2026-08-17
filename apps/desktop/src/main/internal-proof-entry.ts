@@ -1,6 +1,6 @@
 import { browserSessionIdSchema } from "@village/contracts";
 import { delegatedWorkflowReadySnapshot } from "@village/ui";
-import { app, session, shell, type WebContents } from "electron";
+import { app, dialog, session, shell, type WebContents } from "electron";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
@@ -38,6 +38,8 @@ import {
   ProfileLock,
 } from "../browser/profile-protection.js";
 import { internalProofProfileProtection } from "./internal-profile-protection.js";
+import { confirmSessionErasure } from "./session-erasure-request.js";
+import { verifyMacOsOwnerPresence } from "./step-up-auth.js";
 
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(name);
@@ -263,6 +265,19 @@ async function run(): Promise<void> {
     const availability = await protector.availability();
     assertMacOsProfileEncryptionAvailable(availability, true);
     await writePrivateJson(profileProtectionReport, {
+      status: "WAITING_FOR_OWNER_AUTHORIZATION",
+    });
+    app.focus({ steal: true });
+    if (!(await verifyMacOsOwnerPresence())) {
+      throw new Error("PACKAGED_PROFILE_OWNER_AUTHORIZATION_REJECTED");
+    }
+    await writePrivateJson(profileProtectionReport, {
+      status: "WAITING_FOR_NATIVE_CONFIRMATION",
+    });
+    if (!(await confirmSessionErasure(dialog))) {
+      throw new Error("PACKAGED_PROFILE_NATIVE_CONFIRMATION_REJECTED");
+    }
+    await writePrivateJson(profileProtectionReport, {
       status: "PREPARING_PROFILE",
     });
     const profile = await ensureProtectedProfile(
@@ -312,6 +327,8 @@ async function run(): Promise<void> {
         osCryptBackend: availability.backend,
         backupExclusion: "VERIFIED",
         indexExclusion: "VERIFIED",
+        ownerPresence: "VERIFIED",
+        nativeConfirmation: "VERIFIED",
       });
     } finally {
       await lock.release();
