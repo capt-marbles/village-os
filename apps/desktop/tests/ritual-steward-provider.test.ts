@@ -520,13 +520,16 @@ describe("CodexRitualStewardProvider", () => {
               approval: "NONE",
             },
           ],
-          permissions: ["Read bounded public-web evidence"],
+          permissions: [
+            "Research current public-web information about AI coding agents from the last 30 days",
+          ],
           completion: "A grounded signal brief is ready for review.",
           research: {
             provider: "EXA",
             query: "a broader query the model invented",
             maxResults: 2,
             lookbackDays: 7,
+            includeDomains: [],
           },
         };
       },
@@ -539,6 +542,9 @@ describe("CodexRitualStewardProvider", () => {
 
     expect(result).toMatchObject({
       status: "proposal",
+      permissions: [
+        "Research current public-web information about AI coding agents from the last 30",
+      ],
       research: {
         provider: "EXA",
         query: "AI coding agents",
@@ -642,6 +648,66 @@ describe("CodexRitualStewardProvider", () => {
       status: "waiting",
       reason: "MALFORMED_PROVIDER_OUTPUT",
     });
+  });
+
+  it("starts a fresh thread after malformed draft output so an owner retry can recover", async () => {
+    let threadStarts = 0;
+    const threadIds: string[] = [];
+    const outputs = [
+      {
+        stewardMessage: "Draft ready.",
+        name: "Unsafe draft",
+        purpose: context.ownerPurpose,
+        steps: [],
+        permissions: [],
+        completion: "Done.",
+        runImmediately: true,
+      },
+      {
+        stewardMessage: "I shaped a safe retry.",
+        name: "Pipeline review",
+        purpose: context.ownerPurpose,
+        steps: [
+          {
+            stepKey: "prepare-review",
+            title: "Prepare the review",
+            description: "Prepare a bounded pipeline review for the owner.",
+            actor: { kind: "STEWARD", role: "Steward" },
+            approval: "NONE",
+          },
+        ],
+        permissions: ["Read only connected pipeline records"],
+        completion: "A reviewable follow-up list is ready.",
+      },
+    ];
+    const transport = {
+      request: async (method: string) => {
+        if (method === "initialize") return {};
+        if (method === "account/read") return { account: { type: "chatgpt" } };
+        if (method === "thread/start") {
+          threadStarts += 1;
+          return { thread: { id: `draft-thread-${threadStarts}` } };
+        }
+        return {};
+      },
+      notify: () => undefined,
+      runToolTurn: async (threadId: string) => {
+        threadIds.push(threadId);
+        return outputs.shift();
+      },
+      close: async () => undefined,
+    };
+    const provider = new CodexRitualStewardProvider(transport);
+
+    await expect(provider.draft(context)).resolves.toMatchObject({
+      status: "waiting",
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    });
+    await expect(provider.draft(context)).resolves.toMatchObject({
+      status: "proposal",
+      name: "Pipeline review",
+    });
+    expect(threadIds).toEqual(["draft-thread-1", "draft-thread-2"]);
   });
 
   it("normalizes model-friendly step identifiers before strict validation", async () => {
@@ -768,6 +834,7 @@ describe("CodexRitualStewardProvider", () => {
 
   it("proposes learning from bounded evidence without exposing lineage ids", async () => {
     const turns: Array<{ prompt: unknown; options: unknown }> = [];
+    const overlongCompletion = `${"x".repeat(320)} extra`;
     const transport = {
       request: async (method: string) => {
         if (method === "initialize") return {};
@@ -790,7 +857,7 @@ describe("CodexRitualStewardProvider", () => {
             trigger: learningContext.ritual.trigger,
             steps: learningContext.ritual.steps,
             permissions: learningContext.ritual.permissions,
-            completion: "Three concise bullets are ready for review.",
+            completion: overlongCompletion,
             reviewPolicy: learningContext.ritual.reviewPolicy,
           },
         };
@@ -804,6 +871,9 @@ describe("CodexRitualStewardProvider", () => {
       proposalId: learningContext.proposalId,
       receiptId: learningContext.receipt.receiptId,
       fromRevision: 1,
+      proposedDefinition: {
+        completion: "x".repeat(320),
+      },
     });
     expect(turns[0]?.options).toEqual({
       toolName: "village_ritual_learning_proposal",
