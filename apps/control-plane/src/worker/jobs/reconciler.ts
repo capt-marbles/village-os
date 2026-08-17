@@ -92,6 +92,13 @@ function reconcileAction(action: BrowserAction): ReconciledAction {
       disposition: "RECEIPTED",
     };
   }
+  if (action.phase === "ACCEPTED") {
+    return {
+      actionId: action.actionId,
+      phase: "ACCEPTED",
+      disposition: "RETRY_ALLOWED",
+    };
+  }
   const resolution = resolveActionReconciliation(
     action.mutationClass,
     action.postcondition === "UNOBSERVED" ? "UNKNOWN" : action.postcondition,

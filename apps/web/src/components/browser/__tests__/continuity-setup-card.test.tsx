@@ -258,9 +258,11 @@ describe("continuity setup card", () => {
     render(<ContinuitySetupCard client={client} />);
 
     await screen.findByText("Handoff ready");
-    expect(client.loadGrantStatus).toHaveBeenCalledWith(
-      olderActiveGrant.grantId,
-      expect.any(AbortSignal),
+    await waitFor(() =>
+      expect(client.loadGrantStatus).toHaveBeenCalledWith(
+        olderActiveGrant.grantId,
+        expect.any(AbortSignal),
+      ),
     );
   });
 

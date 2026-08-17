@@ -130,4 +130,57 @@ describe("browser recovery reconciliation", () => {
       },
     ]);
   });
+
+  it("retries a non-idempotent action accepted before dispatch because no effect began", () => {
+    const accepted = {
+      ...action(
+        "act_01J00000000000000000000005",
+        "NON_IDEMPOTENT",
+        "UNOBSERVED",
+      ),
+      phase: "ACCEPTED" as const,
+    };
+
+    expect(
+      reconcileBrowserRecovery({
+        state,
+        actions: [accepted],
+        now: "2026-08-12T18:00:01.000Z",
+      }),
+    ).toMatchObject({
+      continuation: { status: "RETRY_ALLOWED", actionId: accepted.actionId },
+      actions: [
+        {
+          actionId: accepted.actionId,
+          phase: "ACCEPTED",
+          disposition: "RETRY_ALLOWED",
+        },
+      ],
+    });
+  });
+
+  it("converts a locally observed effect with a satisfied postcondition into a receipt", () => {
+    const observed = {
+      ...action(
+        "act_01J00000000000000000000006",
+        "NON_IDEMPOTENT",
+        "SATISFIED",
+      ),
+      phase: "EFFECT_OBSERVED" as const,
+    };
+    const result = reconcileBrowserRecovery({
+      state,
+      actions: [observed],
+      now: "2026-08-12T18:00:01.000Z",
+    });
+
+    expect(result.continuation).toEqual({ status: "NONE" });
+    expect(result.actions).toEqual([
+      {
+        actionId: observed.actionId,
+        phase: "RECEIPTED",
+        disposition: "RECEIPTED",
+      },
+    ]);
+  });
 });
