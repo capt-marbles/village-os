@@ -28,7 +28,6 @@ import {
   type RitualTestRunControllerResult,
   type RitualLearningProposal,
   type RitualLearningDecisionRequest,
-  type RitualPendingLearningReview,
   type RitualLearningReceipt,
   type RitualLearningResult,
   type RitualRun,
@@ -38,6 +37,8 @@ import {
   type RitualInboxItem,
   type RitualSchedule,
   type RitualStewardResult,
+  type RitualAuditTimeline,
+  type RitualLatestSnapshot,
 } from "@village/contracts";
 import type { RitualStewardProvider } from "../model-provider/ritual-steward.js";
 import { createVillageId } from "./local-village-id.js";
@@ -48,13 +49,7 @@ import {
 import { nextRitualOccurrence } from "./ritual-scheduler.js";
 
 export interface RitualPersistence {
-  latestSnapshot(): Promise<{
-    approved: ApprovedRitualRevision | null;
-    receipt: RitualTestReceipt | null;
-    run: RitualRun | null;
-    runReceipt: RitualRunReceipt | null;
-    learningReview: RitualPendingLearningReview | null;
-  }>;
+  latestSnapshot(): Promise<RitualLatestSnapshot>;
   find(ritualId: string): Promise<ApprovedRitualRevision | null>;
   findReceipt(receiptId: string): Promise<RitualLearningReceipt | null>;
   findLearningProposal(
@@ -146,13 +141,7 @@ export class RitualBuilderController {
     );
   }
 
-  async loadLatestState(): Promise<{
-    approved: ApprovedRitualRevision | null;
-    receipt: RitualTestReceipt | null;
-    run: RitualRun | null;
-    runReceipt: RitualRunReceipt | null;
-    learningReview: RitualPendingLearningReview | null;
-  }> {
+  async loadLatestState(): Promise<RitualLatestSnapshot> {
     return this.enqueueRun(async () => {
       const snapshot = await this.repository.latestSnapshot();
       if (
@@ -175,6 +164,13 @@ export class RitualBuilderController {
       });
       await this.repository.saveRun(interrupted);
       return { ...snapshot, run: interrupted };
+    });
+  }
+
+  async loadAuditTimeline(): Promise<RitualAuditTimeline> {
+    return this.enqueueRun(async () => {
+      const snapshot = await this.repository.latestSnapshot();
+      return snapshot.auditTimeline;
     });
   }
 

@@ -237,10 +237,12 @@ function bridge() {
       run: null,
       runReceipt: null,
       learningReview: null,
+      auditTimeline: [],
       schedule: null,
       inbox: [],
     })),
     getAutomationState: vi.fn(async () => ({ schedule: null, inbox: [] })),
+    getAuditTimeline: vi.fn(async () => []),
     configureSchedule: vi.fn(async (request) => ({
       ...request,
       state: "ENABLED" as const,
@@ -324,6 +326,22 @@ describe("RitualBuilderWorkspace", () => {
 
   it("turns a supplied sample into a reviewable no-effects Receipt", async () => {
     const activeBridge = bridge();
+    activeBridge.getAuditTimeline.mockResolvedValueOnce([
+      {
+        kind: "TEST_RECORDED",
+        sourceId: receipt.receiptId,
+        ritualRevision: 1,
+        outcome: "NEEDS_REVIEW",
+        occurredAt: receipt.recordedAt,
+      },
+      {
+        kind: "REVISION_APPROVED",
+        sourceId: approved.ritualId,
+        ritualRevision: 1,
+        source: "INITIAL",
+        occurredAt: approved.approvedAt,
+      },
+    ]);
     activeBridge.initialize.mockResolvedValueOnce({
       identity,
       approved,
@@ -351,6 +369,192 @@ describe("RitualBuilderWorkspace", () => {
     expect(screen.getByText("No external effects")).toBeTruthy();
     expect(screen.getByText(/Commercial impact/u)).toBeTruthy();
     expect(screen.queryByLabelText("Representative sample")).toBeNull();
+    expect(await screen.findByText("Ritual history")).toBeTruthy();
+    expect(activeBridge.getAuditTimeline).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a metadata-only Ritual history collapsed until requested", async () => {
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [
+        {
+          kind: "LEARNING_DECIDED",
+          sourceId: "rlp_01J00000000000000000000000",
+          ritualRevision: 1,
+          decision: "REJECTED",
+          occurredAt: "2026-08-17T14:00:00.000Z",
+        },
+        {
+          kind: "RUN_RECORDED",
+          sourceId: runReceipt.receiptId,
+          ritualRevision: 1,
+          outcome: "NEEDS_REVIEW",
+          occurredAt: "2026-08-16T12:00:04.000Z",
+        },
+        {
+          kind: "REVISION_APPROVED",
+          sourceId: approved.ritualId,
+          ritualRevision: 1,
+          source: "INITIAL",
+          occurredAt: "2026-08-15T16:03:00.000Z",
+        },
+      ],
+      schedule: null,
+      inbox: [],
+    });
+
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+
+    const summary = await screen.findByText("Ritual history");
+    const history = summary.closest("details");
+    expect(history?.open).toBe(false);
+    fireEvent.click(summary.closest("summary")!);
+    expect(history?.open).toBe(true);
+    expect(
+      within(history!).getByText("Learning proposal rejected"),
+    ).toBeTruthy();
+    expect(
+      within(history!).getByText("Run Receipt · Needs review"),
+    ).toBeTruthy();
+    expect(within(history!).getByText("Ritual approved")).toBeTruthy();
+    expect(history?.textContent).not.toContain("raw sample");
+    expect(history?.textContent).not.toContain("https://");
+  });
+
+  it("clears the previous Ritual history after a fresh identity is ready", async () => {
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [
+        {
+          kind: "REVISION_APPROVED",
+          sourceId: approved.ritualId,
+          ritualRevision: 1,
+          source: "INITIAL",
+          occurredAt: approved.approvedAt,
+        },
+      ],
+      schedule: null,
+      inbox: [],
+    });
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+    await screen.findByText("Ritual history");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Shape another Ritual" }),
+    );
+
+    await screen.findByLabelText("What should become repeatable?");
+    expect(screen.queryByText("Ritual history")).toBeNull();
+  });
+
+  it("keeps the newest overlapping Ritual history refresh", async () => {
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [],
+      schedule: null,
+      inbox: [],
+    });
+    let resolveOlder!: (
+      value: Awaited<ReturnType<typeof activeBridge.getAuditTimeline>>,
+    ) => void;
+    const older = new Promise<
+      Awaited<ReturnType<typeof activeBridge.getAuditTimeline>>
+    >((resolve) => {
+      resolveOlder = resolve;
+    });
+    const newer = [
+      {
+        kind: "TEST_RECORDED" as const,
+        sourceId: receipt.receiptId,
+        ritualRevision: 1,
+        outcome: "NEEDS_REVIEW" as const,
+        occurredAt: "2026-08-17T15:00:00.000Z",
+      },
+    ];
+    activeBridge.getAuditTimeline
+      .mockImplementationOnce(async () => older)
+      .mockResolvedValueOnce(newer);
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+    await screen.findByText("Ritual approved");
+
+    fireEvent.click(screen.getByRole("button", { name: "Test this Ritual" }));
+    fireEvent.change(screen.getByLabelText("Representative sample"), {
+      target: { value: "Customer A needs an answer before Friday." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run safe test" }));
+    await screen.findByText("Test Receipt");
+    fireEvent.click(screen.getByRole("button", { name: "Run another test" }));
+    fireEvent.change(screen.getByLabelText("Representative sample"), {
+      target: { value: "Customer B needs an answer before Monday." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run safe test" }));
+    await waitFor(() =>
+      expect(activeBridge.getAuditTimeline).toHaveBeenCalledTimes(2),
+    );
+    await screen.findByText("Ritual history");
+
+    await act(async () => resolveOlder([]));
+    expect(screen.getByText("Ritual history")).toBeTruthy();
+  });
+
+  it("shows a retryable warning when Ritual history cannot refresh", async () => {
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [],
+      schedule: null,
+      inbox: [],
+    });
+    activeBridge.getAuditTimeline
+      .mockRejectedValueOnce(new Error("STORE_UNAVAILABLE"))
+      .mockResolvedValueOnce([
+        {
+          kind: "TEST_RECORDED",
+          sourceId: receipt.receiptId,
+          ritualRevision: 1,
+          outcome: "NEEDS_REVIEW",
+          occurredAt: receipt.recordedAt,
+        },
+      ]);
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+    await screen.findByText("Ritual approved");
+    fireEvent.click(screen.getByRole("button", { name: "Test this Ritual" }));
+    fireEvent.change(screen.getByLabelText("Representative sample"), {
+      target: { value: "Customer A needs an answer before Friday." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run safe test" }));
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "history may be out of date",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Refresh history" }));
+    await waitFor(() =>
+      expect(screen.queryByText(/history may be out of date/u)).toBeNull(),
+    );
+    expect(screen.getByText("Ritual history")).toBeTruthy();
   });
 
   it("configures repeatable work and puts attention before Run history", async () => {
@@ -442,6 +646,7 @@ describe("RitualBuilderWorkspace", () => {
     });
 
     expect(activeBridge.getAutomationState).toHaveBeenCalledOnce();
+    expect(activeBridge.getAuditTimeline).toHaveBeenCalledOnce();
     expect((input as HTMLInputElement).value).toBe("07:15");
   });
 
@@ -827,6 +1032,15 @@ describe("RitualBuilderWorkspace", () => {
 
   it("turns Receipt feedback into an explicit revision approval", async () => {
     const activeBridge = bridge();
+    activeBridge.getAuditTimeline.mockResolvedValueOnce([
+      {
+        kind: "REVISION_APPROVED",
+        sourceId: approved.ritualId,
+        ritualRevision: 2,
+        source: "LEARNING",
+        occurredAt: "2026-08-17T14:01:00.000Z",
+      },
+    ]);
     activeBridge.initialize.mockResolvedValueOnce({
       identity,
       approved,
@@ -872,10 +1086,20 @@ describe("RitualBuilderWorkspace", () => {
       expect(activeBridge.getAutomationState).toHaveBeenCalledOnce(),
     );
     expect(screen.getByText("Approved · Revision 2")).toBeTruthy();
+    expect(await screen.findByText("Learned revision approved")).toBeTruthy();
   });
 
   it("restores and durably rejects a pending learning proposal", async () => {
     const activeBridge = bridge();
+    activeBridge.getAuditTimeline.mockResolvedValueOnce([
+      {
+        kind: "LEARNING_DECIDED",
+        sourceId: learningProposal.proposalId,
+        ritualRevision: approved.ritualRevision,
+        decision: "REJECTED",
+        occurredAt: "2026-08-17T14:02:00.000Z",
+      },
+    ]);
     activeBridge.initialize.mockResolvedValueOnce({
       identity,
       approved,
@@ -908,6 +1132,7 @@ describe("RitualBuilderWorkspace", () => {
       expectedFromRevision: approved.ritualRevision,
       decision: "REJECTED",
     });
+    expect(await screen.findByText("Learning proposal rejected")).toBeTruthy();
   });
 
   it("records a revision request before reopening feedback", async () => {

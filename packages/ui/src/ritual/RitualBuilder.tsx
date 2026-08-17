@@ -4,6 +4,7 @@ import type {
   RitualRun,
   RitualRunReceipt,
   RitualStarter,
+  RitualAuditTimeline,
 } from "@village/contracts";
 import type {
   RitualBuilderEvent,
@@ -21,12 +22,18 @@ export function RitualBuilder({
   identity,
   researchSetup,
   stewardDesk,
+  auditTimeline = [],
+  auditTimelineError,
+  onRefreshAuditTimeline,
 }: {
   state: RitualBuilderState;
   onEvent(event: RitualBuilderEvent): void;
   identity: RitualBuilderIdentity;
   researchSetup?: ReactNode;
   stewardDesk?: ReactNode;
+  auditTimeline?: RitualAuditTimeline;
+  auditTimelineError?: string | null;
+  onRefreshAuditTimeline?(): void;
 }) {
   const [starterMode, setStarterMode] = useState<
     "CUSTOM" | RitualStarter["kind"]
@@ -433,6 +440,16 @@ export function RitualBuilder({
                 : "Not started"}
           </span>
         </header>
+
+        {auditTimeline.length > 0 || auditTimelineError ? (
+          <RitualAuditHistory
+            timeline={auditTimeline}
+            {...(auditTimelineError !== undefined
+              ? { error: auditTimelineError }
+              : {})}
+            {...(onRefreshAuditTimeline ? { onRefreshAuditTimeline } : {})}
+          />
+        ) : null}
 
         {state.draft ? (
           <div className="ritual-charter">
@@ -1049,6 +1066,81 @@ function ResearchEvidence({ receipt }: { receipt: RitualRunReceipt }) {
       </ol>
     </section>
   );
+}
+
+function RitualAuditHistory({
+  timeline,
+  error,
+  onRefreshAuditTimeline,
+}: {
+  timeline: RitualAuditTimeline;
+  error?: string | null;
+  onRefreshAuditTimeline?(): void;
+}) {
+  return (
+    <details className="ritual-history">
+      <summary>
+        <span>
+          <strong>Ritual history</strong>
+          <small>Latest approvals, Receipts, and learning decisions</small>
+        </span>
+        <span>{timeline.length}</span>
+      </summary>
+      {error ? (
+        <div className="ritual-history__error">
+          <p role="alert">{error}</p>
+          {onRefreshAuditTimeline ? (
+            <button type="button" onClick={onRefreshAuditTimeline}>
+              Refresh history
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      <ol>
+        {timeline.map((entry) => (
+          <li key={`${entry.kind}-${entry.sourceId}-${entry.ritualRevision}`}>
+            <span aria-hidden="true" />
+            <div>
+              <strong>{auditEntryLabel(entry)}</strong>
+              <small>
+                Revision {entry.ritualRevision} ·{" "}
+                <time dateTime={entry.occurredAt}>
+                  {formatAuditDate(entry.occurredAt)}
+                </time>
+              </small>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </details>
+  );
+}
+
+function formatAuditDate(occurredAt: string): string {
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(
+    new Date(occurredAt),
+  );
+}
+
+function auditEntryLabel(entry: RitualAuditTimeline[number]): string {
+  switch (entry.kind) {
+    case "REVISION_APPROVED":
+      return entry.source === "INITIAL"
+        ? "Ritual approved"
+        : "Learned revision approved";
+    case "TEST_RECORDED":
+      return `Test Receipt · ${auditOutcomeLabel(entry.outcome)}`;
+    case "RUN_RECORDED":
+      return `Run Receipt · ${auditOutcomeLabel(entry.outcome)}`;
+    case "LEARNING_DECIDED":
+      return entry.decision === "REJECTED"
+        ? "Learning proposal rejected"
+        : "Learning revision requested";
+  }
+}
+
+function auditOutcomeLabel(outcome: RitualRunReceipt["outcome"]): string {
+  return outcome === "COMPLETED" ? "Completed" : "Needs review";
 }
 
 function researchWaitingCopy(reason: RitualRun["waitingReason"]): string {

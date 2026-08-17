@@ -125,6 +125,8 @@ describe("RitualBuilderController", () => {
         receipt: null,
         run: null,
         runReceipt: null,
+        learningReview: null,
+        auditTimeline: [],
       })),
       find: vi.fn(async () => null),
       save: vi.fn(async () => undefined),
@@ -161,12 +163,16 @@ describe("RitualBuilderController", () => {
       receipt: null,
       run: null,
       runReceipt: null,
+      learningReview: null,
+      auditTimeline: [],
     });
     await expect(controller.loadLatestState()).resolves.toEqual({
       approved,
       receipt: null,
       run: null,
       runReceipt: null,
+      learningReview: null,
+      auditTimeline: [],
     });
     await controller.close();
     expect(provider.close).toHaveBeenCalledOnce();

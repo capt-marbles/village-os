@@ -123,6 +123,25 @@ body { margin: 0; min-width: 320px; min-height: 100vh; background: radial-gradie
 .ritual-draft__header { display: flex; gap: 1.25rem; align-items: start; justify-content: space-between; padding-bottom: 1.4rem; border-bottom: 2px solid #314034; }
 .ritual-draft .ritual-eyebrow { color: #59705c; }
 .ritual-draft h2 { margin: 0; max-width: 480px; font-family: "Iowan Old Style", "Palatino Linotype", Palatino, serif; font-size: clamp(2rem, 3.5vw, 3.5rem); font-weight: 500; letter-spacing: -.035em; line-height: 1; }
+.ritual-history { margin: 1rem 0 0; border-bottom: 1px solid #c7ccbd; padding-bottom: 1rem; }
+.ritual-history summary { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border-radius: .7rem; padding: .65rem .75rem; color: #304034; cursor: pointer; list-style: none; }
+.ritual-history summary::-webkit-details-marker { display: none; }
+.ritual-history summary:hover, .ritual-history summary:focus-visible { background: rgba(56, 82, 58, .08); }
+.ritual-history summary > span:first-child { display: grid; gap: .15rem; }
+.ritual-history summary strong { font: 800 .75rem ui-sans-serif, system-ui; letter-spacing: .04em; text-transform: uppercase; }
+.ritual-history summary small { color: #647167; font-size: .72rem; }
+.ritual-history summary > span:last-child { display: grid; place-items: center; min-width: 1.8rem; min-height: 1.8rem; border-radius: 999px; color: #f3f7ed; background: #38523a; font: 800 .68rem ui-monospace, monospace; }
+.ritual-history__error { margin: .75rem; border-left: 3px solid #8d382d; padding: .1rem 0 .1rem .75rem; color: #6f2e27; }
+.ritual-history__error p { margin: 0 0 .5rem; font-size: .78rem; }
+.ritual-history__error button { border: 1px solid #8d382d; border-radius: 999px; padding: .35rem .65rem; color: #6f2e27; background: transparent; font: 800 .68rem ui-sans-serif, system-ui; cursor: pointer; }
+.ritual-history__error button:focus-visible { outline: 3px solid #315cdb; outline-offset: 2px; }
+.ritual-history ol { margin: .75rem 0 0; padding: 0 .75rem; list-style: none; }
+.ritual-history li { display: grid; grid-template-columns: .8rem 1fr; gap: .7rem; min-height: 3rem; }
+.ritual-history li > span { position: relative; width: .55rem; height: .55rem; margin-top: .35rem; border: 2px solid #38523a; border-radius: 50%; background: #eef0df; }
+.ritual-history li:not(:last-child) > span::after { position: absolute; top: .55rem; left: 50%; width: 1px; height: 2.45rem; background: #a9b2a5; content: ""; }
+.ritual-history li div { display: grid; align-content: start; gap: .2rem; }
+.ritual-history li strong { color: #243026; font-size: .82rem; }
+.ritual-history li small { color: #68746b; font: 700 .66rem ui-monospace, monospace; text-transform: uppercase; }
 .ritual-revision { flex: 0 0 auto; border: 1px solid #829084; border-radius: 999px; padding: .42rem .68rem; color: #47594a; font: 750 .64rem ui-monospace, monospace; letter-spacing: .05em; text-transform: uppercase; }
 .ritual-charter { display: grid; gap: .7rem; padding: 1.5rem 0 4rem 1.35rem; border-left: 1px solid #b6beae; }
 .ritual-charter > label, .ritual-field > span, .ritual-field-heading > span { color: #657568; font-size: .66rem; font-weight: 850; letter-spacing: .13em; text-transform: uppercase; }

@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld(
       ipcRenderer.invoke("village:ritual-builder:cancel-run", request),
     getAutomationState: () =>
       ipcRenderer.invoke("village:ritual-builder:get-automation-state"),
+    getAuditTimeline: () =>
+      ipcRenderer.invoke("village:ritual-builder:get-audit-timeline"),
     configureSchedule: (request) =>
       ipcRenderer.invoke("village:ritual-builder:configure-schedule", request),
     pauseSchedule: (request) =>
