@@ -168,6 +168,179 @@ describe("authenticated pairing routes", () => {
     });
   });
 
+  it("meters a fixed owner notification and never accepts cloud-supplied copy", async () => {
+    const now = new Date().toISOString();
+    const deviceId = "dev_01J00000000000000000000020";
+    const jobId = "job_01J00000000000000000000020";
+    const browserSessionId = "brs_01J00000000000000000000020";
+    await env.VILLAGE_DB.batch([
+      env.VILLAGE_DB.prepare(
+        "INSERT OR IGNORE INTO principals (principal_id, created_at) VALUES (?, ?)",
+      ).bind(principalId, now),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO devices
+         (principal_id, device_id, public_key, credential_status, protocol_version,
+          last_accepted_sequence, created_at) VALUES (?, ?, '{}', 'ACTIVE', 1, 0, ?)`,
+      ).bind(principalId, deviceId, now),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO jobs
+         (principal_id, job_id, state, version, last_event_sequence, created_at, updated_at)
+         VALUES (?, ?, 'WAITING_FOR_BROWSER', 2, 2, ?, ?)`,
+      ).bind(principalId, jobId, now, now),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO browser_sessions
+         (principal_id, browser_session_id, job_id, device_id, host_id, site,
+          controller, connection_state, lease_epoch, last_accepted_sequence,
+          automation_blocked, takeover_state, profile_state, updated_at)
+         VALUES (?, ?, ?, ?, 'hst_01J00000000000000000000020', 'OWNED_FIXTURE',
+                 'NONE', 'OFFLINE', 0, 0, 1, 'NONE', 'PRESENT', ?)`,
+      ).bind(principalId, browserSessionId, jobId, deviceId, now),
+    ]);
+    const coordinator =
+      env.BROWSER_SESSION_COORDINATOR.getByName(browserSessionId);
+    await coordinator.initialize({
+      principalId,
+      browserSessionId,
+      site: "OWNED_FIXTURE",
+      initializedAt: now,
+      control: {
+        principalId,
+        deviceId,
+        jobId,
+        browserSessionId,
+        controller: "NONE",
+        connection: "OFFLINE",
+        leaseEpoch: 0,
+        leaseExpiresAt: null,
+        lastAcceptedSequence: 0,
+        automationBlocked: true,
+        takeover: "NONE",
+        profile: "PRESENT",
+      },
+    });
+
+    const invalid = await SELF.fetch(
+      new Request(
+        `https://village.test/api/browser-sessions/${browserSessionId}/notifications`,
+        {
+          method: "POST",
+          headers: ownerHeaders,
+          body: JSON.stringify({
+            reason: "ATTENTION_REQUIRED",
+            title: "page supplied copy",
+          }),
+        },
+      ),
+    );
+    expect(invalid.status).toBe(400);
+
+    const accepted = await SELF.fetch(
+      new Request(
+        `https://village.test/api/browser-sessions/${browserSessionId}/notifications`,
+        {
+          method: "POST",
+          headers: ownerHeaders,
+          body: JSON.stringify({ reason: "ATTENTION_REQUIRED" }),
+        },
+      ),
+    );
+    expect(accepted.status).toBe(202);
+    await expect(
+      coordinator.notificationsAfter(principalId, 0),
+    ).resolves.toMatchObject({
+      ok: true,
+      notifications: [
+        {
+          eventSequence: 2,
+          reason: "ATTENTION_REQUIRED",
+          requestedAt: expect.any(String),
+        },
+      ],
+      cursor: 2,
+    });
+
+    await env.VILLAGE_DB.prepare(
+      `UPDATE authenticated_principal_quota_usage SET notifications = 60
+       WHERE principal_id = ?`,
+    )
+      .bind(principalId)
+      .run();
+    const limited = await SELF.fetch(
+      new Request(
+        `https://village.test/api/browser-sessions/${browserSessionId}/notifications`,
+        {
+          method: "POST",
+          headers: ownerHeaders,
+          body: JSON.stringify({ reason: "ATTENTION_REQUIRED" }),
+        },
+      ),
+    );
+    expect(limited.status).toBe(429);
+    await expect(
+      coordinator.notificationsAfter(principalId, 0),
+    ).resolves.toMatchObject({
+      notifications: [{ eventSequence: 2 }],
+    });
+  });
+
+  it("rejects retained-record admission before creating a browser session", async () => {
+    const now = new Date().toISOString();
+    const quotaPrincipalId = "prn_01J00000000000000000000021";
+    const deviceId = "dev_01J00000000000000000000021";
+    const jobId = "job_01J00000000000000000000021";
+    const browserSessionId = "brs_01J00000000000000000000021";
+    await env.VILLAGE_DB.batch([
+      env.VILLAGE_DB.prepare(
+        "INSERT OR IGNORE INTO principals (principal_id, created_at) VALUES (?, ?)",
+      ).bind(quotaPrincipalId, now),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO devices
+         (principal_id, device_id, public_key, credential_status, protocol_version,
+          last_accepted_sequence, created_at) VALUES (?, ?, '{}', 'ACTIVE', 1, 0, ?)`,
+      ).bind(quotaPrincipalId, deviceId, now),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO jobs
+         (principal_id, job_id, state, version, last_event_sequence, created_at, updated_at)
+         VALUES (?, ?, 'QUEUED', 1, 1, ?, ?)`,
+      ).bind(quotaPrincipalId, jobId, now, now),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO authenticated_principal_quota_usage
+         (principal_id, window_started_at, retained_records)
+         VALUES (?, ?, 1000)
+         ON CONFLICT(principal_id, window_started_at) DO UPDATE SET
+           retained_records = 1000`,
+      ).bind(quotaPrincipalId, now.slice(0, 16)),
+    ]);
+
+    const response = await SELF.fetch(
+      new Request(`https://village.test/api/jobs/${jobId}/browser-sessions`, {
+        method: "POST",
+        headers: {
+          ...ownerHeaders,
+          "x-village-development-principal": quotaPrincipalId,
+        },
+        body: JSON.stringify({
+          deviceId,
+          browserSessionId,
+          hostId: "hst_01J00000000000000000000021",
+          site: "OWNED_FIXTURE",
+        }),
+      }),
+    );
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      code: "AUTHENTICATED_QUOTA_EXCEEDED",
+    });
+    expect(
+      await env.VILLAGE_DB.prepare(
+        "SELECT COUNT(*) AS count FROM browser_sessions WHERE browser_session_id = ?",
+      )
+        .bind(browserSessionId)
+        .first<{ count: number }>(),
+    ).toEqual({ count: 0 });
+  });
+
   it("rejects CSRF and exact-origin violations", async () => {
     const body = JSON.stringify({
       deviceId: "dev_01J00000000000000000000000",
@@ -287,7 +460,7 @@ describe("authenticated pairing routes", () => {
         },
         cancellation,
       ),
-    ).resolves.toMatchObject({ status: 409 });
+    ).resolves.toMatchObject({ status: 404 });
 
     const accepted = await requestCancel(ownerHeaders);
     expect(accepted.status).toBe(200);
@@ -649,7 +822,7 @@ describe("authenticated pairing routes", () => {
         },
       ),
     );
-    expect(foreignEvents.status).toBe(400);
+    expect(foreignEvents.status).toBe(404);
 
     const coordinator =
       env.BROWSER_SESSION_COORDINATOR.getByName(browserSessionId);
@@ -817,6 +990,7 @@ describe("authenticated pairing routes", () => {
       leaseEpoch: 5,
       automationBlocked: true,
       canceled: true,
+      notifications: [],
       workflow: {
         objective: {
           kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",

@@ -441,6 +441,9 @@ export class ControlPlaneClient {
     private readonly sequences: ProtocolSequenceStore,
     private readonly request: typeof fetch = fetch,
     private readonly requestTimeoutMs = 30_000,
+    private readonly deliverNotification: (
+      reason: "ATTENTION_REQUIRED",
+    ) => Promise<void> = async () => undefined,
   ) {}
 
   async connect(
@@ -555,6 +558,9 @@ export class ControlPlaneClient {
     }
     if (parsed.data.cursor < cursor) {
       throw new Error("STALE_AUTOMATION_SYNC_RESPONSE");
+    }
+    for (const notification of parsed.data.notifications) {
+      await this.deliverNotification(notification.reason);
     }
     await cursors.save(identity.browserSessionId, parsed.data.cursor);
     return parsed.data;

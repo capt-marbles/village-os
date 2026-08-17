@@ -42,6 +42,7 @@ export interface RuntimeControlPlaneOptions {
   deviceIdentitySource: DeviceIdentitySource;
   connectionId?: string;
   request?: typeof fetch;
+  deliverNotification?: (reason: "ATTENTION_REQUIRED") => Promise<void>;
 }
 
 export function assertDistinctBrowserSessionIdentity(
@@ -153,6 +154,8 @@ export async function createRuntimeControlPlaneComposition(
     deviceIdentity.privateKey,
     new FileProtocolSequenceStore(join(stateDirectory, "sequences.json")),
     options.request,
+    30_000,
+    options.deliverNotification,
   );
   const cursors = new FileAutomationSyncCursorStore(
     join(stateDirectory, "automation-sync-cursors.json"),

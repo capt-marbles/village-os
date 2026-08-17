@@ -493,6 +493,7 @@ export async function createInternalDelegatedProof(options: {
             leaseEpoch: current.leaseEpoch,
             automationBlocked: current.automationBlocked,
             canceled: current.canceled,
+            notifications: [],
             workflow: null,
           };
         },

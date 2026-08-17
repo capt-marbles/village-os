@@ -176,4 +176,25 @@ describe("observer API client", () => {
       client.sendIntent(selection, "CANCEL_AUTOMATION", 2),
     ).rejects.toThrow("STALE_JOB_REVISION");
   });
+
+  it("requests only the fixed desktop-attention capability", async () => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(Response.json({ ok: true, eventSequence: 4 }));
+    const client = new ObserverApiClient(
+      "https://village.test",
+      request,
+      () => "csrf-token-that-is-at-least-thirty-two-bytes-long",
+    );
+
+    await expect(
+      client.requestDesktopAttention(selection),
+    ).resolves.toBeUndefined();
+    expect(request.mock.calls[0]![0].toString()).toContain(
+      `/api/browser-sessions/${selection.browserSessionId}/notifications`,
+    );
+    expect(JSON.parse(String(request.mock.calls[0]![1]?.body))).toEqual({
+      reason: "ATTENTION_REQUIRED",
+    });
+  });
 });

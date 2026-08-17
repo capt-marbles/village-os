@@ -1,0 +1,286 @@
+version: 1
+defaults:
+  encryptionAtRest: CLOUDFLARE_MANAGED
+  backup: PROVIDER_BACKUP_WINDOW
+  verification: AUTHORITY_ABSENCE_CHECK
+records:
+  - {
+      authority: D1,
+      table: principals,
+      scope: PRINCIPAL,
+      retention: ACCOUNT_LIFETIME,
+      export: SANITIZED,
+      deletion: PRINCIPAL_DELETE,
+    }
+  - {
+      authority: D1,
+      table: principal_identities,
+      scope: PRINCIPAL,
+      retention: ACCOUNT_LIFETIME,
+      export: OMIT_AUTH_SUBJECT,
+      deletion: PRINCIPAL_DELETE,
+    }
+  - {
+      authority: D1,
+      table: devices,
+      scope: PRINCIPAL_DEVICE,
+      retention: ACCOUNT_LIFETIME,
+      export: SANITIZED,
+      deletion: PRINCIPAL_DELETE,
+    }
+  - {
+      authority: D1,
+      table: jobs,
+      scope: PRINCIPAL,
+      retention: ACCOUNT_LIFETIME,
+      export: SANITIZED,
+      deletion: PRINCIPAL_DELETE,
+    }
+  - {
+      authority: D1,
+      table: job_events,
+      scope: PRINCIPAL_JOB,
+      retention: TERMINAL_30_DAYS,
+      export: SANITIZED,
+      deletion: RETENTION_OR_PRINCIPAL_DELETE,
+    }
+  - {
+      authority: D1,
+      table: checkpoints,
+      scope: PRINCIPAL_JOB,
+      retention: TERMINAL_30_DAYS,
+      export: SANITIZED,
+      deletion: RETENTION_OR_PRINCIPAL_DELETE,
+    }
+  - {
+      authority: D1,
+      table: browser_sessions,
+      scope: PRINCIPAL_DEVICE,
+      retention: ACCOUNT_LIFETIME,
+      export: SANITIZED,
+      deletion: PRINCIPAL_DELETE,
+    }
+  - {
+      authority: D1,
+      table: browser_actions,
+      scope: PRINCIPAL_SESSION,
+      retention: ACCOUNT_LIFETIME,
+      export: SANITIZED,
+      deletion: PRINCIPAL_DELETE,
+    }
+  - {
+      authority: D1,
+      table: human_gates,
+      scope: PRINCIPAL_JOB,
+      retention: ACCOUNT_LIFETIME,
+      export: SANITIZED,
+      deletion: PRINCIPAL_DELETE,
+    }
+  - {
+      authority: D1,
+      table: projection_outbox,
+      scope: PRINCIPAL_JOB,
+      retention: PROJECTED_TERMINAL_30_DAYS,
+      export: OMIT_INTERNAL,
+      deletion: RETENTION_OR_PRINCIPAL_DELETE,
+    }
+  - {
+      authority: D1,
+      table: authenticated_quota_usage,
+      scope: PRINCIPAL_DEVICE,
+      retention: 1_DAY,
+      export: SANITIZED_COUNT,
+      deletion: RETENTION_OR_PRINCIPAL_DELETE,
+    }
+  - {
+      authority: D1,
+      table: authenticated_principal_quota_usage,
+      scope: PRINCIPAL,
+      retention: 1_DAY,
+      export: SANITIZED_COUNT,
+      deletion: RETENTION_OR_PRINCIPAL_DELETE,
+    }
+  - {
+      authority: D1,
+      table: protocol_replay_windows,
+      scope: PRINCIPAL_DEVICE_SESSION,
+      retention: SESSION_LIFETIME,
+      export: OMIT_SECURITY_STATE,
+      deletion: PRINCIPAL_DELETE,
+    }
+  - {
+      authority: D1,
+      table: pairing_challenges,
+      scope: PRINCIPAL,
+      retention: TERMINAL_30_DAYS,
+      export: OMIT_SECRET_HASH,
+      deletion: RETENTION_OR_PRINCIPAL_DELETE,
+    }
+  - {
+      authority: D1,
+      table: browser_session_event_projections,
+      scope: PRINCIPAL_SESSION,
+      retention: TERMINAL_30_DAYS,
+      export: SANITIZED,
+      deletion: RETENTION_OR_PRINCIPAL_DELETE,
+    }
+  - {
+      authority: D1,
+      table: action_receipts,
+      scope: PRINCIPAL_SESSION,
+      retention: TERMINAL_30_DAYS,
+      export: SANITIZED,
+      deletion: RETENTION_OR_PRINCIPAL_DELETE,
+    }
+  - {
+      authority: D1,
+      table: principal_deletion_plans,
+      scope: PRINCIPAL,
+      retention: TOMBSTONE_ACCOUNT_LIFETIME,
+      export: STATUS_ONLY,
+      deletion: PROVIDER_BACKUP_EXPIRY,
+    }
+  - {
+      authority: D1,
+      table: workflow_effect_projections,
+      scope: PRINCIPAL_SESSION,
+      retention: TERMINAL_30_DAYS,
+      export: SANITIZED,
+      deletion: RETENTION_OR_PRINCIPAL_DELETE,
+    }
+  - {
+      authority: D1,
+      table: workflow_last_effect_actor,
+      scope: PRINCIPAL_SESSION,
+      retention: TERMINAL_30_DAYS,
+      export: SANITIZED,
+      deletion: RETENTION_OR_PRINCIPAL_DELETE,
+    }
+  - {
+      authority: D1,
+      table: workflow_cancellations,
+      scope: PRINCIPAL_SESSION,
+      retention: TERMINAL_30_DAYS,
+      export: SANITIZED,
+      deletion: RETENTION_OR_PRINCIPAL_DELETE,
+    }
+  - {
+      authority: D1,
+      table: continuity_grants,
+      scope: PRINCIPAL_DEVICE_SESSION,
+      retention: TERMINAL_30_DAYS,
+      export: SANITIZED,
+      deletion: RETENTION_OR_PRINCIPAL_DELETE,
+    }
+  - {
+      authority: D1,
+      table: continuity_recipient_keys,
+      scope: PRINCIPAL_DEVICE_SESSION,
+      retention: ACCOUNT_LIFETIME,
+      export: PUBLIC_METADATA_ONLY,
+      deletion: PRINCIPAL_DELETE,
+    }
+  - {
+      authority: COORDINATOR,
+      table: session_metadata,
+      scope: PRINCIPAL_SESSION,
+      retention: SESSION_OBJECT_LIFETIME,
+      export: COUNT_ONLY,
+      deletion: PRINCIPAL_DELETE,
+    }
+  - {
+      authority: COORDINATOR,
+      table: control_state,
+      scope: PRINCIPAL_SESSION,
+      retention: SESSION_OBJECT_LIFETIME,
+      export: COUNT_ONLY,
+      deletion: PRINCIPAL_DELETE,
+    }
+  - {
+      authority: COORDINATOR,
+      table: coordinator_events,
+      scope: PRINCIPAL_SESSION,
+      retention: SESSION_OBJECT_LIFETIME,
+      export: COUNT_ONLY,
+      deletion: PRINCIPAL_DELETE,
+    }
+  - {
+      authority: COORDINATOR,
+      table: projection_outbox,
+      scope: PRINCIPAL_SESSION,
+      retention: SESSION_OBJECT_LIFETIME,
+      export: COUNT_ONLY,
+      deletion: PRINCIPAL_DELETE,
+    }
+  - {
+      authority: COORDINATOR,
+      table: accepted_actions,
+      scope: PRINCIPAL_SESSION,
+      retention: SESSION_OBJECT_LIFETIME_MAX_5000,
+      export: COUNT_ONLY,
+      deletion: PRINCIPAL_DELETE,
+    }
+  - {
+      authority: COORDINATOR,
+      table: command_quota_windows,
+      scope: PRINCIPAL_SESSION,
+      retention: 1_DAY_LAZY,
+      export: COUNT_ONLY,
+      deletion: RETENTION_OR_PRINCIPAL_DELETE,
+    }
+  - {
+      authority: COORDINATOR,
+      table: event_stream_quota_windows,
+      scope: PRINCIPAL_SESSION,
+      retention: 1_DAY_LAZY,
+      export: COUNT_ONLY,
+      deletion: RETENTION_OR_PRINCIPAL_DELETE,
+    }
+  - {
+      authority: COORDINATOR,
+      table: workflow_effects,
+      scope: PRINCIPAL_SESSION,
+      retention: SESSION_OBJECT_LIFETIME,
+      export: COUNT_ONLY,
+      deletion: PRINCIPAL_DELETE,
+    }
+  - {
+      authority: COORDINATOR,
+      table: workflow_receipts,
+      scope: PRINCIPAL_SESSION,
+      retention: SESSION_OBJECT_LIFETIME,
+      export: COUNT_ONLY,
+      deletion: PRINCIPAL_DELETE,
+    }
+  - {
+      authority: COORDINATOR,
+      table: workflow_checkpoint,
+      scope: PRINCIPAL_SESSION,
+      retention: SESSION_OBJECT_LIFETIME,
+      export: COUNT_ONLY,
+      deletion: PRINCIPAL_DELETE,
+    }
+  - {
+      authority: COORDINATOR,
+      table: workflow_cancellations,
+      scope: PRINCIPAL_SESSION,
+      retention: SESSION_OBJECT_LIFETIME,
+      export: COUNT_ONLY,
+      deletion: PRINCIPAL_DELETE,
+    }
+  - {
+      authority: MAILBOX,
+      table: mailbox_metadata,
+      scope: PRINCIPAL_GRANT,
+      retention: GRANT_LIFETIME,
+      export: COUNT_ONLY,
+      deletion: GRANT_OR_PRINCIPAL_DELETE,
+    }
+  - {
+      authority: MAILBOX,
+      table: encrypted_revisions,
+      scope: PRINCIPAL_GRANT,
+      retention: GRANT_TTL_ALARM,
+      export: OMIT_CIPHERTEXT,
+      deletion: GRANT_OR_PRINCIPAL_DELETE,
+    }
