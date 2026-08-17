@@ -19,11 +19,13 @@ export function RitualBuilder({
   onEvent,
   identity,
   researchSetup,
+  stewardDesk,
 }: {
   state: RitualBuilderState;
   onEvent(event: RitualBuilderEvent): void;
   identity: RitualBuilderIdentity;
   researchSetup?: ReactNode;
+  stewardDesk?: ReactNode;
 }) {
   const [starterMode, setStarterMode] = useState<
     "CUSTOM" | RitualStarter["kind"]
@@ -87,6 +89,8 @@ export function RitualBuilder({
             agreement without making you configure a workflow.
           </p>
         </header>
+
+        {stewardDesk}
 
         {researchSetup}
 

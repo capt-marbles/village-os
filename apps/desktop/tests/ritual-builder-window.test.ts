@@ -85,6 +85,12 @@ describe("Ritual Builder window", () => {
       run: null,
       runReceipt: null,
     })),
+    loadAutomationState: vi.fn(async () => ({
+      schedule: null,
+      inbox: [],
+    })),
+    configureSchedule: vi.fn(async (schedule) => schedule),
+    pauseSchedule: vi.fn(async (schedule) => schedule),
     draft: vi.fn(async () => ({ status: "waiting" })),
     approve: vi.fn(async (ritual) => ritual),
     testRun: vi.fn(async () => ({ status: "waiting" })),
@@ -147,7 +153,7 @@ describe("Ritual Builder window", () => {
     window.listeners.get("close")?.();
     expect(window.contentView.removeChildView).toHaveBeenCalledOnce();
     expect(view.webContents.close).toHaveBeenCalledOnce();
-    expect(controller.close).toHaveBeenCalledOnce();
+    expect(controller.close).not.toHaveBeenCalled();
   });
 
   it("disposes and destroys the window when loading fails", async () => {
@@ -190,6 +196,15 @@ describe("Ritual Builder window", () => {
     const approveLearning = electron.handlers.get(
       "village:ritual-builder:approve-learning",
     )!;
+    const automationState = electron.handlers.get(
+      "village:ritual-builder:get-automation-state",
+    )!;
+    const configureSchedule = electron.handlers.get(
+      "village:ritual-builder:configure-schedule",
+    )!;
+    const pauseSchedule = electron.handlers.get(
+      "village:ritual-builder:pause-schedule",
+    )!;
     const exaStatus = electron.handlers.get(
       "village:ritual-builder:get-exa-credential-status",
     )!;
@@ -217,6 +232,9 @@ describe("Ritual Builder window", () => {
     await cancelRun(event, { runId: "bounded" });
     await proposeLearning(event, { ritualId: initialized.identity.ritualId });
     await approveLearning(event, { ritualId: initialized.identity.ritualId });
+    await automationState(event);
+    await configureSchedule(event, { ritualId: initialized.identity.ritualId });
+    await pauseSchedule(event, { ritualId: initialized.identity.ritualId });
     const apiKey = new TextEncoder().encode("exa-owner-secret");
     await expect(exaStatus(event)).resolves.toMatchObject({
       state: "CONFIGURATION_REQUIRED",
@@ -260,6 +278,16 @@ describe("Ritual Builder window", () => {
     expect(controller.approveLearning).toHaveBeenCalledWith({
       ritualId: initialized.identity.ritualId,
     });
+    expect(controller.loadAutomationState).toHaveBeenCalled();
+    expect(controller.configureSchedule).toHaveBeenCalledWith({
+      ritualId: initialized.identity.ritualId,
+    });
+    expect(controller.pauseSchedule).toHaveBeenCalledWith({
+      ritualId: initialized.identity.ritualId,
+    });
+    await expect(automationState(event, "extra")).rejects.toThrow(
+      "MALFORMED_IPC_REQUEST",
+    );
 
     const nextIdentity = (await createDraftIdentity(event)) as {
       draftId: string;

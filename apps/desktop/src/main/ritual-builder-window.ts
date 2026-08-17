@@ -59,6 +59,9 @@ export async function createRitualBuilderWindow(options: {
   const startRunChannel = "village:ritual-builder:start-run";
   const approveRunStepChannel = "village:ritual-builder:approve-run-step";
   const cancelRunChannel = "village:ritual-builder:cancel-run";
+  const automationStateChannel = "village:ritual-builder:get-automation-state";
+  const configureScheduleChannel = "village:ritual-builder:configure-schedule";
+  const pauseScheduleChannel = "village:ritual-builder:pause-schedule";
   const proposeLearningChannel = "village:ritual-builder:propose-learning";
   const approveLearningChannel = "village:ritual-builder:approve-learning";
   const exaStatusChannel = "village:ritual-builder:get-exa-credential-status";
@@ -75,7 +78,11 @@ export async function createRitualBuilderWindow(options: {
   };
   ipcMain.handle(initializeChannel, async (event) => {
     assertSender(event);
-    return { identity, ...(await options.controller.loadLatestState()) };
+    const [latest, automation] = await Promise.all([
+      options.controller.loadLatestState(),
+      options.controller.loadAutomationState(),
+    ]);
+    return { identity, ...latest, ...automation };
   });
   ipcMain.handle(createDraftIdentityChannel, async (event) => {
     assertSender(event);
@@ -111,6 +118,19 @@ export async function createRitualBuilderWindow(options: {
   ipcMain.handle(cancelRunChannel, async (event, candidate) => {
     assertSender(event);
     return options.controller.cancelRun(candidate);
+  });
+  ipcMain.handle(automationStateChannel, async (event, ...arguments_) => {
+    assertSender(event);
+    if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
+    return options.controller.loadAutomationState();
+  });
+  ipcMain.handle(configureScheduleChannel, async (event, candidate) => {
+    assertSender(event);
+    return options.controller.configureSchedule(candidate);
+  });
+  ipcMain.handle(pauseScheduleChannel, async (event, candidate) => {
+    assertSender(event);
+    return options.controller.pauseSchedule(candidate);
   });
   ipcMain.handle(proposeLearningChannel, async (event, candidate) => {
     assertSender(event);
@@ -173,13 +193,15 @@ export async function createRitualBuilderWindow(options: {
     ipcMain.removeHandler(startRunChannel);
     ipcMain.removeHandler(approveRunStepChannel);
     ipcMain.removeHandler(cancelRunChannel);
+    ipcMain.removeHandler(automationStateChannel);
+    ipcMain.removeHandler(configureScheduleChannel);
+    ipcMain.removeHandler(pauseScheduleChannel);
     ipcMain.removeHandler(proposeLearningChannel);
     ipcMain.removeHandler(approveLearningChannel);
     ipcMain.removeHandler(exaStatusChannel);
     ipcMain.removeHandler(configureExaChannel);
     ipcMain.removeHandler(removeExaChannel);
     ipcMain.removeHandler(openExaDashboardChannel);
-    void options.controller.close();
     disposeView();
   };
   window.on("close", cleanup);

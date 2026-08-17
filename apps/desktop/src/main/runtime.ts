@@ -61,16 +61,36 @@ import { ExaCredentialController } from "../research/exa-credential-controller.j
 import { ExaSearchProvider } from "../research/exa-search-provider.js";
 import { installRitualBuilderMenu } from "./ritual-builder-menu.js";
 import { LocalRitualRunExecutor } from "./ritual-run-executor.js";
+import { RitualScheduler } from "./ritual-scheduler.js";
+import { createRitualShutdownHandler } from "./ritual-runtime-shutdown.js";
 
 registerVillageScheme(protocol);
 installGlobalSecurityPolicy(app);
 const pairingInbox = new PairingDeepLinkInbox();
 let ritualBuilderWindow: RitualBuilderWindow | undefined;
 let ritualBuilderLaunch: Promise<RitualBuilderWindow> | undefined;
+let ritualServicesLaunch: Promise<RitualRuntimeServices> | undefined;
+let ritualServices: RitualRuntimeServices | undefined;
+interface RitualRuntimeServices {
+  controller: RitualBuilderController;
+  scheduler: RitualScheduler;
+  exaCredentials: ExaCredentialController;
+}
 app.on("open-url", (event, url) => {
   event.preventDefault();
   pairingInbox.accept(url);
 });
+app.on(
+  "before-quit",
+  createRitualShutdownHandler(
+    app,
+    () => ritualServices,
+    () => {
+      ritualServices = undefined;
+      ritualServicesLaunch = undefined;
+    },
+  ),
+);
 
 export function resolveRuntimeControlPlaneUrl(storedOrigin?: string): URL {
   const configured = storedOrigin ?? process.env.VILLAGE_CONTROL_PLANE_URL;
@@ -253,6 +273,7 @@ export async function runVillageApplication(
   internalComposition?: Parameters<typeof startVillageRuntime>[1],
 ): Promise<VillageAppWindow> {
   await app.whenReady();
+  await ensureRitualServices();
   for (const argument of process.argv) pairingInbox.accept(argument);
   app.on("window-all-closed", () => app.quit());
   const villageWindow = await startVillageRuntime(
@@ -267,6 +288,7 @@ export async function runVillageApplication(
 
 export async function runRitualBuilderApplication(): Promise<RitualBuilderWindow> {
   await app.whenReady();
+  await ensureRitualServices();
   installVillageProtocol(
     protocol,
     fileURLToPath(new URL("../renderer", import.meta.url)),
@@ -293,14 +315,8 @@ async function openRitualBuilderWindow(): Promise<RitualBuilderWindow> {
   }
 }
 
-function createRitualBuilderSurface(): Promise<RitualBuilderWindow> {
-  const exaApiKeyStore = new ExaApiKeyStore(
-    new SecretVault(
-      join(app.getPath("userData"), "research", "exa-vault.json"),
-      new ElectronSafeStorageProtector(),
-    ),
-  );
-  const exaCredentials = new ExaCredentialController(exaApiKeyStore);
+async function createRitualBuilderSurface(): Promise<RitualBuilderWindow> {
+  const services = await ensureRitualServices();
   return createRitualBuilderWindow({
     preloadPath: join(
       app.getAppPath(),
@@ -308,19 +324,52 @@ function createRitualBuilderSurface(): Promise<RitualBuilderWindow> {
       "preload",
       "ritual-builder-bridge.cjs",
     ),
-    controller: new RitualBuilderController(
-      new CodexRitualStewardProvider(() => new CodexStdioTransport()),
-      new RitualRepository(
-        join(app.getPath("userData"), "rituals", "approved.json"),
-      ),
-      {
-        runExecutor: new LocalRitualRunExecutor({
-          research: new ExaSearchProvider({ credentials: exaApiKeyStore }),
-        }),
-      },
-    ),
-    exaCredentials,
+    controller: services.controller,
+    exaCredentials: services.exaCredentials,
     openExaDashboard: () =>
       shell.openExternal("https://dashboard.exa.ai/api-keys"),
   });
+}
+
+async function ensureRitualServices(): Promise<RitualRuntimeServices> {
+  if (ritualServices) return ritualServices;
+  if (ritualServicesLaunch) return ritualServicesLaunch;
+  ritualServicesLaunch = createRitualServices();
+  try {
+    ritualServices = await ritualServicesLaunch;
+    ritualServices.scheduler.start();
+    return ritualServices;
+  } finally {
+    ritualServicesLaunch = undefined;
+  }
+}
+
+async function createRitualServices(): Promise<RitualRuntimeServices> {
+  const exaApiKeyStore = new ExaApiKeyStore(
+    new SecretVault(
+      join(app.getPath("userData"), "research", "exa-vault.json"),
+      new ElectronSafeStorageProtector(),
+    ),
+  );
+  const exaCredentials = new ExaCredentialController(exaApiKeyStore);
+  const repository = new RitualRepository(
+    join(app.getPath("userData"), "rituals", "approved.json"),
+  );
+  let scheduler: RitualScheduler | undefined;
+  const controller = new RitualBuilderController(
+    new CodexRitualStewardProvider(() => new CodexStdioTransport()),
+    repository,
+    {
+      runExecutor: new LocalRitualRunExecutor({
+        research: new ExaSearchProvider({ credentials: exaApiKeyStore }),
+      }),
+      onScheduleChanged: () => scheduler?.wake(),
+    },
+  );
+  scheduler = new RitualScheduler(repository, controller);
+  return {
+    controller,
+    scheduler,
+    exaCredentials,
+  };
 }

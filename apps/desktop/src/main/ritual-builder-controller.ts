@@ -9,7 +9,11 @@ import {
   ritualRunCancelRequestSchema,
   ritualRunControllerResultSchema,
   ritualRunRequestSchema,
+  ritualScheduledRunRequestSchema,
   ritualRunStepApprovalRequestSchema,
+  ritualSchedulePauseRequestSchema,
+  ritualScheduleSchema,
+  ritualScheduleUpdateRequestSchema,
   ritualTestRunControllerResultSchema,
   ritualTestRunRequestSchema,
   ritualLearningApprovalRequestSchema,
@@ -24,8 +28,11 @@ import {
   type RitualLearningProposal,
   type RitualLearningResult,
   type RitualRun,
+  type RitualRunRequest,
   type RitualRunControllerResult,
   type RitualRunReceipt,
+  type RitualInboxItem,
+  type RitualSchedule,
   type RitualStewardResult,
 } from "@village/contracts";
 import type { RitualStewardProvider } from "../model-provider/ritual-steward.js";
@@ -34,6 +41,7 @@ import {
   LocalRitualRunExecutor,
   type RitualRunExecutor,
 } from "./ritual-run-executor.js";
+import { nextRitualOccurrence } from "./ritual-scheduler.js";
 
 export interface RitualPersistence {
   latestSnapshot(): Promise<{
@@ -64,12 +72,24 @@ export interface RitualPersistence {
     receipt: RitualRunReceipt,
     options?: { signal?: AbortSignal },
   ): Promise<void>;
+  listSchedules(): Promise<readonly RitualSchedule[]>;
+  saveSchedule(
+    schedule: RitualSchedule,
+    options?: { expectedUpdatedAt: string | null },
+  ): Promise<void>;
+  listInbox(): Promise<readonly RitualInboxItem[]>;
+  automationSnapshot(): Promise<{
+    approved: ApprovedRitualRevision | null;
+    schedule: RitualSchedule | null;
+    inbox: readonly RitualInboxItem[];
+  }>;
 }
 
 interface RitualControllerDependencies {
   createId(prefix: "rrn" | "rcp" | "rlp"): string;
   now(): string;
   runExecutor: RitualRunExecutor;
+  onScheduleChanged(): void;
 }
 
 interface ActiveRunOperation {
@@ -107,6 +127,7 @@ export class RitualBuilderController {
       createId: dependencies.createId ?? createVillageId,
       now: dependencies.now ?? (() => new Date().toISOString()),
       runExecutor: dependencies.runExecutor ?? new LocalRitualRunExecutor(),
+      onScheduleChanged: dependencies.onScheduleChanged ?? (() => undefined),
     };
     this.runExecutor = this.dependencies.runExecutor;
   }
@@ -134,6 +155,12 @@ export class RitualBuilderController {
       ) {
         return snapshot;
       }
+      const isPendingScheduleRun = (await this.repository.listSchedules()).some(
+        (schedule) => schedule.pendingOccurrence?.runId === snapshot.run?.runId,
+      );
+      if (this.activeRuns.has(snapshot.run.runId) || isPendingScheduleRun) {
+        return snapshot;
+      }
       const interrupted = reduceRitualRun(snapshot.run, snapshot.approved, {
         type: "FAIL",
         failureCode: "INTERRUPTED",
@@ -141,6 +168,71 @@ export class RitualBuilderController {
       });
       await this.repository.saveRun(interrupted);
       return { ...snapshot, run: interrupted };
+    });
+  }
+
+  async loadAutomationState(): Promise<{
+    schedule: RitualSchedule | null;
+    inbox: readonly RitualInboxItem[];
+  }> {
+    return this.enqueueRun(async () => {
+      const { schedule, inbox } = await this.repository.automationSnapshot();
+      return { schedule, inbox };
+    });
+  }
+
+  async configureSchedule(candidate: unknown): Promise<RitualSchedule> {
+    const request = ritualScheduleUpdateRequestSchema.parse(candidate);
+    return this.enqueueRun(async () => {
+      const ritual = await this.repository.find(request.ritualId);
+      if (!ritual || ritual.ritualRevision !== request.ritualRevision) {
+        throw new Error("STALE_RITUAL_SCHEDULE");
+      }
+      const existing = (await this.repository.listSchedules()).findLast(
+        (entry) =>
+          entry.ritualId === request.ritualId &&
+          entry.ritualRevision === request.ritualRevision,
+      );
+      if (existing?.pendingOccurrence) {
+        throw new Error("RITUAL_SCHEDULE_BUSY");
+      }
+      const now = this.dependencies.now();
+      const schedule = ritualScheduleSchema.parse({
+        ...request,
+        state: "ENABLED",
+        nextRunAt: nextRitualOccurrence(request, now),
+        pendingOccurrence: null,
+        lastTriggeredAt: existing?.lastTriggeredAt ?? null,
+        updatedAt: now,
+      });
+      await this.repository.saveSchedule(schedule, {
+        expectedUpdatedAt: existing?.updatedAt ?? null,
+      });
+      this.dependencies.onScheduleChanged();
+      return schedule;
+    });
+  }
+
+  async pauseSchedule(candidate: unknown): Promise<RitualSchedule> {
+    const request = ritualSchedulePauseRequestSchema.parse(candidate);
+    return this.enqueueRun(async () => {
+      const schedule = (await this.repository.listSchedules()).findLast(
+        (entry) =>
+          entry.ritualId === request.ritualId &&
+          entry.ritualRevision === request.ritualRevision,
+      );
+      if (!schedule) throw new Error("RITUAL_SCHEDULE_NOT_FOUND");
+      const paused = ritualScheduleSchema.parse({
+        ...schedule,
+        state: "PAUSED",
+        pendingOccurrence: null,
+        updatedAt: this.dependencies.now(),
+      });
+      await this.repository.saveSchedule(paused, {
+        expectedUpdatedAt: schedule.updatedAt,
+      });
+      this.dependencies.onScheduleChanged();
+      return paused;
     });
   }
 
@@ -185,18 +277,11 @@ export class RitualBuilderController {
           }),
         };
       }
-      let run = createRitualRun({
-        approved: ritual,
+      const run = await this.createAndStartRun(
+        ritual,
         request,
-        runId: this.dependencies.createId("rrn"),
-        createdAt: this.dependencies.now(),
-      });
-      await this.repository.saveRun(run);
-      run = reduceRitualRun(run, ritual, {
-        type: "START",
-        occurredAt: this.dependencies.now(),
-      });
-      await this.repository.saveRun(run);
+        this.dependencies.createId("rrn"),
+      );
       return {
         kind: "drive",
         ritual,
@@ -207,6 +292,111 @@ export class RitualBuilderController {
     return prepared.kind === "result"
       ? prepared.result
       : this.driveActiveRun(prepared.ritual, prepared.run, prepared.active);
+  }
+
+  async startScheduledRun(
+    candidate: unknown,
+  ): Promise<RitualRunControllerResult> {
+    this.assertOpen();
+    const prepared = await this.enqueueRun<PreparedRun>(async () => {
+      this.assertOpen();
+      const request = ritualScheduledRunRequestSchema.parse(candidate);
+      const existing = await this.repository.findRunWithApprovedRevision(
+        request.runId,
+      );
+      if (existing) {
+        if (
+          existing.run.ritualId !== request.ritualId ||
+          existing.run.ritualRevision !== request.ritualRevision
+        ) {
+          throw new Error("STALE_RITUAL_SCHEDULED_RUN");
+        }
+        if (existing.run.status === "QUEUED") {
+          const started = reduceRitualRun(existing.run, existing.approved, {
+            type: "START",
+            occurredAt: this.dependencies.now(),
+          });
+          await this.repository.saveRun(started);
+          return {
+            kind: "drive",
+            ritual: existing.approved,
+            run: started,
+            active: this.activateRun(started.runId),
+          };
+        }
+        if (existing.run.status === "RUNNING") {
+          return {
+            kind: "drive",
+            ritual: existing.approved,
+            run: existing.run,
+            active: this.activateRun(existing.run.runId),
+          };
+        }
+        return {
+          kind: "result",
+          result: ritualRunControllerResultSchema.parse({
+            status: "run",
+            run: existing.run,
+          }),
+        };
+      }
+
+      const ritual = await this.repository.find(request.ritualId);
+      if (!ritual || ritual.ritualRevision !== request.ritualRevision) {
+        throw new Error("STALE_RITUAL_SCHEDULED_RUN");
+      }
+      const activeRun = await this.repository.findNonterminalRun(
+        request.ritualId,
+        request.ritualRevision,
+      );
+      if (activeRun) {
+        return {
+          kind: "result",
+          result: ritualRunControllerResultSchema.parse({
+            status: "run",
+            run: activeRun,
+          }),
+        };
+      }
+      const run = await this.createAndStartRun(
+        ritual,
+        {
+          schemaVersion: 1,
+          ritualId: request.ritualId,
+          ritualRevision: request.ritualRevision,
+        },
+        request.runId,
+      );
+      return {
+        kind: "drive",
+        ritual,
+        run,
+        active: this.activateRun(run.runId),
+      };
+    });
+    return prepared.kind === "result"
+      ? prepared.result
+      : this.driveActiveRun(prepared.ritual, prepared.run, prepared.active);
+  }
+
+  private async createAndStartRun(
+    ritual: ApprovedRitualRevision,
+    request: RitualRunRequest,
+    runId: RitualRun["runId"],
+  ): Promise<RitualRun> {
+    const queued = createRitualRun({
+      approved: ritual,
+      request,
+      runId,
+      createdAt: this.dependencies.now(),
+    });
+    await this.repository.saveRun(queued);
+    const started = reduceRitualRun(queued, ritual, {
+      type: "START",
+      occurredAt: this.dependencies.now(),
+    });
+    await this.repository.saveRun(started);
+    return started;
   }
 
   async approveRunStep(candidate: unknown): Promise<RitualRunControllerResult> {

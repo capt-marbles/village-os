@@ -155,12 +155,13 @@ describe("RitualRepository", () => {
 
     expect(await repository.list()).toEqual([approved]);
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
-      schemaVersion: 4,
+      schemaVersion: 5,
       rituals: [approved],
       receipts: [],
       learningProposals: [],
       runs: [],
       runReceipts: [],
+      schedules: [],
     });
     if (process.platform !== "win32") {
       expect((await lstat(path)).mode & 0o077).toBe(0);
@@ -188,12 +189,13 @@ describe("RitualRepository", () => {
     });
     const stored = await readFile(path, "utf8");
     expect(JSON.parse(stored)).toEqual({
-      schemaVersion: 4,
+      schemaVersion: 5,
       rituals: [approved],
       receipts: [receipt],
       learningProposals: [],
       runs: [],
       runReceipts: [],
+      schedules: [],
     });
     expect(stored).not.toContain("Customer A needs an answer before Friday");
   });
@@ -721,6 +723,157 @@ describe("RitualRepository", () => {
       run: active,
       runReceipt: null,
     });
+  });
+
+  it("persists one revision-bound schedule and recovers the same pending occurrence", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
+    const path = join(directory, "rituals.json");
+    const repository = new RitualRepository(path);
+    await repository.save(approved);
+    const schedule = {
+      schemaVersion: 1 as const,
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      state: "ENABLED" as const,
+      cadence: "DAILY" as const,
+      localTime: "06:00",
+      timeZone: "America/Chicago",
+      nextRunAt: "2026-08-17T11:00:00.000Z",
+      pendingOccurrence: null,
+      lastTriggeredAt: null,
+      updatedAt: "2026-08-16T22:00:00.000Z",
+    };
+    await repository.saveSchedule(schedule);
+
+    const claimed = await repository.claimScheduleOccurrence({
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      expectedDueAt: schedule.nextRunAt,
+      runId: "rrn_01J00000000000000000000020",
+      nextRunAt: "2026-08-18T11:00:00.000Z",
+      claimedAt: "2026-08-17T11:00:01.000Z",
+    });
+
+    expect(claimed?.pendingOccurrence).toEqual({
+      runId: "rrn_01J00000000000000000000020",
+      dueAt: schedule.nextRunAt,
+    });
+    const reopened = new RitualRepository(path);
+    await expect(reopened.listSchedules()).resolves.toEqual([claimed]);
+    await expect(
+      reopened.claimScheduleOccurrence({
+        ritualId: approved.ritualId,
+        ritualRevision: approved.ritualRevision,
+        expectedDueAt: schedule.nextRunAt,
+        runId: "rrn_01J00000000000000000000021",
+        nextRunAt: "2026-08-18T11:00:00.000Z",
+        claimedAt: "2026-08-17T11:00:02.000Z",
+      }),
+    ).resolves.toEqual(claimed);
+
+    await reopened.acknowledgeScheduleOccurrence(
+      "rrn_01J00000000000000000000020",
+      "2026-08-17T11:00:03.000Z",
+    );
+    await expect(reopened.listSchedules()).resolves.toMatchObject([
+      {
+        pendingOccurrence: null,
+        lastTriggeredAt: "2026-08-17T11:00:00.000Z",
+      },
+    ]);
+  });
+
+  it("pauses an older schedule when a learned Ritual revision is approved", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
+    const repository = new RitualRepository(join(directory, "rituals.json"));
+    await repository.save(approved);
+    await repository.saveReceipt(receipt);
+    await repository.saveLearningProposal(learningProposal);
+    await repository.saveSchedule({
+      schemaVersion: 1,
+      ritualId: approved.ritualId,
+      ritualRevision: 1,
+      state: "ENABLED",
+      cadence: "DAILY",
+      localTime: "06:00",
+      timeZone: "America/Chicago",
+      nextRunAt: "2026-08-17T11:00:00.000Z",
+      pendingOccurrence: null,
+      lastTriggeredAt: null,
+      updatedAt: "2026-08-16T22:00:00.000Z",
+    });
+    const revisionTwo = approveRitualLearningProposal(
+      approved,
+      learningProposal,
+      {
+        schemaVersion: 1,
+        proposalId: learningProposal.proposalId,
+        ritualId: approved.ritualId,
+        expectedFromRevision: 1,
+        approvedAt: "2026-08-16T23:00:00.000Z",
+      },
+    );
+
+    await repository.save(revisionTwo);
+
+    await expect(repository.listSchedules()).resolves.toMatchObject([
+      {
+        ritualRevision: 1,
+        state: "PAUSED",
+        updatedAt: revisionTwo.approvedAt,
+      },
+    ]);
+  });
+
+  it("orders attention-needed Runs before recent history without inventing notifications", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
+    const repository = new RitualRepository(join(directory, "rituals.json"));
+    await repository.save(approved);
+    let completed = runFor("rrn_01J00000000000000000000030");
+    await repository.saveRun(completed);
+    completed = reduceRitualRun(completed, approved, {
+      type: "START",
+      occurredAt: "2026-08-16T12:00:01.000Z",
+    });
+    await repository.saveRun(completed);
+    completed = reduceRitualRun(completed, approved, {
+      type: "APPROVE_STEP",
+      stepKey: approved.steps[0]!.stepKey,
+      occurredAt: "2026-08-16T12:00:02.000Z",
+    });
+    await repository.saveRun(completed);
+    completed = reduceRitualRun(completed, approved, {
+      type: "COMPLETE_STEP",
+      stepKey: approved.steps[0]!.stepKey,
+      occurredAt: "2026-08-16T12:00:03.000Z",
+    });
+    await repository.saveRun(completed);
+    completed = reduceRitualRun(completed, approved, {
+      type: "COMPLETE_RUN",
+      outcome: "NEEDS_REVIEW",
+      occurredAt: "2026-08-16T12:00:04.000Z",
+    });
+    await repository.completeRun(
+      completed,
+      runReceiptFor(completed, "rcp_01J00000000000000000000030"),
+    );
+    let active = runFor("rrn_01J00000000000000000000031");
+    active = reduceRitualRun(active, approved, {
+      type: "START",
+      occurredAt: "2026-08-16T13:00:00.000Z",
+    });
+    await repository.saveRun(active);
+    const inbox = await repository.listInbox();
+    expect(inbox.map((item) => item.run.runId)).toEqual([
+      active.runId,
+      completed.runId,
+    ]);
+    expect(inbox.map((item) => item.attention)).toEqual([
+      "OWNER_APPROVAL",
+      "REVIEW",
+    ]);
+    expect(inbox[0]?.receipt).toBeNull();
+    expect(inbox[1]?.receipt?.runId).toBe(completed.runId);
   });
 
   it("rejects a distinct 101st Ritual without corrupting the store", async () => {

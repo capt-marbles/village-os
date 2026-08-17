@@ -2,6 +2,7 @@ import {
   createRitualRun,
   reduceRitualRun,
   type RitualRun,
+  type RitualSchedule,
 } from "@village/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { RitualBuilderController } from "../src/main/ritual-builder-controller.js";
@@ -313,7 +314,7 @@ describe("RitualBuilderController", () => {
       findRunWithApprovedRevision: vi.fn(async () =>
         currentRun ? { run: currentRun, approved } : null,
       ),
-      findNonterminalRun: vi.fn(async () => null),
+      findNonterminalRun: vi.fn(async () => currentRun),
       saveRun: vi.fn(async (run) => {
         currentRun = run;
       }),
@@ -406,6 +407,143 @@ describe("RitualBuilderController", () => {
       status: "FAILED",
       failureCode: "EXECUTOR_FAILED",
     });
+  });
+
+  it("starts a scheduled occurrence with its durable Run id and replays it idempotently", async () => {
+    let currentRun: RitualRun | null = null;
+    const repository = {
+      latestSnapshot: vi.fn(async () => ({
+        approved,
+        receipt: null,
+        run: currentRun,
+        runReceipt: null,
+      })),
+      find: vi.fn(async () => approved),
+      findRunWithApprovedRevision: vi.fn(async () =>
+        currentRun ? { run: currentRun, approved } : null,
+      ),
+      findNonterminalRun: vi.fn(async () => currentRun),
+      saveRun: vi.fn(async (run: RitualRun) => {
+        currentRun = run;
+      }),
+      completeRun: vi.fn(async () => undefined),
+    };
+    const controller = new RitualBuilderController(
+      unavailableProvider(),
+      repository,
+      { now: () => "2026-08-17T11:00:01.000Z" },
+    );
+    const request = {
+      schemaVersion: 1 as const,
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      runId: "rrn_01J00000000000000000000020",
+      dueAt: "2026-08-17T11:00:00.000Z",
+    };
+
+    const first = await controller.startScheduledRun(request);
+    const replay = await controller.startScheduledRun(request);
+    const nextOccurrence = await controller.startScheduledRun({
+      ...request,
+      runId: "rrn_01J00000000000000000000021",
+      dueAt: "2026-08-18T11:00:00.000Z",
+    });
+
+    expect(first).toMatchObject({
+      status: "run",
+      run: { runId: request.runId, status: "WAITING_FOR_OWNER" },
+    });
+    expect(replay).toEqual(first);
+    expect(nextOccurrence).toEqual(first);
+    expect(repository.saveRun).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not mark a pending scheduled Run interrupted when the inbox opens", async () => {
+    const run = createRunningRun(
+      automaticApproved,
+      "rrn_01J00000000000000000000022",
+    );
+    const repository = {
+      latestSnapshot: vi.fn(async () => ({
+        approved: automaticApproved,
+        receipt: null,
+        run,
+        runReceipt: null,
+      })),
+      listSchedules: vi.fn(async () => [
+        {
+          schemaVersion: 1 as const,
+          ritualId: automaticApproved.ritualId,
+          ritualRevision: automaticApproved.ritualRevision,
+          state: "ENABLED" as const,
+          cadence: "DAILY" as const,
+          localTime: "06:00",
+          timeZone: "America/Chicago",
+          nextRunAt: "2026-08-18T11:00:00.000Z",
+          pendingOccurrence: {
+            runId: run.runId,
+            dueAt: "2026-08-17T11:00:00.000Z",
+          },
+          lastTriggeredAt: null,
+          updatedAt: "2026-08-17T11:00:00.000Z",
+        },
+      ]),
+      saveRun: vi.fn(),
+    };
+    const controller = new RitualBuilderController(
+      unavailableProvider(),
+      repository,
+    );
+
+    await expect(controller.loadLatestState()).resolves.toMatchObject({ run });
+    expect(repository.saveRun).not.toHaveBeenCalled();
+  });
+
+  it("configures and authoritatively pauses a schedule while waking the scheduler", async () => {
+    let storedSchedule: RitualSchedule | null = null;
+    const repository = {
+      find: vi.fn(async () => approved),
+      listSchedules: vi.fn(async () =>
+        storedSchedule ? [storedSchedule] : [],
+      ),
+      saveSchedule: vi.fn(async (schedule: RitualSchedule) => {
+        storedSchedule = schedule;
+      }),
+    };
+    const onScheduleChanged = vi.fn();
+    const controller = new RitualBuilderController(
+      unavailableProvider(),
+      repository,
+      {
+        now: () => "2026-08-16T22:00:00.000Z",
+        onScheduleChanged,
+      },
+    );
+
+    await controller.configureSchedule({
+      schemaVersion: 1,
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      cadence: "DAILY",
+      localTime: "06:00",
+      timeZone: "America/Chicago",
+    });
+    storedSchedule = {
+      ...storedSchedule,
+      pendingOccurrence: {
+        runId: "rrn_01J00000000000000000000023",
+        dueAt: storedSchedule.nextRunAt,
+      },
+    };
+
+    await expect(
+      controller.pauseSchedule({
+        schemaVersion: 1,
+        ritualId: approved.ritualId,
+        ritualRevision: approved.ritualRevision,
+      }),
+    ).resolves.toMatchObject({ state: "PAUSED", pendingOccurrence: null });
+    expect(onScheduleChanged).toHaveBeenCalledTimes(2);
   });
 
   it("records POLICY_DENIED when a fixture reports external effects", async () => {
@@ -544,6 +682,7 @@ describe("RitualBuilderController", () => {
           run: running,
           runReceipt: null,
         }),
+      listSchedules: vi.fn(async () => []),
       saveRun,
     };
     const controller = new RitualBuilderController(
@@ -1030,6 +1169,7 @@ describe("RitualBuilderController", () => {
         run: currentRun,
         runReceipt: null,
       })),
+      listSchedules: vi.fn(async () => []),
       find: vi.fn(async () => automaticApproved),
       findNonterminalRun: vi.fn(async () => null),
       saveRun: vi.fn(async (run: RitualRun) => {

@@ -14,16 +14,20 @@ import {
   ritualLearningProposalSchema,
   ritualRunReceiptSchema,
   ritualRunSchema,
+  ritualScheduleSchema,
   ritualStoreSchema,
   ritualStoreV2Schema,
   ritualStoreV3Schema,
+  ritualStoreV4Schema,
   ritualTestReceiptSchema,
   validateRitualRunReceipt,
   type ApprovedRitualRevision,
   type RitualStore,
   type RitualLearningProposal,
+  type RitualInboxItem,
   type RitualRun,
   type RitualRunReceipt,
+  type RitualSchedule,
   type RitualTestReceipt,
 } from "@village/contracts";
 
@@ -74,6 +78,137 @@ export class RitualRepository {
     });
   }
 
+  automationSnapshot(): Promise<{
+    approved: ApprovedRitualRevision | null;
+    schedule: RitualSchedule | null;
+    inbox: readonly RitualInboxItem[];
+  }> {
+    return this.enqueue(async () => {
+      const store = await this.read();
+      const approved = store.rituals.at(-1) ?? null;
+      const schedule = approved
+        ? (store.schedules.findLast(
+            (entry) =>
+              entry.ritualId === approved.ritualId &&
+              entry.ritualRevision === approved.ritualRevision,
+          ) ?? null)
+        : null;
+      return { approved, schedule, inbox: inboxFromStore(store) };
+    });
+  }
+
+  listSchedules(): Promise<readonly RitualSchedule[]> {
+    return this.enqueue(async () => (await this.read()).schedules);
+  }
+
+  saveSchedule(
+    candidate: RitualSchedule,
+    options?: { expectedUpdatedAt: string | null },
+  ): Promise<void> {
+    return this.enqueue(async () => {
+      const schedule = ritualScheduleSchema.parse(candidate);
+      const current = await this.read();
+      const latest = current.rituals.findLast(
+        (ritual) => ritual.ritualId === schedule.ritualId,
+      );
+      if (!latest || latest.ritualRevision !== schedule.ritualRevision) {
+        throw new Error("STALE_RITUAL_SCHEDULE");
+      }
+      const index = current.schedules.findIndex(
+        (entry) =>
+          entry.ritualId === schedule.ritualId &&
+          entry.ritualRevision === schedule.ritualRevision,
+      );
+      const stored = current.schedules[index];
+      if (
+        options &&
+        (stored?.updatedAt ?? null) !== options.expectedUpdatedAt
+      ) {
+        throw new Error("RITUAL_SCHEDULE_BUSY");
+      }
+      if (index < 0) {
+        if (current.schedules.length >= 100) {
+          throw new Error("RITUAL_SCHEDULE_STORE_FULL");
+        }
+        await this.write({
+          ...current,
+          schedules: [...current.schedules, schedule],
+        });
+        return;
+      }
+      const schedules = [...current.schedules];
+      schedules[index] = schedule;
+      await this.write({ ...current, schedules });
+    });
+  }
+
+  claimScheduleOccurrence(candidate: {
+    ritualId: RitualSchedule["ritualId"];
+    ritualRevision: number;
+    expectedDueAt: string;
+    runId: RitualRun["runId"];
+    nextRunAt: string;
+    claimedAt: string;
+  }): Promise<RitualSchedule | null> {
+    return this.enqueue(async () => {
+      const current = await this.read();
+      const index = current.schedules.findIndex(
+        (entry) =>
+          entry.ritualId === candidate.ritualId &&
+          entry.ritualRevision === candidate.ritualRevision,
+      );
+      const schedule = current.schedules[index];
+      if (!schedule) return null;
+      if (schedule.pendingOccurrence) return schedule;
+      if (
+        schedule.state !== "ENABLED" ||
+        schedule.nextRunAt !== candidate.expectedDueAt ||
+        Date.parse(schedule.nextRunAt) > Date.parse(candidate.claimedAt)
+      ) {
+        return null;
+      }
+      const claimed = ritualScheduleSchema.parse({
+        ...schedule,
+        nextRunAt: candidate.nextRunAt,
+        pendingOccurrence: {
+          runId: candidate.runId,
+          dueAt: schedule.nextRunAt,
+        },
+        updatedAt: candidate.claimedAt,
+      });
+      const schedules = [...current.schedules];
+      schedules[index] = claimed;
+      await this.write({ ...current, schedules });
+      return claimed;
+    });
+  }
+
+  acknowledgeScheduleOccurrence(
+    runId: RitualRun["runId"],
+    acknowledgedAt: string,
+  ): Promise<void> {
+    return this.enqueue(async () => {
+      const current = await this.read();
+      const index = current.schedules.findIndex(
+        (schedule) => schedule.pendingOccurrence?.runId === runId,
+      );
+      const schedule = current.schedules[index];
+      if (!schedule?.pendingOccurrence) return;
+      const schedules = [...current.schedules];
+      schedules[index] = ritualScheduleSchema.parse({
+        ...schedule,
+        pendingOccurrence: null,
+        lastTriggeredAt: schedule.pendingOccurrence.dueAt,
+        updatedAt: acknowledgedAt,
+      });
+      await this.write({ ...current, schedules });
+    });
+  }
+
+  listInbox(): Promise<readonly RitualInboxItem[]> {
+    return this.enqueue(async () => inboxFromStore(await this.read()));
+  }
+
   find(ritualId: string): Promise<ApprovedRitualRevision | null> {
     return this.enqueue(async () => {
       return (
@@ -105,6 +240,18 @@ export class RitualRepository {
       await this.write({
         ...current,
         rituals: [...current.rituals, ritual],
+        schedules: current.schedules.map((schedule) =>
+          schedule.ritualId === ritual.ritualId &&
+          schedule.ritualRevision !== ritual.ritualRevision &&
+          schedule.state === "ENABLED"
+            ? ritualScheduleSchema.parse({
+                ...schedule,
+                state: "PAUSED",
+                pendingOccurrence: null,
+                updatedAt: ritual.approvedAt,
+              })
+            : schedule,
+        ),
       });
     });
   }
@@ -332,35 +479,46 @@ export class RitualRepository {
       const raw = JSON.parse(await readFile(this.path, "utf8"));
       const current = ritualStoreSchema.safeParse(raw);
       if (current.success) return current.data;
+      const versionFour = ritualStoreV4Schema.safeParse(raw);
+      if (versionFour.success) {
+        return {
+          ...versionFour.data,
+          schemaVersion: 5,
+          schedules: [],
+        };
+      }
       const versionThree = ritualStoreV3Schema.safeParse(raw);
       if (versionThree.success) {
         return {
           ...versionThree.data,
-          schemaVersion: 4,
+          schemaVersion: 5,
           runs: [],
           runReceipts: [],
+          schedules: [],
         };
       }
       const versionTwo = ritualStoreV2Schema.safeParse(raw);
       if (versionTwo.success) {
         return {
-          schemaVersion: 4,
+          schemaVersion: 5,
           rituals: versionTwo.data.rituals,
           receipts: versionTwo.data.receipts,
           learningProposals: [],
           runs: [],
           runReceipts: [],
+          schedules: [],
         };
       }
       const legacy = approvedRitualStoreSchema.safeParse(raw);
       if (!legacy.success) throw new Error("RITUAL_STORE_CORRUPT");
       return {
-        schemaVersion: 4,
+        schemaVersion: 5,
         rituals: legacy.data.rituals,
         receipts: [],
         learningProposals: [],
         runs: [],
         runReceipts: [],
+        schedules: [],
       };
     } catch (error) {
       if (error instanceof Error && error.message === "RITUAL_STORE_CORRUPT") {
@@ -372,12 +530,13 @@ export class RitualRepository {
         error.code === "ENOENT"
       ) {
         return {
-          schemaVersion: 4,
+          schemaVersion: 5,
           rituals: [],
           receipts: [],
           learningProposals: [],
           runs: [],
           runReceipts: [],
+          schedules: [],
         };
       }
       throw new Error("RITUAL_STORE_CORRUPT", { cause: error });
@@ -483,6 +642,39 @@ function isTerminalRun(run: RitualRun): boolean {
   return ["COMPLETED", "NEEDS_REVIEW", "FAILED", "CANCELED"].includes(
     run.status,
   );
+}
+
+function inboxFromStore(store: RitualStore): readonly RitualInboxItem[] {
+  const receipts = new Map(
+    store.runReceipts.map((receipt) => [receipt.runId, receipt] as const),
+  );
+  return store.runs
+    .map((run) => ({
+      run,
+      receipt: receipts.get(run.runId) ?? null,
+      attention: attentionFor(run),
+    }))
+    .sort((left, right) => {
+      const attention =
+        Number(Boolean(right.attention)) - Number(Boolean(left.attention));
+      return attention || right.run.updatedAt.localeCompare(left.run.updatedAt);
+    })
+    .slice(0, 20);
+}
+
+function attentionFor(run: RitualRun): RitualInboxItem["attention"] {
+  switch (run.status) {
+    case "WAITING_FOR_OWNER":
+      return "OWNER_APPROVAL";
+    case "WAITING_FOR_RESOURCE":
+      return "RESOURCE";
+    case "NEEDS_REVIEW":
+      return "REVIEW";
+    case "FAILED":
+      return "FAILURE";
+    default:
+      return null;
+  }
 }
 
 function evictTerminalRunsForNewRun(store: RitualStore): {

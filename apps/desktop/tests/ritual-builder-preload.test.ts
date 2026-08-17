@@ -27,11 +27,14 @@ describe("Ritual Builder preload", () => {
       "approveRunStep",
       "cancelRun",
       "configureExaApiKey",
+      "configureSchedule",
       "createDraftIdentity",
       "draft",
+      "getAutomationState",
       "getExaCredentialStatus",
       "initialize",
       "openExaDashboard",
+      "pauseSchedule",
       "proposeLearning",
       "removeExaApiKey",
       "startRun",
@@ -52,6 +55,9 @@ describe("Ritual Builder preload", () => {
     await bridge.configureExaApiKey!(key);
     await bridge.removeExaApiKey!();
     await bridge.openExaDashboard!();
+    await bridge.getAutomationState!();
+    await bridge.configureSchedule!({ ritualId: "bounded" });
+    await bridge.pauseSchedule!({ ritualId: "bounded" });
     expect(invoke).toHaveBeenNthCalledWith(
       1,
       "village:ritual-builder:initialize",
@@ -114,6 +120,20 @@ describe("Ritual Builder preload", () => {
     expect(invoke).toHaveBeenNthCalledWith(
       14,
       "village:ritual-builder:open-exa-dashboard",
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      15,
+      "village:ritual-builder:get-automation-state",
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      16,
+      "village:ritual-builder:configure-schedule",
+      { ritualId: "bounded" },
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      17,
+      "village:ritual-builder:pause-schedule",
+      { ritualId: "bounded" },
     );
   });
 });
