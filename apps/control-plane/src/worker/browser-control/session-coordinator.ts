@@ -26,6 +26,7 @@ import {
   acceptBrowserCommand,
   transitionBrowserControl,
 } from "./transitions.js";
+import type { CoordinatorEvent } from "./coordinator-event.js";
 import { reconcileBrowserRecovery } from "../jobs/reconciler.js";
 
 const initializeSchema = z.strictObject({
@@ -312,25 +313,28 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
         : { ok: false, code: "ALREADY_INITIALIZED" };
     }
 
-    this.ctx.storage.sql.exec(
-      `INSERT INTO session_metadata
-       (singleton, principal_id, browser_session_id, site, event_sequence,
-        projected_sequence, last_result_sequence)
-       VALUES (1, ?, ?, ?, 1, 0, 0)`,
-      input.principalId,
-      input.browserSessionId,
-      input.site,
-    );
-    this.ctx.storage.sql.exec(
-      "INSERT INTO control_state (singleton, state_json, holder_connection_id) VALUES (1, ?, NULL)",
-      JSON.stringify(input.control),
-    );
-    this.appendEventAt(
+    const event = this.commitTransition(
       1,
       "SESSION_INITIALIZED",
       input.control,
       input.initializedAt,
+      () => {
+        this.ctx.storage.sql.exec(
+          `INSERT INTO session_metadata
+           (singleton, principal_id, browser_session_id, site, event_sequence,
+            projected_sequence, last_result_sequence)
+           VALUES (1, ?, ?, ?, 1, 0, 0)`,
+          input.principalId,
+          input.browserSessionId,
+          input.site,
+        );
+        this.ctx.storage.sql.exec(
+          "INSERT INTO control_state (singleton, state_json, holder_connection_id) VALUES (1, ?, NULL)",
+          JSON.stringify(input.control),
+        );
+      },
     );
+    this.broadcastEvent(event);
     return { ok: true };
   }
 
@@ -380,23 +384,8 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
     ) {
       return { ok: false as const, code: "STALE_JOB_REVISION" };
     }
-    this.ctx.storage.sql.exec(
-      `INSERT INTO workflow_effects
-       (logical_step, effect_id, job_revision, capability, canonical_action_id,
-        phase, receipt_id, checkpoint_id, updated_at)
-       VALUES (?, ?, ?, NULL, NULL, 'ACCEPTED', NULL, NULL, ?)`,
-      input.logicalStep,
-      input.effectId,
-      input.jobRevision,
-      input.initializedAt,
-    );
     const sequence = metadata.event_sequence + 1;
-    this.ctx.storage.sql.exec(
-      "UPDATE session_metadata SET workflow_job_revision = ?, event_sequence = ? WHERE singleton = 1",
-      input.jobRevision,
-      sequence,
-    );
-    this.appendEventAt(
+    const event = this.commitTransition(
       sequence,
       "WORKFLOW_INITIALIZED",
       {
@@ -408,7 +397,25 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
         actionPhase: "ACCEPTED",
       },
       input.initializedAt,
+      () => {
+        this.ctx.storage.sql.exec(
+          `INSERT INTO workflow_effects
+           (logical_step, effect_id, job_revision, capability, canonical_action_id,
+            phase, receipt_id, checkpoint_id, updated_at)
+           VALUES (?, ?, ?, NULL, NULL, 'ACCEPTED', NULL, NULL, ?)`,
+          input.logicalStep,
+          input.effectId,
+          input.jobRevision,
+          input.initializedAt,
+        );
+        this.ctx.storage.sql.exec(
+          "UPDATE session_metadata SET workflow_job_revision = ?, event_sequence = ? WHERE singleton = 1",
+          input.jobRevision,
+          sequence,
+        );
+      },
     );
+    this.broadcastEvent(event);
     return {
       ok: true as const,
       eventSequence: sequence,
@@ -536,16 +543,7 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
       lastAcceptedSequence: claim.commandSequence ?? state.lastAcceptedSequence,
     });
     const sequence = metadata.event_sequence + 1;
-    this.ctx.storage.sql.exec(
-      "UPDATE control_state SET state_json = ?, holder_connection_id = ? WHERE singleton = 1",
-      JSON.stringify(next),
-      claim.connectionId,
-    );
-    this.ctx.storage.sql.exec(
-      "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
-      sequence,
-    );
-    this.appendEventAt(
+    const event = this.commitTransition(
       sequence,
       "AGENT_LEASE_CLAIMED",
       {
@@ -553,7 +551,19 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
         deviceId: claim.deviceId,
       },
       claim.now,
+      () => {
+        this.ctx.storage.sql.exec(
+          "UPDATE control_state SET state_json = ?, holder_connection_id = ? WHERE singleton = 1",
+          JSON.stringify(next),
+          claim.connectionId,
+        );
+        this.ctx.storage.sql.exec(
+          "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
+          sequence,
+        );
+      },
     );
+    this.broadcastEvent(event);
     if (Date.parse(claim.expiresAt) > Date.now()) {
       await this.ctx.storage.setAlarm(Date.parse(claim.expiresAt));
     }
@@ -601,24 +611,13 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
     if (usage >= 120) return { ok: false, code: "COMMAND_QUOTA_EXCEEDED" };
     const duplicateAction = this.ctx.storage.sql
       .exec<{ present: number }>(
-        "SELECT 1 AS present FROM accepted_actions WHERE action_id = ?",
+        `SELECT 1 AS present FROM accepted_actions
+         WHERE action_id = ? OR command_sequence = ?`,
         input.envelope.actionId,
+        input.envelope.sequence,
       )
       .toArray()[0];
     if (duplicateAction) return { ok: false, code: "ACTION_ALREADY_ACCEPTED" };
-
-    let effectReplay = false;
-    let canonicalActionId: string | undefined;
-    if ("workflowKind" in input.envelope) {
-      const binding = this.bindWorkflowEffect(
-        input.envelope,
-        metadata,
-        input.now,
-      );
-      if (!binding.ok) return binding;
-      effectReplay = binding.effectReplay;
-      canonicalActionId = binding.canonicalActionId;
-    }
 
     const mutationClass = mutationClassFor(input.envelope);
     const baseAction = {
@@ -646,57 +645,77 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
           }
         : baseAction;
     const sequence = metadata.event_sequence + 1;
-    try {
+    const eventType =
+      "workflowKind" in input.envelope
+        ? "WORKFLOW_ACTION_ACCEPTED"
+        : "COMMAND_ACCEPTED";
+    const committed = this.ctx.storage.transactionSync(() => {
+      let effectReplay = false;
+      let canonicalActionId: string | undefined;
+      if ("workflowKind" in input.envelope) {
+        const binding = this.bindWorkflowEffect(
+          input.envelope,
+          metadata,
+          input.now,
+        );
+        if (!binding.ok) return binding;
+        effectReplay = binding.effectReplay;
+        canonicalActionId = binding.canonicalActionId;
+      }
       this.ctx.storage.sql.exec(
         "INSERT INTO accepted_actions (action_id, command_sequence, action_json) VALUES (?, ?, ?)",
         action.actionId,
         input.envelope.sequence,
         JSON.stringify(action),
       );
-    } catch {
-      return { ok: false, code: "ACTION_ALREADY_ACCEPTED" };
-    }
-    this.ctx.storage.sql.exec(
-      `INSERT INTO command_quota_windows (window_started_at, accepted_count)
-       VALUES (?, 1)
-       ON CONFLICT(window_started_at) DO UPDATE SET accepted_count = accepted_count + 1`,
-      window,
-    );
-    this.ctx.storage.sql.exec(
-      "UPDATE control_state SET state_json = ? WHERE singleton = 1",
-      JSON.stringify(acceptance.state),
-    );
-    this.ctx.storage.sql.exec(
-      "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
-      sequence,
-    );
-    this.appendEventAt(
-      sequence,
-      "workflowKind" in input.envelope
-        ? "WORKFLOW_ACTION_ACCEPTED"
-        : "COMMAND_ACCEPTED",
-      "workflowKind" in input.envelope
-        ? {
-            action,
-            commandSequence: input.envelope.sequence,
-            effectReplay,
-            canonicalActionId,
-          }
-        : {
-            actionId: action.actionId,
-            capability: input.envelope.command.capability,
-            leaseEpoch: input.envelope.leaseEpoch,
-            commandSequence: input.envelope.sequence,
-          },
-      input.now,
-    );
+      this.ctx.storage.sql.exec(
+        `INSERT INTO command_quota_windows (window_started_at, accepted_count)
+         VALUES (?, 1)
+         ON CONFLICT(window_started_at) DO UPDATE SET accepted_count = accepted_count + 1`,
+        window,
+      );
+      this.ctx.storage.sql.exec(
+        "UPDATE control_state SET state_json = ? WHERE singleton = 1",
+        JSON.stringify(acceptance.state),
+      );
+      this.ctx.storage.sql.exec(
+        "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
+        sequence,
+      );
+      const payload =
+        "workflowKind" in input.envelope
+          ? {
+              action,
+              commandSequence: input.envelope.sequence,
+              effectReplay,
+              canonicalActionId,
+            }
+          : {
+              actionId: action.actionId,
+              capability: input.envelope.command.capability,
+              leaseEpoch: input.envelope.leaseEpoch,
+              commandSequence: input.envelope.sequence,
+            };
+      const event = this.appendEventAt(sequence, eventType, payload, input.now);
+      return {
+        ok: true as const,
+        event,
+        effectReplay,
+        canonicalActionId,
+      };
+    });
+    if (!committed.ok) return committed;
+    this.broadcastEvent(committed.event);
     return {
       ok: true,
       eventSequence: sequence,
       action,
-      ...(canonicalActionId === undefined
+      ...(committed.canonicalActionId === undefined
         ? {}
-        : { effectReplay, canonicalActionId }),
+        : {
+            effectReplay: committed.effectReplay,
+            canonicalActionId: committed.canonicalActionId,
+          }),
     };
   }
 
@@ -809,54 +828,57 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
       return { ok: false as const, code: "LOGICAL_EFFECT_CONFLICT" };
     }
 
-    this.ctx.storage.sql.exec(
-      `INSERT INTO workflow_receipts
-       (receipt_id, effect_id, receipt_json, recorded_at) VALUES (?, ?, ?, ?)`,
-      receipt.receiptId,
-      receipt.effectId,
-      JSON.stringify(receipt),
-      receipt.recordedAt,
-    );
-    this.ctx.storage.sql.exec(
-      `UPDATE workflow_effects
-       SET phase = 'RECEIPTED', receipt_id = ?, checkpoint_id = ?, updated_at = ?
-       WHERE logical_step = ? AND effect_id = ?`,
-      receipt.receiptId,
-      checkpoint.checkpointId,
-      receipt.recordedAt,
-      receipt.logicalStep,
-      receipt.effectId,
-    );
-    this.ctx.storage.sql.exec(
-      "UPDATE accepted_actions SET action_json = ? WHERE action_id = ?",
-      JSON.stringify({
-        ...action,
-        phase: "RECEIPTED",
-        postcondition: "SATISFIED",
-        updatedAt: receipt.recordedAt,
-      }),
-      receipt.actionId,
-    );
-    this.bindCheckpointEffect(canonicalCheckpoint);
-    this.ctx.storage.sql.exec(
-      `INSERT INTO workflow_checkpoint
-       (singleton, checkpoint_json, event_sequence) VALUES (1, ?, ?)
-       ON CONFLICT(singleton) DO UPDATE SET
-         checkpoint_json = excluded.checkpoint_json,
-         event_sequence = excluded.event_sequence`,
-      JSON.stringify(canonicalCheckpoint),
-      canonicalCheckpoint.eventSequence,
-    );
-    this.ctx.storage.sql.exec(
-      "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
-      canonicalCheckpoint.eventSequence,
-    );
-    this.appendEventAt(
+    const event = this.commitTransition(
       canonicalCheckpoint.eventSequence,
       "WORKFLOW_CHECKPOINT_RECEIPTED",
       { receipt, checkpoint: canonicalCheckpoint },
       receipt.recordedAt,
+      () => {
+        this.ctx.storage.sql.exec(
+          `INSERT INTO workflow_receipts
+           (receipt_id, effect_id, receipt_json, recorded_at) VALUES (?, ?, ?, ?)`,
+          receipt.receiptId,
+          receipt.effectId,
+          JSON.stringify(receipt),
+          receipt.recordedAt,
+        );
+        this.ctx.storage.sql.exec(
+          `UPDATE workflow_effects
+           SET phase = 'RECEIPTED', receipt_id = ?, checkpoint_id = ?, updated_at = ?
+           WHERE logical_step = ? AND effect_id = ?`,
+          receipt.receiptId,
+          checkpoint.checkpointId,
+          receipt.recordedAt,
+          receipt.logicalStep,
+          receipt.effectId,
+        );
+        this.ctx.storage.sql.exec(
+          "UPDATE accepted_actions SET action_json = ? WHERE action_id = ?",
+          JSON.stringify({
+            ...action,
+            phase: "RECEIPTED",
+            postcondition: "SATISFIED",
+            updatedAt: receipt.recordedAt,
+          }),
+          receipt.actionId,
+        );
+        this.bindCheckpointEffect(canonicalCheckpoint);
+        this.ctx.storage.sql.exec(
+          `INSERT INTO workflow_checkpoint
+           (singleton, checkpoint_json, event_sequence) VALUES (1, ?, ?)
+           ON CONFLICT(singleton) DO UPDATE SET
+             checkpoint_json = excluded.checkpoint_json,
+             event_sequence = excluded.event_sequence`,
+          JSON.stringify(canonicalCheckpoint),
+          canonicalCheckpoint.eventSequence,
+        );
+        this.ctx.storage.sql.exec(
+          "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
+          canonicalCheckpoint.eventSequence,
+        );
+      },
     );
+    this.broadcastEvent(event);
     return {
       ok: true as const,
       eventSequence: canonicalCheckpoint.eventSequence,
@@ -908,21 +930,24 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
     });
     if (!reconciled.ok) return reconciled;
     const sequence = metadata.event_sequence + 1;
-    this.ctx.storage.sql.exec(
-      "UPDATE control_state SET state_json = ?, holder_connection_id = ? WHERE singleton = 1",
-      JSON.stringify(reconciled.state),
-      input.connectionId,
-    );
-    this.ctx.storage.sql.exec(
-      "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
-      sequence,
-    );
-    this.appendEventAt(
+    const event = this.commitTransition(
       sequence,
       "AGENT_LEASE_RECLAIMED",
       { leaseEpoch: reconciled.state.leaseEpoch },
       input.now,
+      () => {
+        this.ctx.storage.sql.exec(
+          "UPDATE control_state SET state_json = ?, holder_connection_id = ? WHERE singleton = 1",
+          JSON.stringify(reconciled.state),
+          input.connectionId,
+        );
+        this.ctx.storage.sql.exec(
+          "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
+          sequence,
+        );
+      },
     );
+    this.broadcastEvent(event);
     if (Date.parse(input.expiresAt) > Date.now()) {
       await this.ctx.storage.setAlarm(Date.parse(input.expiresAt));
     }
@@ -975,20 +1000,23 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
     });
     if (!quiesced.ok) return quiesced;
     const sequence = metadata.event_sequence + 1;
-    this.ctx.storage.sql.exec(
-      "UPDATE control_state SET state_json = ?, holder_connection_id = NULL WHERE singleton = 1",
-      JSON.stringify(quiesced.state),
-    );
-    this.ctx.storage.sql.exec(
-      "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
-      sequence,
-    );
-    this.appendEventAt(
+    const event = this.commitTransition(
       sequence,
       "OWNER_CONTROL_TAKEN",
       { leaseEpoch: quiesced.state.leaseEpoch },
       input.now,
+      () => {
+        this.ctx.storage.sql.exec(
+          "UPDATE control_state SET state_json = ?, holder_connection_id = NULL WHERE singleton = 1",
+          JSON.stringify(quiesced.state),
+        );
+        this.ctx.storage.sql.exec(
+          "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
+          sequence,
+        );
+      },
     );
+    this.broadcastEvent(event);
     return {
       ok: true as const,
       leaseEpoch: quiesced.state.leaseEpoch,
@@ -1040,34 +1068,8 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
     ) {
       return { ok: false as const, code: "LOGICAL_EFFECT_CONFLICT" };
     }
-    if (!existingStep && !existingEffect) {
-      this.ctx.storage.sql.exec(
-        `INSERT INTO workflow_effects
-         (logical_step, effect_id, job_revision, capability, canonical_action_id,
-          phase, receipt_id, checkpoint_id, updated_at)
-         VALUES (?, ?, ?, NULL, NULL, ?, NULL, NULL, ?)`,
-        input.logicalStep,
-        input.effectId,
-        input.jobRevision,
-        input.actionPhase,
-        input.occurredAt,
-      );
-    } else {
-      this.ctx.storage.sql.exec(
-        `UPDATE workflow_effects SET phase = ?, updated_at = ?
-         WHERE logical_step = ? AND effect_id = ?`,
-        input.actionPhase,
-        input.occurredAt,
-        input.logicalStep,
-        input.effectId,
-      );
-    }
     const sequence = metadata.event_sequence + 1;
-    this.ctx.storage.sql.exec(
-      "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
-      sequence,
-    );
-    this.appendEventAt(
+    const event = this.commitTransition(
       sequence,
       "WORKFLOW_OWNER_PROGRESS_RECORDED",
       {
@@ -1080,7 +1082,36 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
         actor: "OWNER",
       },
       input.occurredAt,
+      () => {
+        if (!existingStep && !existingEffect) {
+          this.ctx.storage.sql.exec(
+            `INSERT INTO workflow_effects
+             (logical_step, effect_id, job_revision, capability, canonical_action_id,
+              phase, receipt_id, checkpoint_id, updated_at)
+             VALUES (?, ?, ?, NULL, NULL, ?, NULL, NULL, ?)`,
+            input.logicalStep,
+            input.effectId,
+            input.jobRevision,
+            input.actionPhase,
+            input.occurredAt,
+          );
+        } else {
+          this.ctx.storage.sql.exec(
+            `UPDATE workflow_effects SET phase = ?, updated_at = ?
+             WHERE logical_step = ? AND effect_id = ?`,
+            input.actionPhase,
+            input.occurredAt,
+            input.logicalStep,
+            input.effectId,
+          );
+        }
+        this.ctx.storage.sql.exec(
+          "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
+          sequence,
+        );
+      },
     );
+    this.broadcastEvent(event);
     return { ok: true as const, eventSequence: sequence, cursor: sequence };
   }
 
@@ -1176,18 +1207,7 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
     }
     const updated = updateActionFromResult(action, input.envelope, input.now);
     const eventSequence = metadata.event_sequence + 1;
-    this.ctx.storage.sql.exec(
-      "UPDATE accepted_actions SET action_json = ? WHERE action_id = ?",
-      JSON.stringify(updated),
-      action.actionId,
-    );
-    this.ctx.storage.sql.exec(
-      `UPDATE session_metadata
-       SET event_sequence = ?, last_result_sequence = ? WHERE singleton = 1`,
-      eventSequence,
-      input.envelope.sequence,
-    );
-    this.appendEventAt(
+    const event = this.commitTransition(
       eventSequence,
       "RESULT_ACCEPTED",
       {
@@ -1197,7 +1217,21 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
         phase: updated.phase,
       },
       input.now,
+      () => {
+        this.ctx.storage.sql.exec(
+          "UPDATE accepted_actions SET action_json = ? WHERE action_id = ?",
+          JSON.stringify(updated),
+          action.actionId,
+        );
+        this.ctx.storage.sql.exec(
+          `UPDATE session_metadata
+           SET event_sequence = ?, last_result_sequence = ? WHERE singleton = 1`,
+          eventSequence,
+          input.envelope.sequence,
+        );
+      },
     );
+    this.broadcastEvent(event);
     return { ok: true as const, eventSequence, action: updated };
   }
 
@@ -1249,20 +1283,23 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
     });
     if (!transitioned.ok) return;
     const sequence = metadata.event_sequence + 1;
-    this.ctx.storage.sql.exec(
-      "UPDATE control_state SET state_json = ?, holder_connection_id = NULL WHERE singleton = 1",
-      JSON.stringify(transitioned.state),
-    );
-    this.ctx.storage.sql.exec(
-      "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
-      sequence,
-    );
-    this.appendEventAt(
+    const event = this.commitTransition(
       sequence,
       "AGENT_LEASE_EXPIRED",
       { leaseEpoch: state.leaseEpoch },
       expiredAt,
+      () => {
+        this.ctx.storage.sql.exec(
+          "UPDATE control_state SET state_json = ?, holder_connection_id = NULL WHERE singleton = 1",
+          JSON.stringify(transitioned.state),
+        );
+        this.ctx.storage.sql.exec(
+          "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
+          sequence,
+        );
+      },
     );
+    this.broadcastEvent(event);
   }
 
   hostDisconnected(
@@ -1287,20 +1324,23 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
     });
     if (!transitioned.ok) return transitioned;
     const sequence = metadata.event_sequence + 1;
-    this.ctx.storage.sql.exec(
-      "UPDATE control_state SET state_json = ?, holder_connection_id = NULL WHERE singleton = 1",
-      JSON.stringify(transitioned.state),
-    );
-    this.ctx.storage.sql.exec(
-      "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
-      sequence,
-    );
-    this.appendEventAt(
+    const event = this.commitTransition(
       sequence,
       "HOST_DISCONNECTED",
       { leaseEpoch: state.leaseEpoch },
       input.now,
+      () => {
+        this.ctx.storage.sql.exec(
+          "UPDATE control_state SET state_json = ?, holder_connection_id = NULL WHERE singleton = 1",
+          JSON.stringify(transitioned.state),
+        );
+        this.ctx.storage.sql.exec(
+          "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
+          sequence,
+        );
+      },
     );
+    this.broadcastEvent(event);
     return { ok: true };
   }
 
@@ -1345,31 +1385,11 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
       actions: retainedActions,
       now: parsed.data.now,
     });
-    for (const reconciled of recovery.actions) {
-      const existing = retainedActions.find(
-        (action) => action.actionId === reconciled.actionId,
-      );
-      if (!existing || existing.phase === reconciled.phase) continue;
-      this.ctx.storage.sql.exec(
-        "UPDATE accepted_actions SET action_json = ? WHERE action_id = ?",
-        JSON.stringify({
-          ...existing,
-          phase: reconciled.phase,
-          updatedAt: parsed.data.now,
-        }),
-        existing.actionId,
-      );
-    }
+    const retainedActionById = new Map(
+      retainedActions.map((action) => [action.actionId, action]),
+    );
     const sequence = metadata.event_sequence + 1;
-    this.ctx.storage.sql.exec(
-      "UPDATE control_state SET state_json = ? WHERE singleton = 1",
-      JSON.stringify(recovery.control),
-    );
-    this.ctx.storage.sql.exec(
-      "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
-      sequence,
-    );
-    this.appendEventAt(
+    const event = this.commitTransition(
       sequence,
       "HOST_RECONNECTED",
       {
@@ -1377,7 +1397,31 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
         continuation: recovery.continuation,
       },
       parsed.data.now,
+      () => {
+        for (const reconciled of recovery.actions) {
+          const existing = retainedActionById.get(reconciled.actionId);
+          if (!existing || existing.phase === reconciled.phase) continue;
+          this.ctx.storage.sql.exec(
+            "UPDATE accepted_actions SET action_json = ? WHERE action_id = ?",
+            JSON.stringify({
+              ...existing,
+              phase: reconciled.phase,
+              updatedAt: parsed.data.now,
+            }),
+            existing.actionId,
+          );
+        }
+        this.ctx.storage.sql.exec(
+          "UPDATE control_state SET state_json = ? WHERE singleton = 1",
+          JSON.stringify(recovery.control),
+        );
+        this.ctx.storage.sql.exec(
+          "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
+          sequence,
+        );
+      },
     );
+    this.broadcastEvent(event);
     return { ok: true };
   }
 
@@ -1454,35 +1498,10 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
     });
     if (!transitioned.ok) return transitioned;
     const sequence = metadata.event_sequence + 1;
-    this.ctx.storage.sql.exec(
-      "UPDATE control_state SET state_json = ?, holder_connection_id = NULL WHERE singleton = 1",
-      JSON.stringify(transitioned.state),
-    );
     const resultingRevision = modern.success
       ? modern.data.expectedJobRevision + 1
       : metadata.workflow_job_revision;
-    this.ctx.storage.sql.exec(
-      `UPDATE session_metadata
-       SET event_sequence = ?, workflow_job_revision = COALESCE(?, workflow_job_revision)
-       WHERE singleton = 1`,
-      sequence,
-      resultingRevision,
-    );
-    if (modern.success) {
-      this.ctx.storage.sql.exec(
-        `INSERT INTO workflow_cancellations
-         (cancellation_id, job_id, expected_job_revision,
-          resulting_job_revision, event_sequence, accepted_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        modern.data.cancellationId,
-        modern.data.jobId,
-        modern.data.expectedJobRevision,
-        resultingRevision,
-        sequence,
-        modern.data.now,
-      );
-    }
-    this.appendEventAt(
+    const event = this.commitTransition(
       sequence,
       "AUTOMATION_CANCELED",
       modern.success
@@ -1495,7 +1514,35 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
           }
         : { leaseEpoch: transitioned.state.leaseEpoch },
       timestamp,
+      () => {
+        this.ctx.storage.sql.exec(
+          "UPDATE control_state SET state_json = ?, holder_connection_id = NULL WHERE singleton = 1",
+          JSON.stringify(transitioned.state),
+        );
+        this.ctx.storage.sql.exec(
+          `UPDATE session_metadata
+           SET event_sequence = ?, workflow_job_revision = COALESCE(?, workflow_job_revision)
+           WHERE singleton = 1`,
+          sequence,
+          resultingRevision,
+        );
+        if (modern.success) {
+          this.ctx.storage.sql.exec(
+            `INSERT INTO workflow_cancellations
+             (cancellation_id, job_id, expected_job_revision,
+              resulting_job_revision, event_sequence, accepted_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            modern.data.cancellationId,
+            modern.data.jobId,
+            modern.data.expectedJobRevision,
+            resultingRevision,
+            sequence,
+            modern.data.now,
+          );
+        }
+      },
     );
+    this.broadcastEvent(event);
     return modern.success
       ? {
           ok: true,
@@ -1558,15 +1605,7 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
         parsedLimit.data,
       )
       .toArray()
-      .map(
-        (row) =>
-          JSON.parse(row.payload_json) as {
-            sequence: number;
-            type: string;
-            payload: unknown;
-            occurredAt: string;
-          },
-      );
+      .map((row) => JSON.parse(row.payload_json) as CoordinatorEvent);
     return { ok: true as const, events };
   }
 
@@ -1599,15 +1638,17 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
     if (acknowledgable !== through.data - metadata.projected_sequence) {
       return { ok: false as const, code: "PROJECTION_SEQUENCE_GAP" };
     }
-    this.ctx.storage.sql.exec(
-      "UPDATE projection_outbox SET projected_at = ? WHERE sequence <= ?",
-      timestamp.data,
-      through.data,
-    );
-    this.ctx.storage.sql.exec(
-      "UPDATE session_metadata SET projected_sequence = MAX(projected_sequence, ?) WHERE singleton = 1",
-      through.data,
-    );
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec(
+        "UPDATE projection_outbox SET projected_at = ? WHERE sequence <= ?",
+        timestamp.data,
+        through.data,
+      );
+      this.ctx.storage.sql.exec(
+        "UPDATE session_metadata SET projected_sequence = MAX(projected_sequence, ?) WHERE singleton = 1",
+        through.data,
+      );
+    });
     return { ok: true as const };
   }
 
@@ -1846,7 +1887,7 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
     type: string,
     payload: unknown,
     occurredAt: string,
-  ): void {
+  ): CoordinatorEvent {
     const event = { sequence, type, payload, occurredAt };
     this.ctx.storage.sql.exec(
       "INSERT INTO coordinator_events (sequence, type, payload_json, occurred_at) VALUES (?, ?, ?, ?)",
@@ -1860,6 +1901,23 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
       sequence,
       JSON.stringify(event),
     );
+    return event;
+  }
+
+  private commitTransition(
+    sequence: number,
+    type: string,
+    payload: unknown,
+    occurredAt: string,
+    mutation: () => void,
+  ): CoordinatorEvent {
+    return this.ctx.storage.transactionSync(() => {
+      mutation();
+      return this.appendEventAt(sequence, type, payload, occurredAt);
+    });
+  }
+
+  private broadcastEvent(event: CoordinatorEvent): void {
     const message = JSON.stringify({ type: "EVENT", event });
     for (const webSocket of this.ctx.getWebSockets()) {
       try {

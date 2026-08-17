@@ -8,13 +8,7 @@ import {
 } from "@village/contracts";
 import { z } from "zod";
 import type { Environment } from "../../env.js";
-
-type CoordinatorEvent = {
-  sequence: number;
-  type: string;
-  payload: unknown;
-  occurredAt: string;
-};
+import type { CoordinatorEvent } from "./coordinator-event.js";
 
 export async function getObserverWorkflowProjection(
   environment: Environment,
