@@ -32,6 +32,15 @@ const continuityPackageConfig = parse(
     "utf8",
   ),
 );
+const credentialPackageConfig = parse(
+  await readFile(
+    new URL(
+      "../apps/desktop/electron-builder.credential-e2e.yml",
+      import.meta.url,
+    ),
+    "utf8",
+  ),
+);
 
 test("the packaged desktop command builds its complete workspace graph", () => {
   assert.match(
@@ -49,6 +58,10 @@ test("CI delegates packaged dependency preparation to the package command", () =
   assert.match(
     ciWorkflow,
     /pnpm --filter @village\/desktop package:mac:continuity-e2e/,
+  );
+  assert.match(
+    ciWorkflow,
+    /pnpm --filter @village\/desktop package:mac:credential-e2e/,
   );
 });
 
@@ -93,5 +106,34 @@ test("the continuity smoke package uses only its isolated proof entry", () => {
     "!dist/continuity-e2e/**",
   ]) {
     assert.ok(continuityPackageConfig.files.includes(excludedOutput));
+  }
+});
+
+test("the fixture secret smoke package uses its isolated proof entry and verifier", () => {
+  assert.match(
+    desktopPackage.scripts["package:mac:credential-e2e"],
+    /electron-builder --dir --config electron-builder\.credential-e2e\.yml --mac/,
+  );
+  assert.match(
+    desktopPackage.scripts["package:mac:credential-e2e"],
+    /verify-fixture-secret-broker\.mjs/,
+  );
+  assert.equal(
+    credentialPackageConfig.extraMetadata.main,
+    "dist/main/internal-credential-proof-entry.js",
+  );
+  assert.notEqual(
+    credentialPackageConfig.extraMetadata.main,
+    "dist/main/production-entry.js",
+  );
+  for (const excludedOutput of [
+    "!dist/mac*/**",
+    "!dist/steward-default/**",
+    "!dist/ritual-e2e/**",
+    "!dist/e2e/**",
+    "!dist/continuity-e2e/**",
+    "!dist/credential-e2e/**",
+  ]) {
+    assert.ok(credentialPackageConfig.files.includes(excludedOutput));
   }
 });

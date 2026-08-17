@@ -7,6 +7,8 @@ const protectedRoots = [
   "apps/desktop/src/secrets",
   "apps/desktop/src/research",
   "apps/desktop/src/browser/redaction-policy.ts",
+  "apps/desktop/src/browser/owned-fixture-credential-destination.ts",
+  "apps/desktop/src/main/owned-fixture-credential-fill.ts",
 ];
 const forbidden = [
   ["clipboard API", /\bclipboard\b/i],
