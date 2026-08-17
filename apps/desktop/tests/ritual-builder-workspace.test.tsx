@@ -543,6 +543,63 @@ describe("RitualBuilderWorkspace", () => {
     expect(screen.getByText(/orchestration only/u)).toBeTruthy();
   });
 
+  it("turns a completed Run review into an explicitly approved revision", async () => {
+    const activeBridge = bridge();
+    const runProposal = {
+      ...learningProposal,
+      proposalId: "rlp_01J00000000000000000000001",
+      receiptId: runReceipt.receiptId,
+      ownerFeedback: "Keep the evidence but make the next result more concise.",
+    };
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved,
+      receipt: null,
+      run: completedRun,
+      runReceipt,
+    });
+    activeBridge.proposeLearning.mockResolvedValueOnce(runProposal);
+    activeBridge.approveLearning.mockResolvedValueOnce({
+      ...approved,
+      ritualRevision: 2,
+      learningProposalId: runProposal.proposalId,
+      basedOnReceiptId: runReceipt.receiptId,
+      purpose: runProposal.proposedDefinition.purpose,
+      completion: runProposal.proposedDefinition.completion,
+    });
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+    await screen.findByText("Run Receipt");
+
+    fireEvent.click(screen.getByRole("button", { name: "Give feedback" }));
+    fireEvent.change(
+      screen.getByLabelText("What should the Steward keep or change?"),
+      { target: { value: runProposal.ownerFeedback } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Propose an improvement" }),
+    );
+
+    await screen.findByText("Review revision 2");
+    expect(
+      screen.getAllByText("Steward · Owner approval required"),
+    ).toHaveLength(2);
+    expect(activeBridge.proposeLearning).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      receiptId: runReceipt.receiptId,
+      feedback: runProposal.ownerFeedback,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Approve revision 2" }));
+    await screen.findByText("Approved · Revision 2");
+    expect(activeBridge.approveLearning).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proposalId: runProposal.proposalId,
+        expectedFromRevision: approved.ritualRevision,
+      }),
+    );
+  });
+
   it("restores an Exa wait, retries the exact Run, and shows bounded sources", async () => {
     const activeBridge = bridge();
     activeBridge.initialize.mockResolvedValueOnce({

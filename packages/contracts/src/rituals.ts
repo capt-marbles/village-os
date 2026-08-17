@@ -461,13 +461,31 @@ export const ritualLearningFeedbackRequestSchema = z.strictObject({
   feedback: z.string().trim().min(8).max(1_000),
 });
 
-export const ritualLearningContextSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  proposalId: ritualLearningProposalIdSchema,
-  ritual: approvedRitualRevisionSchema,
-  receipt: ritualTestReceiptSchema,
-  ownerFeedback: ritualLearningFeedbackRequestSchema.shape.feedback,
-});
+export const ritualLearningReceiptSchema = z.discriminatedUnion("mode", [
+  ritualTestReceiptSchema,
+  ritualRunReceiptSchema,
+]);
+
+export const ritualLearningContextSchema = z
+  .strictObject({
+    schemaVersion: z.literal(1),
+    proposalId: ritualLearningProposalIdSchema,
+    ritual: approvedRitualRevisionSchema,
+    receipt: ritualLearningReceiptSchema,
+    ownerFeedback: ritualLearningFeedbackRequestSchema.shape.feedback,
+  })
+  .superRefine((context, refinement) => {
+    if (
+      context.receipt.ritualId !== context.ritual.ritualId ||
+      context.receipt.ritualRevision !== context.ritual.ritualRevision
+    ) {
+      refinement.addIssue({
+        code: "custom",
+        path: ["receipt"],
+        message: "Learning evidence must match the exact Ritual revision",
+      });
+    }
+  });
 
 export const ritualLearningProposalContentSchema = z.strictObject({
   stewardMessage: sentenceSchema,
@@ -773,6 +791,7 @@ export type RitualStore = z.infer<typeof ritualStoreSchema>;
 export type RitualLearningFeedbackRequest = z.infer<
   typeof ritualLearningFeedbackRequestSchema
 >;
+export type RitualLearningReceipt = z.infer<typeof ritualLearningReceiptSchema>;
 export type RitualLearningContext = z.infer<typeof ritualLearningContextSchema>;
 export type RitualLearningProposal = z.infer<
   typeof ritualLearningProposalSchema
@@ -1345,8 +1364,9 @@ export function validateRitualLearningResult(
   }
   if (
     result.data.status === "proposal" &&
-    (result.data.proposedDefinition.permissions.some(
-      (permission) => !context.ritual.permissions.includes(permission),
+    (!isLearningAuthorityNoBroader(
+      context.ritual,
+      result.data.proposedDefinition,
     ) ||
       !isResearchNoBroader(
         context.ritual.research,
@@ -1356,6 +1376,37 @@ export function validateRitualLearningResult(
     return learningWaiting(context, "MALFORMED_PROVIDER_OUTPUT");
   }
   return result.data;
+}
+
+function isLearningAuthorityNoBroader(
+  current: ApprovedRitualRevision,
+  proposed: RitualLearningProposal["proposedDefinition"],
+): boolean {
+  if (
+    proposed.trigger.kind !== current.trigger.kind ||
+    proposed.permissions.some(
+      (permission) => !current.permissions.includes(permission),
+    ) ||
+    (current.reviewPolicy.ownerReview === "EVERY_RUN" &&
+      proposed.reviewPolicy.ownerReview === "EXCEPTIONS_ONLY") ||
+    (current.reviewPolicy.learning === "OFF" &&
+      proposed.reviewPolicy.learning === "PROPOSE_ONLY")
+  ) {
+    return false;
+  }
+
+  const currentSteps = new Map(
+    current.steps.map((step) => [step.stepKey, step] as const),
+  );
+  return proposed.steps.every((step) => {
+    const currentStep = currentSteps.get(step.stepKey);
+    return Boolean(
+      currentStep &&
+      step.actor.kind === currentStep.actor.kind &&
+      step.actor.role === currentStep.actor.role &&
+      !(currentStep.approval === "OWNER_REQUIRED" && step.approval === "NONE"),
+    );
+  });
 }
 
 function isResearchNoBroader(

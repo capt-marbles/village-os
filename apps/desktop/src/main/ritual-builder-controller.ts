@@ -26,6 +26,7 @@ import {
   type RitualTestReceipt,
   type RitualTestRunControllerResult,
   type RitualLearningProposal,
+  type RitualLearningReceipt,
   type RitualLearningResult,
   type RitualRun,
   type RitualRunRequest,
@@ -51,7 +52,7 @@ export interface RitualPersistence {
     runReceipt: RitualRunReceipt | null;
   }>;
   find(ritualId: string): Promise<ApprovedRitualRevision | null>;
-  findReceipt(receiptId: string): Promise<RitualTestReceipt | null>;
+  findReceipt(receiptId: string): Promise<RitualLearningReceipt | null>;
   findLearningProposal(
     proposalId: string,
   ): Promise<RitualLearningProposal | null>;

@@ -312,6 +312,95 @@ describe("Ritual Builder state", () => {
       run: { status: "NEEDS_REVIEW" },
       runReceipt: { mode: "RUN", externalEffects: [] },
     });
+
+    state = reduceRitualBuilder(state, { type: "START_FEEDBACK" });
+    expect(state).toMatchObject({
+      phase: "GIVE_FEEDBACK",
+      source: {
+        kind: "RUN",
+        receipt: { mode: "RUN", receiptId: runReceipt.receiptId },
+        run: { runId: run.runId },
+      },
+    });
+    state = reduceRitualBuilder(state, {
+      type: "SUBMIT_FEEDBACK",
+      feedback: "Keep the evidence but make the next result more concise.",
+    });
+    expect(state).toMatchObject({
+      phase: "SHAPING_LEARNING",
+      source: {
+        kind: "RUN",
+        receipt: { mode: "RUN", receiptId: runReceipt.receiptId },
+      },
+    });
+    if (state.phase !== "SHAPING_LEARNING") {
+      throw new Error("expected Run-backed learning phase");
+    }
+    const runProposal = {
+      status: "proposal" as const,
+      proposalId: "rlp_01J00000000000000000000001",
+      ritualId,
+      fromRevision: 1,
+      receiptId: runReceipt.receiptId,
+      ownerFeedback: state.pendingFeedback,
+      stewardMessage: "I propose a more concise result.",
+      rationale: "The completed Run and owner feedback support this change.",
+      proposedDefinition: {
+        name: approved.name,
+        purpose: approved.purpose,
+        trigger: approved.trigger,
+        steps: approved.steps,
+        permissions: approved.permissions,
+        completion: "A concise reviewable result is ready.",
+        reviewPolicy: approved.reviewPolicy,
+      },
+    };
+    state = reduceRitualBuilder(state, {
+      type: "LEARNING_PROPOSED",
+      proposal: runProposal,
+    });
+    expect(state).toMatchObject({
+      phase: "REVIEW_LEARNING",
+      source: {
+        kind: "RUN",
+        receipt: { mode: "RUN", receiptId: runReceipt.receiptId },
+      },
+    });
+    if (state.phase !== "REVIEW_LEARNING") {
+      throw new Error("expected Run-backed learning review");
+    }
+    const learningReview = state;
+    if (learningReview.source.kind !== "RUN") {
+      throw new Error("expected Run-backed learning source");
+    }
+    const rejected = reduceRitualBuilder(state, { type: "REJECT_LEARNING" });
+    expect(rejected.phase).toBe("REVIEW_RUN");
+    if (rejected.phase !== "REVIEW_RUN") {
+      throw new Error("expected exact Run review after rejection");
+    }
+    expect(rejected.run).toBe(learningReview.source.run);
+    expect(rejected.runReceipt).toBe(learningReview.source.receipt);
+    expect(rejected.run).toStrictEqual(run);
+    expect(rejected.runReceipt).toStrictEqual(runReceipt);
+    state = learningReview;
+    state = reduceRitualBuilder(state, {
+      type: "APPROVE_LEARNING",
+      occurredAt: "2026-08-16T12:05:00.000Z",
+    });
+    expect(state).toMatchObject({
+      phase: "SAVING_LEARNING",
+      pendingRevision: {
+        ritualRevision: 2,
+        learningProposalId: runProposal.proposalId,
+        basedOnReceiptId: runReceipt.receiptId,
+      },
+    });
+    state = reduceRitualBuilder(state, { type: "LEARNING_SAVED" });
+    expect(state).toMatchObject({
+      phase: "APPROVED",
+      approved: { ritualRevision: 2 },
+      receipt: null,
+    });
   });
 
   it("restores the exact resource wait when a research retry command fails", () => {
@@ -662,7 +751,7 @@ describe("Ritual Builder state", () => {
       proposalId: "rlp_01J00000000000000000000000",
       ritualId,
       fromRevision: 1,
-      receiptId: state.receipt.receiptId,
+      receiptId: state.source.receipt.receiptId,
       ownerFeedback: state.pendingFeedback,
       stewardMessage: "I propose a shorter expected result.",
       rationale: "The owner asked for a more concise review.",

@@ -92,13 +92,37 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
               ? { research: context.ritual.research }
               : {}),
           },
-          testReceipt: {
-            outcome: context.receipt.outcome,
-            summary: context.receipt.summary,
-            evidence: context.receipt.evidence,
-            uncertainties: context.receipt.uncertainties,
-            externalEffects: context.receipt.externalEffects,
-          },
+          ...(context.receipt.mode === "TEST"
+            ? {
+                testReceipt: {
+                  outcome: context.receipt.outcome,
+                  summary: context.receipt.summary,
+                  evidence: context.receipt.evidence,
+                  uncertainties: context.receipt.uncertainties,
+                  externalEffects: context.receipt.externalEffects,
+                },
+              }
+            : {
+                runReceipt: {
+                  outcome: context.receipt.outcome,
+                  summary: context.receipt.summary,
+                  stepEvidence: context.receipt.stepEvidence.map((step) => ({
+                    stepKey: step.stepKey,
+                    title: step.title,
+                    actor: step.actor,
+                    ...(step.research
+                      ? {
+                          research: {
+                            provider: step.research.provider,
+                            sourceCount: step.research.sources.length,
+                          },
+                        }
+                      : {}),
+                  })),
+                  uncertainties: context.receipt.uncertainties,
+                  externalEffects: context.receipt.externalEffects,
+                },
+              }),
           ownerFeedback: context.ownerFeedback,
           constraints: {
             mode: "PROPOSE_ONLY",
@@ -333,7 +357,7 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
       experimentalRawEvents: false,
       environments: [],
       baseInstructions:
-        "You are the Village Steward proposing one governed improvement to an approved Ritual. Use only the current Ritual, its bounded Test Receipt, and explicit owner feedback. Call village_ritual_learning_proposal exactly once. Return a complete proposed definition and concise rationale. Do not execute, browse, add credentials or URLs, broaden permissions beyond the feedback, or silently apply the change.",
+        "You are the Village Steward proposing one governed improvement to an approved Ritual. Use only the current Ritual, its bounded Test or Run Receipt, and explicit owner feedback. Call village_ritual_learning_proposal exactly once. Return a complete proposed definition and concise rationale. Do not execute, browse, add credentials or URLs, broaden permissions beyond the feedback, or silently apply the change.",
       dynamicTools: [
         {
           type: "function",

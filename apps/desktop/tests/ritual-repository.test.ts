@@ -1,4 +1,11 @@
-import { chmod, lstat, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -145,6 +152,41 @@ const largeResearchEvidence = {
   })),
 };
 
+async function persistLargeTerminalRun(
+  repository: RitualRepository,
+  persistedRunId: `rrn_${string}`,
+  persistedReceiptId: `rcp_${string}`,
+) {
+  let run = runFor(persistedRunId);
+  await repository.saveRun(run);
+  run = reduceRitualRun(run, approved, {
+    type: "START",
+    occurredAt: "2026-08-16T12:00:01.000Z",
+  });
+  await repository.saveRun(run);
+  run = reduceRitualRun(run, approved, {
+    type: "APPROVE_STEP",
+    stepKey: approved.steps[0]!.stepKey,
+    occurredAt: "2026-08-16T12:00:02.000Z",
+  });
+  await repository.saveRun(run);
+  run = reduceRitualRun(run, approved, {
+    type: "COMPLETE_STEP",
+    stepKey: approved.steps[0]!.stepKey,
+    research: largeResearchEvidence,
+    occurredAt: "2026-08-16T12:00:03.000Z",
+  });
+  await repository.saveRun(run);
+  const terminal = reduceRitualRun(run, approved, {
+    type: "COMPLETE_RUN",
+    outcome: "NEEDS_REVIEW",
+    occurredAt: "2026-08-16T12:00:04.000Z",
+  });
+  const terminalReceipt = runReceiptFor(terminal, persistedReceiptId);
+  await repository.completeRun(terminal, terminalReceipt);
+  return { run: terminal, receipt: terminalReceipt };
+}
+
 describe("RitualRepository", () => {
   it("atomically saves and restores an approved Ritual with private permissions", async () => {
     const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
@@ -279,6 +321,105 @@ describe("RitualRepository", () => {
       run: null,
       runReceipt: null,
     });
+  });
+
+  it("preserves Run Receipt lineage through an approved learning revision", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
+    try {
+      const repository = new RitualRepository(join(directory, "rituals.json"));
+      let terminalRun = runFor("rrn_01J00000000000000000000009");
+      await repository.save(approved);
+      await repository.saveRun(terminalRun);
+      terminalRun = reduceRitualRun(terminalRun, approved, {
+        type: "START",
+        occurredAt: "2026-08-16T12:00:01.000Z",
+      });
+      await repository.saveRun(terminalRun);
+      terminalRun = reduceRitualRun(terminalRun, approved, {
+        type: "APPROVE_STEP",
+        stepKey: approved.steps[0]!.stepKey,
+        occurredAt: "2026-08-16T12:00:02.000Z",
+      });
+      await repository.saveRun(terminalRun);
+      terminalRun = reduceRitualRun(terminalRun, approved, {
+        type: "COMPLETE_STEP",
+        stepKey: approved.steps[0]!.stepKey,
+        occurredAt: "2026-08-16T12:00:03.000Z",
+      });
+      await repository.saveRun(terminalRun);
+      terminalRun = reduceRitualRun(terminalRun, approved, {
+        type: "COMPLETE_RUN",
+        outcome: "NEEDS_REVIEW",
+        occurredAt: "2026-08-16T12:00:04.000Z",
+      });
+      const runReceipt = runReceiptFor(
+        terminalRun,
+        "rcp_01J00000000000000000000009",
+      );
+      const proposal = {
+        ...learningProposal,
+        proposalId: "rlp_01J00000000000000000000009",
+        receiptId: runReceipt.receiptId,
+      };
+
+      await repository.completeRun(terminalRun, runReceipt);
+
+      await expect(
+        repository.findReceipt(runReceipt.receiptId),
+      ).resolves.toEqual(runReceipt);
+      await expect(
+        repository.saveReceipt({ ...receipt, receiptId: runReceipt.receiptId }),
+      ).rejects.toThrow("RITUAL_RECEIPT_CONFLICT");
+      await repository.saveLearningProposal(proposal);
+      const revision = approveRitualLearningProposal(approved, proposal, {
+        schemaVersion: 1,
+        proposalId: proposal.proposalId,
+        ritualId: approved.ritualId,
+        expectedFromRevision: approved.ritualRevision,
+        approvedAt: "2026-08-16T12:05:00.000Z",
+      });
+      await repository.save(revision);
+
+      expect(await repository.find(approved.ritualId)).toMatchObject({
+        ritualRevision: 2,
+        learningProposalId: proposal.proposalId,
+        basedOnReceiptId: runReceipt.receiptId,
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when a learned revision's exact Receipt lineage is missing", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
+    try {
+      const path = join(directory, "rituals.json");
+      const repository = new RitualRepository(path);
+      await repository.save(approved);
+      await repository.saveReceipt(receipt);
+      await repository.saveLearningProposal(learningProposal);
+      const revision = approveRitualLearningProposal(
+        approved,
+        learningProposal,
+        {
+          schemaVersion: 1,
+          proposalId: learningProposal.proposalId,
+          ritualId: approved.ritualId,
+          expectedFromRevision: approved.ritualRevision,
+          approvedAt: "2026-08-16T12:05:00.000Z",
+        },
+      );
+      const stored = JSON.parse(await readFile(path, "utf8"));
+      stored.receipts = [];
+      await writeFile(path, JSON.stringify(stored), { mode: 0o600 });
+
+      await expect(repository.save(revision)).rejects.toThrow(
+        "STALE_RITUAL_LEARNING_REVISION",
+      );
+      await expect(repository.list()).resolves.toEqual([approved]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("preserves earlier Rituals and restores the most recently approved one", async () => {
@@ -445,6 +586,129 @@ describe("RitualRepository", () => {
       stored.runs.some((run: { runId: string }) => run.runId === next.runId),
     ).toBe(true);
   });
+
+  it("does not count-evict a Run Receipt cited by a learning proposal", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
+    try {
+      const path = join(directory, "rituals.json");
+      const terminalRuns = Array.from({ length: 100 }, (_, index) =>
+        terminalRunFor(runId(index)),
+      );
+      const terminalReceipts = terminalRuns.map((run, index) =>
+        runReceiptFor(run, receiptId(index)),
+      );
+      const proposal = {
+        ...learningProposal,
+        receiptId: terminalReceipts[0]!.receiptId,
+      };
+      await writeFile(
+        path,
+        JSON.stringify({
+          schemaVersion: 5,
+          rituals: [approved],
+          receipts: [],
+          learningProposals: [proposal],
+          runs: terminalRuns,
+          runReceipts: terminalReceipts,
+          schedules: [],
+        }),
+        { mode: 0o600 },
+      );
+
+      await new RitualRepository(path).saveRun(runFor(runId(100)));
+
+      const reopened = new RitualRepository(path);
+      await expect(
+        reopened.findReceipt(terminalReceipts[0]!.receiptId),
+      ).resolves.toEqual(terminalReceipts[0]);
+      const stored = JSON.parse(await readFile(path, "utf8")) as {
+        runs: { runId: string }[];
+        runReceipts: { runId: string }[];
+      };
+      expect(stored.runs.some((run) => run.runId === runId(0))).toBe(true);
+      expect(stored.runs.some((run) => run.runId === runId(1))).toBe(false);
+      expect(stored.runReceipts.some((entry) => entry.runId === runId(0))).toBe(
+        true,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("retains Run learning lineage through byte pressure, approval, and restart", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
+    try {
+      const path = join(directory, "rituals.json");
+      const repository = new RitualRepository(path);
+      await repository.save(approved);
+      const { receipt: learnedReceipt } = await persistLargeTerminalRun(
+        repository,
+        runId(0),
+        receiptId(0),
+      );
+      const proposal = {
+        ...learningProposal,
+        receiptId: learnedReceipt.receiptId,
+      };
+      await repository.saveLearningProposal(proposal);
+
+      for (let index = 1; index < 40; index += 1) {
+        await persistLargeTerminalRun(
+          repository,
+          runId(index),
+          receiptId(index),
+        );
+      }
+
+      let reopened = new RitualRepository(path);
+      await expect(
+        reopened.findReceipt(learnedReceipt.receiptId),
+      ).resolves.toEqual(learnedReceipt);
+      await expect(
+        reopened.findLearningProposal(proposal.proposalId),
+      ).resolves.toEqual(proposal);
+      const beforeApproval = JSON.parse(await readFile(path, "utf8")) as {
+        runs: { runId: string }[];
+      };
+      expect(beforeApproval.runs.length).toBeLessThan(40);
+      const unprotectedRunId = beforeApproval.runs.find(
+        (run) => run.runId !== runId(0),
+      )!.runId;
+
+      const revision = approveRitualLearningProposal(approved, proposal, {
+        schemaVersion: 1,
+        proposalId: proposal.proposalId,
+        ritualId: approved.ritualId,
+        expectedFromRevision: approved.ritualRevision,
+        approvedAt: "2026-08-16T15:00:00.000Z",
+      });
+      await reopened.save(revision);
+      for (let index = 40; index < 50; index += 1) {
+        await persistLargeTerminalRun(reopened, runId(index), receiptId(index));
+      }
+
+      reopened = new RitualRepository(path);
+      await expect(
+        reopened.findReceipt(learnedReceipt.receiptId),
+      ).resolves.toEqual(learnedReceipt);
+      await expect(reopened.find(approved.ritualId)).resolves.toMatchObject({
+        ritualRevision: 2,
+        learningProposalId: proposal.proposalId,
+        basedOnReceiptId: learnedReceipt.receiptId,
+      });
+      const afterApproval = JSON.parse(await readFile(path, "utf8")) as {
+        runs: { runId: string }[];
+      };
+      expect(
+        afterApproval.runs.some((run) => run.runId === unprotectedRunId),
+      ).toBe(false);
+      expect((await readFile(path)).byteLength).toBeLessThanOrEqual(
+        768 * 1_024,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }, 20_000);
 
   it("retains terminal history below the store read byte ceiling", async () => {
     const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
@@ -674,6 +938,61 @@ describe("RitualRepository", () => {
         ritualId: "rtl_01J00000000000000000000001",
       }),
     ).rejects.toThrow();
+  });
+
+  it("rejects a Run Receipt id already used by a Test Receipt without changing the Run", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
+    try {
+      const path = join(directory, "rituals.json");
+      const repository = new RitualRepository(path);
+      await repository.save(approved);
+      await repository.saveReceipt(receipt);
+      let active = runFor("rrn_01J00000000000000000000033");
+      await repository.saveRun(active);
+      active = reduceRitualRun(active, approved, {
+        type: "START",
+        occurredAt: "2026-08-16T12:00:01.000Z",
+      });
+      await repository.saveRun(active);
+      active = reduceRitualRun(active, approved, {
+        type: "APPROVE_STEP",
+        stepKey: approved.steps[0]!.stepKey,
+        occurredAt: "2026-08-16T12:00:02.000Z",
+      });
+      await repository.saveRun(active);
+      active = reduceRitualRun(active, approved, {
+        type: "COMPLETE_STEP",
+        stepKey: approved.steps[0]!.stepKey,
+        occurredAt: "2026-08-16T12:00:03.000Z",
+      });
+      await repository.saveRun(active);
+      const terminal = reduceRitualRun(active, approved, {
+        type: "COMPLETE_RUN",
+        outcome: "NEEDS_REVIEW",
+        occurredAt: "2026-08-16T12:00:04.000Z",
+      });
+
+      await expect(
+        repository.completeRun(
+          terminal,
+          runReceiptFor(terminal, receipt.receiptId),
+        ),
+      ).rejects.toThrow("RITUAL_RECEIPT_CONFLICT");
+
+      const reopened = new RitualRepository(path);
+      await expect(
+        reopened.findRunWithApprovedRevision(active.runId),
+      ).resolves.toMatchObject({ run: active, approved });
+      await expect(reopened.latestSnapshot()).resolves.toMatchObject({
+        run: active,
+        runReceipt: null,
+      });
+      await expect(reopened.findReceipt(receipt.receiptId)).resolves.toEqual(
+        receipt,
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("keeps the prior active Run when the atomic completion write rejects", async () => {

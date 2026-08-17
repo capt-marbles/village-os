@@ -894,4 +894,222 @@ describe("Ritual contracts", () => {
       }),
     ).toThrow("STALE_RITUAL_LEARNING_PROPOSAL");
   });
+
+  it("learns from an exact Run Receipt without widening its authority", () => {
+    const approved = approveRitualDraft(draft, {
+      schemaVersion: 1,
+      draftId: draft.draftId,
+      expectedRevision: draft.revision,
+      ritualId: "rtl_01J00000000000000000000000",
+      approvedAt: "2026-08-16T12:00:00.000Z",
+    });
+    let run = createRitualRun({
+      approved,
+      request: {
+        schemaVersion: 1,
+        ritualId: approved.ritualId,
+        ritualRevision: approved.ritualRevision,
+      },
+      runId: "rrn_01J00000000000000000000009",
+      createdAt: "2026-08-16T12:01:00.000Z",
+    });
+    run = reduceRitualRun(run, approved, {
+      type: "START",
+      occurredAt: "2026-08-16T12:01:01.000Z",
+    });
+    for (const step of approved.steps) {
+      if (step.approval === "OWNER_REQUIRED") {
+        run = reduceRitualRun(run, approved, {
+          type: "APPROVE_STEP",
+          stepKey: step.stepKey,
+          occurredAt: "2026-08-16T12:01:02.000Z",
+        });
+      }
+      run = reduceRitualRun(run, approved, {
+        type: "COMPLETE_STEP",
+        stepKey: step.stepKey,
+        occurredAt: "2026-08-16T12:01:03.000Z",
+      });
+    }
+    run = reduceRitualRun(run, approved, {
+      type: "COMPLETE_RUN",
+      outcome: "NEEDS_REVIEW",
+      occurredAt: "2026-08-16T12:01:04.000Z",
+    });
+    const receipt = createRitualRunReceipt({
+      approved,
+      run,
+      receiptId: "rcp_01J00000000000000000000009",
+      summary: "The approved Run completed and needs an owner review.",
+      recordedAt: "2026-08-16T12:01:04.000Z",
+    });
+    const context = ritualLearningContextSchema.parse({
+      schemaVersion: 1,
+      proposalId: "rlp_01J00000000000000000000009",
+      ritual: approved,
+      receipt,
+      ownerFeedback: "Keep the evidence but make the next result more concise.",
+    });
+    const proposal = ritualLearningProposalSchema.parse({
+      status: "proposal",
+      proposalId: context.proposalId,
+      ritualId: approved.ritualId,
+      fromRevision: approved.ritualRevision,
+      receiptId: receipt.receiptId,
+      ownerFeedback: context.ownerFeedback,
+      stewardMessage: "I propose a more concise completion result.",
+      rationale: "The completed Run and owner feedback support this change.",
+      proposedDefinition: {
+        name: approved.name,
+        purpose: approved.purpose,
+        trigger: approved.trigger,
+        steps: approved.steps,
+        permissions: approved.permissions,
+        completion: "A concise reviewed shortlist is ready with evidence.",
+        reviewPolicy: approved.reviewPolicy,
+        research: approved.research,
+      },
+    });
+
+    expect(validateRitualLearningResult(context, proposal)).toEqual(proposal);
+    expect(() =>
+      ritualLearningContextSchema.parse({
+        ...context,
+        receipt: { ...receipt, mode: "TEST" },
+      }),
+    ).toThrow();
+    expect(() =>
+      ritualLearningContextSchema.parse({
+        ...context,
+        receipt: {
+          ...receipt,
+          ritualId: "rtl_01J00000000000000000000001",
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      ritualLearningContextSchema.parse({
+        ...context,
+        receipt: { ...receipt, ritualRevision: 2 },
+      }),
+    ).toThrow();
+    expect(
+      validateRitualLearningResult(context, {
+        ...proposal,
+        receiptId: "rcp_01J00000000000000000000008",
+      }),
+    ).toMatchObject({ status: "waiting", reason: "STALE_STEWARD_RESULT" });
+    expect(
+      validateRitualLearningResult(context, {
+        ...proposal,
+        proposedDefinition: {
+          ...proposal.proposedDefinition,
+          permissions: [...approved.permissions, "Send external messages"],
+        },
+      }),
+    ).toMatchObject({
+      status: "waiting",
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    });
+    const authorityDowngrades = [
+      {
+        ...proposal.proposedDefinition,
+        steps: [
+          ...proposal.proposedDefinition.steps,
+          {
+            stepKey: "new-authority",
+            title: "New work",
+            description: "Perform work outside the approved Ritual.",
+            actor: { kind: "STEWARD" as const, role: "Steward" },
+            approval: "OWNER_REQUIRED" as const,
+          },
+        ],
+      },
+      {
+        ...proposal.proposedDefinition,
+        steps: proposal.proposedDefinition.steps.map((step) => ({
+          ...step,
+          actor: { ...step.actor, role: "Autonomous operator" },
+        })),
+      },
+      {
+        ...proposal.proposedDefinition,
+        steps: proposal.proposedDefinition.steps.map((step) => ({
+          ...step,
+          actor:
+            step.actor.kind === "STEWARD"
+              ? ({ kind: "VILLAGER" as const, role: step.actor.role } as const)
+              : ({ kind: "STEWARD" as const, role: step.actor.role } as const),
+        })),
+      },
+      {
+        ...proposal.proposedDefinition,
+        steps: proposal.proposedDefinition.steps.map((step) => ({
+          ...step,
+          approval: "NONE" as const,
+        })),
+      },
+      {
+        ...proposal.proposedDefinition,
+        trigger: { kind: "EVENT" as const, summary: "When work arrives" },
+      },
+      {
+        ...proposal.proposedDefinition,
+        reviewPolicy: {
+          ...proposal.proposedDefinition.reviewPolicy,
+          ownerReview: "EXCEPTIONS_ONLY" as const,
+        },
+      },
+    ];
+    for (const proposedDefinition of authorityDowngrades) {
+      expect(
+        validateRitualLearningResult(context, {
+          ...proposal,
+          proposedDefinition,
+        }),
+      ).toMatchObject({
+        status: "waiting",
+        reason: "MALFORMED_PROVIDER_OUTPUT",
+      });
+    }
+    const removedStep = {
+      ...proposal,
+      proposedDefinition: {
+        ...proposal.proposedDefinition,
+        steps: proposal.proposedDefinition.steps.slice(0, 1),
+        reviewPolicy: {
+          ...proposal.proposedDefinition.reviewPolicy,
+          learning: "OFF" as const,
+        },
+      },
+    };
+    expect(validateRitualLearningResult(context, removedStep)).toEqual(
+      removedStep,
+    );
+    const learningOffContext = ritualLearningContextSchema.parse({
+      ...context,
+      ritual: {
+        ...context.ritual,
+        reviewPolicy: { ...context.ritual.reviewPolicy, learning: "OFF" },
+      },
+    });
+    expect(
+      validateRitualLearningResult(learningOffContext, proposal),
+    ).toMatchObject({
+      status: "waiting",
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    });
+    expect(
+      validateRitualLearningResult(context, {
+        ...proposal,
+        proposedDefinition: {
+          ...proposal.proposedDefinition,
+          research: { ...approved.research!, query: "a wider new query" },
+        },
+      }),
+    ).toMatchObject({
+      status: "waiting",
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    });
+  });
 });

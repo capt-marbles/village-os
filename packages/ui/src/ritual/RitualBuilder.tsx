@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import type {
+  ApprovedRitualRevision,
   RitualRun,
   RitualRunReceipt,
   RitualStarter,
@@ -715,6 +716,12 @@ export function RitualBuilder({
                 <footer>
                   <button
                     type="button"
+                    onClick={() => onEvent({ type: "START_FEEDBACK" })}
+                  >
+                    Give feedback
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => onEvent({ type: "START_RUN" })}
                   >
                     Run again
@@ -876,7 +883,7 @@ function LearningProposalReview({
           purpose={current.purpose}
           trigger={current.trigger.summary}
           completion={current.completion}
-          steps={current.steps.map((step) => step.title)}
+          steps={current.steps}
           permissions={current.permissions}
           review={reviewLabel(current.reviewPolicy.ownerReview)}
         />
@@ -886,7 +893,7 @@ function LearningProposalReview({
           purpose={proposed.purpose}
           trigger={proposed.trigger.summary}
           completion={proposed.completion}
-          steps={proposed.steps.map((step) => step.title)}
+          steps={proposed.steps}
           permissions={proposed.permissions}
           review={reviewLabel(proposed.reviewPolicy.ownerReview)}
         />
@@ -941,7 +948,7 @@ function ComparisonColumn({
   purpose: string;
   trigger: string;
   completion: string;
-  steps: readonly string[];
+  steps: ApprovedRitualRevision["steps"];
   permissions: readonly string[];
   review: string;
 }) {
@@ -955,7 +962,12 @@ function ComparisonColumn({
       <small>Work</small>
       <ol>
         {steps.map((step) => (
-          <li key={step}>{step}</li>
+          <li key={step.stepKey}>
+            <strong>{step.title}</strong>
+            <small>
+              {step.actor.role} · {approvalLabel(step.approval)}
+            </small>
+          </li>
         ))}
       </ol>
       <small>Done when</small>
@@ -970,6 +982,12 @@ function ComparisonColumn({
       <p>{review}</p>
     </article>
   );
+}
+
+function approvalLabel(approval: "NONE" | "OWNER_REQUIRED"): string {
+  return approval === "OWNER_REQUIRED"
+    ? "Owner approval required"
+    : "No owner approval";
 }
 
 function reviewLabel(review: "EVERY_RUN" | "EXCEPTIONS_ONLY"): string {
