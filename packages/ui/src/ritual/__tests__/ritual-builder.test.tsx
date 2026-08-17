@@ -71,7 +71,7 @@ function draftedState(purpose: string): RitualBuilderState {
 
 describe("Ritual Builder", () => {
   it("presents the Steward conversation and Ritual draft as one labelled workspace", () => {
-    const html = renderToStaticMarkup(
+    render(
       <RitualBuilder
         identity={identity}
         state={createRitualBuilderState()}
@@ -79,14 +79,20 @@ describe("Ritual Builder", () => {
         stewardDesk={<div>Steward inbox</div>}
       />,
     );
-    expect(html).toContain("Your Steward");
-    expect(html).toContain("What should we make repeatable?");
-    expect(html).toContain('aria-label="Conversation with Steward"');
-    expect(html).toContain('aria-label="Ritual agreement and activity"');
-    expect(html).toContain("What regular work should I take care of?");
-    expect(html.indexOf("Steward inbox")).toBeGreaterThan(
-      html.indexOf('aria-label="Ritual agreement and activity"'),
-    );
+    expect(screen.getByText("Your Steward")).toBeTruthy();
+    expect(screen.getByText("What should we make repeatable?")).toBeTruthy();
+    expect(
+      screen.getByRole("region", { name: "Conversation with Steward" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText(/What regular work should I take care of\?/u),
+    ).toBeTruthy();
+    expect(
+      screen
+        .getByText("Steward inbox")
+        .closest("aside")
+        ?.getAttribute("aria-label"),
+    ).toBe("Ritual agreement and activity");
   });
 
   it("offers a bounded 30-day signal starter without hiding the source limits", () => {

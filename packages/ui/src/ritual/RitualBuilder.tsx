@@ -357,10 +357,12 @@ export function RitualBuilder({
         className="ritual-draft"
         aria-label="Ritual agreement and activity"
       >
-        <div className="ritual-desk-tools">
-          {stewardDesk}
-          {researchSetup}
-        </div>
+        {stewardDesk || researchSetup ? (
+          <div className="ritual-desk-tools">
+            {stewardDesk}
+            {researchSetup}
+          </div>
+        ) : null}
         <header className="ritual-draft__header">
           <div>
             <p className="ritual-eyebrow">Working agreement</p>
