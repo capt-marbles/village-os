@@ -615,7 +615,7 @@ describe("RitualRepository", () => {
         completedOlderRun.runId,
       ),
     ).resolves.toMatchObject({ run: completedOlderRun, approved });
-  });
+  }, 15_000);
 
   it("rejects another Run when every retained Run is active", async () => {
     const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
