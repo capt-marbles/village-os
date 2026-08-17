@@ -51,6 +51,13 @@ describe("automation synchronization contracts", () => {
         leaseEpoch: 5,
         automationBlocked: true,
         canceled: true,
+        notifications: [
+          {
+            eventSequence: 8,
+            reason: "ATTENTION_REQUIRED",
+            requestedAt: "2026-08-14T12:00:00.000Z",
+          },
+        ],
         workflow: {
           objective: {
             kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
@@ -73,6 +80,13 @@ describe("automation synchronization contracts", () => {
       leaseEpoch: 5,
       automationBlocked: true,
       canceled: true,
+      notifications: [
+        {
+          eventSequence: 8,
+          reason: "ATTENTION_REQUIRED",
+          requestedAt: "2026-08-14T12:00:00.000Z",
+        },
+      ],
       workflow: {
         objective: {
           kind: "OWNED_FIXTURE_ACCOUNT_SETUP_V1",
@@ -96,6 +110,7 @@ describe("automation synchronization contracts", () => {
         leaseEpoch: 5,
         automationBlocked: true,
         canceled: true,
+        notifications: [],
         workflow: null,
         pageTitle: "private",
       }).success,

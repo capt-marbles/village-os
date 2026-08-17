@@ -25,6 +25,7 @@
     "audit:boundaries": "node scripts/audit-boundaries.mjs",
     "audit:secret-sinks": "node scripts/audit-secret-sinks.mjs",
     "audit:telemetry-egress": "node scripts/audit-telemetry-egress.mjs",
+    "audit:data-lifecycle": "node scripts/audit-cloud-data-lifecycle.mjs",
     "audit:sbom": "node scripts/generate-sbom.mjs --check",
     "audit:release-config": "node scripts/validate-release-config.mjs",
     "generate:sbom": "node scripts/generate-sbom.mjs",
@@ -34,7 +35,7 @@
     "verify:delegated-workflow:owner-recovery": "node scripts/verify-delegated-workflow.mjs --owner-recovery",
     "verify:delegated-workflow:observer-recovery": "node scripts/verify-delegated-workflow.mjs --observer-recovery",
     "release:validate": "node scripts/validate-release-config.mjs --release",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:workers && pnpm audit:provenance && pnpm audit:licenses && pnpm audit:assets && pnpm audit:boundaries && pnpm audit:secret-sinks && pnpm audit:telemetry-egress && pnpm audit:sbom && pnpm audit:release-config && pnpm build"
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:workers && pnpm audit:provenance && pnpm audit:licenses && pnpm audit:assets && pnpm audit:boundaries && pnpm audit:secret-sinks && pnpm audit:telemetry-egress && pnpm audit:data-lifecycle && pnpm audit:sbom && pnpm audit:release-config && pnpm build"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.21.2",

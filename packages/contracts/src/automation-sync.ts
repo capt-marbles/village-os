@@ -54,6 +54,16 @@ export const automationSyncResponseSchema = z.strictObject({
   leaseEpoch: z.number().int().nonnegative(),
   automationBlocked: z.boolean(),
   canceled: z.boolean(),
+  notifications: z
+    .array(
+      z.strictObject({
+        eventSequence: z.number().int().positive(),
+        reason: z.literal("ATTENTION_REQUIRED"),
+        requestedAt: instantSchema,
+      }),
+    )
+    .max(10)
+    .default([]),
   workflow: z
     .strictObject({
       objective: setupObjectiveSchema,

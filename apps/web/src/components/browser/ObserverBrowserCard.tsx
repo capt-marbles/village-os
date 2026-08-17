@@ -10,10 +10,14 @@ import type { ObserverWorkflowSnapshot } from "./observer-client.js";
 export function ObserverBrowserCard({
   snapshot,
   onIntent,
+  onRequestAttention,
+  attentionPending = false,
   cancellationState = "READY",
 }: {
   snapshot: ObserverWorkflowSnapshot;
   onIntent?: (intent: Extract<BrowserUiAction, "CANCEL_AUTOMATION">) => void;
+  onRequestAttention?: () => void;
+  attentionPending?: boolean;
   cancellationState?: ObserverCancellationState;
 }) {
   const observerSnapshot = { ...snapshot, surface: "OBSERVER" } as const;
@@ -77,6 +81,14 @@ export function ObserverBrowserCard({
           </div>
         </dl>
         <div className="observer-card__actions">
+          <button
+            type="button"
+            className="button-secondary"
+            disabled={!onRequestAttention || attentionPending}
+            onClick={onRequestAttention}
+          >
+            {attentionPending ? "Sending..." : "Notify this Mac"}
+          </button>
           <button
             type="button"
             className="button-secondary"

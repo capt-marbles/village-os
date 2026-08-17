@@ -1,4 +1,12 @@
-import { app, autoUpdater, dialog, protocol, session, shell } from "electron";
+import {
+  app,
+  autoUpdater,
+  dialog,
+  Notification,
+  protocol,
+  session,
+  shell,
+} from "electron";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -203,6 +211,15 @@ export async function startVillageRuntime(
       userDataPath,
       identity,
       deviceIdentitySource,
+      deliverNotification: async () => {
+        if (!Notification.isSupported()) {
+          throw new Error("LOCAL_NOTIFICATION_UNAVAILABLE");
+        }
+        new Notification({
+          title: "Village needs your attention",
+          body: "Open Village on this Mac to continue the active Ritual.",
+        }).show();
+      },
     });
     const recipientKeySource = new ContinuityRecipientKeyVault(
       join(identityDirectory, "continuity-recipient.json"),

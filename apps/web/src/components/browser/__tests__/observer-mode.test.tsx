@@ -26,6 +26,7 @@ describe("observer browser status", () => {
     expect(html).toContain("AGENT");
     expect(html).toContain("Browser stays on your paired desktop");
     expect(html).not.toContain("Take control");
+    expect(html).toContain("Notify this Mac");
     for (const prohibited of [
       "<script>alert(1)</script>",
       "https://evil.test/?token=x",

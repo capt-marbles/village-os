@@ -603,6 +603,7 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
     }
 
     const window = input.now.slice(0, 16);
+    this.pruneQuotaWindows(input.now);
     const usage =
       this.ctx.storage.sql
         .exec<{ accepted_count: number }>(
@@ -1566,6 +1567,7 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
     if (!metadata || metadata.principal_id !== identity.data)
       return { ok: false as const, code: "IDENTITY_MISMATCH" };
     const window = new Date().toISOString().slice(0, 16);
+    this.pruneQuotaWindows(new Date().toISOString());
     const usage =
       this.ctx.storage.sql
         .exec<{ request_count: number }>(
@@ -1586,6 +1588,67 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
       ok: true as const,
       events,
       latestSequence: metadata.event_sequence,
+    };
+  }
+
+  requestDesktopNotification(input: unknown) {
+    const parsed = z
+      .strictObject({
+        principalId: principalIdSchema,
+        reason: z.literal("ATTENTION_REQUIRED"),
+        now: instantSchema,
+      })
+      .safeParse(input);
+    const metadata = this.metadata();
+    if (!parsed.success || !metadata)
+      return { ok: false as const, code: "INVALID_NOTIFICATION_REQUEST" };
+    if (metadata.principal_id !== parsed.data.principalId)
+      return { ok: false as const, code: "IDENTITY_MISMATCH" };
+    const sequence = metadata.event_sequence + 1;
+    const event = this.commitTransition(
+      sequence,
+      "DESKTOP_NOTIFICATION_REQUESTED",
+      { reason: parsed.data.reason },
+      parsed.data.now,
+      () => {
+        this.ctx.storage.sql.exec(
+          "UPDATE session_metadata SET event_sequence = ? WHERE singleton = 1",
+          sequence,
+        );
+      },
+    );
+    this.broadcastEvent(event);
+    return { ok: true as const, eventSequence: sequence };
+  }
+
+  notificationsAfter(principalId: unknown, cursor: unknown) {
+    const identity = principalIdSchema.safeParse(principalId);
+    const parsedCursor = z.number().int().nonnegative().safeParse(cursor);
+    const metadata = this.metadata();
+    if (!identity.success || !parsedCursor.success)
+      return { ok: false as const, code: "INVALID_CURSOR" };
+    if (!metadata || metadata.principal_id !== identity.data)
+      return { ok: false as const, code: "IDENTITY_MISMATCH" };
+    if (parsedCursor.data > metadata.event_sequence)
+      return { ok: false as const, code: "CURSOR_AHEAD" };
+    const rows = this.ctx.storage.sql
+      .exec<EventRow>(
+        `SELECT sequence, type, payload_json, occurred_at FROM coordinator_events
+         WHERE sequence > ? AND type = 'DESKTOP_NOTIFICATION_REQUESTED'
+         ORDER BY sequence LIMIT 11`,
+        parsedCursor.data,
+      )
+      .toArray();
+    const delivered = rows.slice(0, 10);
+    return {
+      ok: true as const,
+      notifications: delivered.map((row) => ({
+        eventSequence: row.sequence,
+        reason: "ATTENTION_REQUIRED" as const,
+        requestedAt: row.occurred_at,
+      })),
+      cursor:
+        rows.length > 10 ? delivered.at(-1)!.sequence : metadata.event_sequence,
     };
   }
 
@@ -1942,6 +2005,20 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
     return this.ctx.storage.sql
       .exec<MetadataRow>("SELECT * FROM session_metadata WHERE singleton = 1")
       .toArray()[0];
+  }
+
+  private pruneQuotaWindows(now: string): void {
+    const cutoff = new Date(Date.parse(now) - 86_400_000)
+      .toISOString()
+      .slice(0, 16);
+    this.ctx.storage.sql.exec(
+      "DELETE FROM command_quota_windows WHERE window_started_at < ?",
+      cutoff,
+    );
+    this.ctx.storage.sql.exec(
+      "DELETE FROM event_stream_quota_windows WHERE window_started_at < ?",
+      cutoff,
+    );
   }
 
   private control(): ControlRow | undefined {

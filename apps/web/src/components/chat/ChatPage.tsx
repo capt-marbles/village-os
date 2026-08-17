@@ -3,7 +3,7 @@ import {
   type BrowserUiAction,
   type ObserverCancellationState,
 } from "@village/ui";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ObserverBrowserCard } from "../browser/ObserverBrowserCard.js";
 import { PairDesktopCard } from "../browser/PairDesktopCard.js";
 import { ContinuitySetupCard } from "../browser/ContinuitySetupCard.js";
@@ -50,6 +50,9 @@ export function ChatPage({
   const [cancellationState, setCancellationState] =
     useState<ObserverCancellationState>("READY");
   const [intentError, setIntentError] = useState<string | null>(null);
+  const [attentionPending, setAttentionPending] = useState(false);
+  const [attentionStatus, setAttentionStatus] = useState<string | null>(null);
+  const attentionInFlight = useRef(false);
 
   useEffect(() => {
     if (!activeSelection) {
@@ -111,6 +114,22 @@ export function ChatPage({
     }
   };
 
+  const requestAttention = async () => {
+    if (!activeSelection || attentionInFlight.current) return;
+    attentionInFlight.current = true;
+    setAttentionPending(true);
+    setAttentionStatus(null);
+    try {
+      await activeClient.requestDesktopAttention(activeSelection);
+      setAttentionStatus("Notification queued for the paired Mac.");
+    } catch {
+      setAttentionStatus("Village could not notify the paired Mac. Try again.");
+    } finally {
+      attentionInFlight.current = false;
+      setAttentionPending(false);
+    }
+  };
+
   return (
     <div className="observer-layout">
       <VillageShell />
@@ -127,14 +146,17 @@ export function ChatPage({
           </p>
         ) : null}
         {intentError ? <p role="alert">{intentError}</p> : null}
+        {attentionStatus ? <p role="status">{attentionStatus}</p> : null}
         <ObserverBrowserCard
           snapshot={snapshot}
           {...(activeSelection && status === "READY"
             ? {
                 onIntent: (intent: ObserverIntent) => void handleIntent(intent),
+                onRequestAttention: () => void requestAttention(),
               }
             : {})}
           cancellationState={cancellationState}
+          attentionPending={attentionPending}
         />
       </div>
     </div>
