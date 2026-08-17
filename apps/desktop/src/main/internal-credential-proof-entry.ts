@@ -11,6 +11,7 @@ import { readFile, unlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { LocalBrowserHost } from "../browser/local-browser-host.js";
+import { internalProofProfileProtection } from "./internal-profile-protection.js";
 import {
   SecretVault,
   type SecretEncryptionProvider,
@@ -169,6 +170,7 @@ async function run(): Promise<void> {
       site: "OWNED_FIXTURE",
       profileRoot: LocalBrowserHost.profileRoot(profilePath),
       initialUrl: `${OWNED_FIXTURE_ORIGIN}/login`,
+      profileProtection: internalProofProfileProtection,
       prepareSession: async (browserSession: Session) =>
         installFixtureSessionHandler(
           browserSession.protocol,

@@ -383,6 +383,7 @@ export async function createInternalDelegatedProof(options: {
   interruptAfterEffectBeforeReceipt?: boolean;
   abruptlyExitAfterFinalEffect?: () => never;
   delayProviderAfterFirstStepMs?: number;
+  profileProtection?: import("../browser/profile-protection.js").MacProfileProtection;
   coordination?: {
     initialSnapshot: CoordinatorSnapshot;
     coordinator: AuthenticatedWorkflowCoordinator;
@@ -572,6 +573,9 @@ export async function createInternalDelegatedProof(options: {
         initialUrl: fixtureUrl(coordinator.snapshot()),
         prepareSession: async (browserSession: Session) =>
           installFixtureSessionHandler(browserSession.protocol, handler),
+        ...(options.profileProtection
+          ? { profileProtection: options.profileProtection }
+          : {}),
       });
       adapter = new FixtureCdpAdapter(
         "OWNED_FIXTURE",

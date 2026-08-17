@@ -1,4 +1,8 @@
-import { app } from "electron";
+import { app, dialog } from "electron";
+import {
+  isProfileProtectionFailure,
+  profileProtectionFailureCopy,
+} from "../browser/profile-protection.js";
 import {
   acceptRuntimePairingLink,
   runRitualBuilderApplication,
@@ -33,6 +37,14 @@ const launch: Promise<unknown> = ownsInstance
   : Promise.resolve();
 
 void launch.catch((error: unknown) => {
-  console.error("Village startup blocked:", error);
+  const code =
+    error instanceof Error ? error.message : "UNKNOWN_STARTUP_FAILURE";
+  if (isProfileProtectionFailure(error)) {
+    dialog.showErrorBox(
+      profileProtectionFailureCopy.title,
+      profileProtectionFailureCopy.message,
+    );
+  }
+  console.error("Village startup blocked:", code);
   app.exit(1);
 });

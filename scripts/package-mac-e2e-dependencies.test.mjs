@@ -53,6 +53,10 @@ test("the packaged desktop command builds its complete workspace graph", () => {
     desktopPackage.scripts["package:mac:e2e"],
     /^pnpm --dir \.\.\/\.\. exec tsc -b --force packages\/contracts packages\/ui packages\/test-auth-site apps\/desktop && pnpm build && /,
   );
+  assert.equal(
+    desktopPackage.scripts["package:mac:profile-e2e"],
+    "pnpm package:mac:e2e && node ../../scripts/verify-profile-protection.mjs",
+  );
 });
 
 test("the delegated smoke package excludes every nested package output", () => {
