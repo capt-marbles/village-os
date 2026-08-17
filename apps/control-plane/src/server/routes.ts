@@ -59,6 +59,7 @@ import {
   exportPrincipalCloudData,
   planPrincipalDeletion,
 } from "../worker/retention/deletion.js";
+import { consumeAuthenticatedQuota } from "../worker/limits/quotas.js";
 
 const deletionConfirmation = "DELETE_CLOUD_DATA";
 const deletionIdAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -97,6 +98,31 @@ async function boundedOptionalJson(request: Request): Promise<unknown | null> {
   const text = await request.text();
   if (text.length > 8_192) throw new Error("BODY_TOO_LARGE");
   return text.length === 0 ? null : JSON.parse(text);
+}
+
+async function ownedSessionDevice(
+  environment: Environment,
+  principalId: string,
+  browserSessionId: string,
+): Promise<string | null> {
+  const row = await environment.VILLAGE_DB.prepare(
+    `SELECT device_id AS deviceId FROM browser_sessions
+     WHERE principal_id = ? AND browser_session_id = ?`,
+  )
+    .bind(principalId, browserSessionId)
+    .first<{ deviceId: string }>();
+  return row?.deviceId ?? null;
+}
+
+function authenticatedMutationStatus(
+  result: { ok: boolean; code?: string },
+  success = 202,
+) {
+  return result.ok
+    ? success
+    : result.code === "AUTHENTICATED_QUOTA_EXCEEDED"
+      ? 429
+      : 409;
 }
 
 export async function routeRequest(
@@ -479,7 +505,16 @@ export async function routeRequest(
         ...body.data,
         now: new Date().toISOString(),
       });
-      return json(request, environment, result, result.ok ? 201 : 409);
+      return json(
+        request,
+        environment,
+        result,
+        result.ok
+          ? 201
+          : result.code === "AUTHENTICATED_QUOTA_EXCEEDED"
+            ? 429
+            : 409,
+      );
     }
 
     if (
@@ -668,7 +703,7 @@ export async function routeRequest(
     }
 
     const sessionOperation = url.pathname.match(
-      /^\/api\/browser-sessions\/([^/]+)\/(connect|commands|results|events|stream|observer|cancel|project|rebuild-projection|automation-sync|workflow-operations)$/,
+      /^\/api\/browser-sessions\/([^/]+)\/(connect|commands|results|events|stream|observer|cancel|project|rebuild-projection|automation-sync|workflow-operations|notifications)$/,
     );
     if (sessionOperation) {
       const sessionId = browserSessionIdSchema.safeParse(sessionOperation[1]);
@@ -699,7 +734,12 @@ export async function routeRequest(
           new Date().toISOString(),
           sessionId.data,
         );
-        return json(request, environment, result, result.ok ? 200 : 409);
+        return json(
+          request,
+          environment,
+          result,
+          authenticatedMutationStatus(result, 200),
+        );
       }
       if (request.method === "POST" && operation === "commands") {
         const origin = authorizeNonBrowserClient(request, environment);
@@ -720,7 +760,12 @@ export async function routeRequest(
           new Date().toISOString(),
           sessionId.data,
         );
-        return json(request, environment, result, result.ok ? 202 : 409);
+        return json(
+          request,
+          environment,
+          result,
+          authenticatedMutationStatus(result),
+        );
       }
       if (request.method === "POST" && operation === "results") {
         const origin = authorizeNonBrowserClient(request, environment);
@@ -741,7 +786,12 @@ export async function routeRequest(
           new Date().toISOString(),
           sessionId.data,
         );
-        return json(request, environment, result, result.ok ? 202 : 409);
+        return json(
+          request,
+          environment,
+          result,
+          authenticatedMutationStatus(result),
+        );
       }
       if (request.method === "POST" && operation === "automation-sync") {
         const origin = authorizeNonBrowserClient(request, environment);
@@ -762,7 +812,12 @@ export async function routeRequest(
           new Date().toISOString(),
           sessionId.data,
         );
-        return json(request, environment, result, result.ok ? 200 : 409);
+        return json(
+          request,
+          environment,
+          result,
+          authenticatedMutationStatus(result, 200),
+        );
       }
       if (request.method === "POST" && operation === "workflow-operations") {
         const origin = authorizeNonBrowserClient(request, environment);
@@ -783,7 +838,12 @@ export async function routeRequest(
           new Date().toISOString(),
           sessionId.data,
         );
-        return json(request, environment, result, result.ok ? 200 : 409);
+        return json(
+          request,
+          environment,
+          result,
+          authenticatedMutationStatus(result, 200),
+        );
       }
 
       const auth = await authenticateRequest(request, environment);
@@ -791,7 +851,71 @@ export async function routeRequest(
       const coordinator = environment.BROWSER_SESSION_COORDINATOR.getByName(
         sessionId.data,
       );
+      const quotaDeviceId = await ownedSessionDevice(
+        environment,
+        auth.principalId,
+        sessionId.data,
+      );
+      if (!quotaDeviceId) {
+        return json(
+          request,
+          environment,
+          { ok: false, code: "SESSION_NOT_FOUND" },
+          404,
+        );
+      }
+      if (request.method === "POST" && operation === "notifications") {
+        const csrf = authorizeBrowserMutation(request, environment);
+        if (!csrf.ok) return json(request, environment, csrf, 403);
+        const body = z
+          .strictObject({ reason: z.literal("ATTENTION_REQUIRED") })
+          .safeParse(await boundedJson(request));
+        if (!body.success)
+          return json(
+            request,
+            environment,
+            { ok: false, code: "INVALID_NOTIFICATION_REQUEST" },
+            400,
+          );
+        const now = new Date().toISOString();
+        const quota = await consumeAuthenticatedQuota(
+          environment.VILLAGE_DB,
+          auth.principalId,
+          quotaDeviceId,
+          "notifications",
+          now,
+        );
+        if (!quota.ok) return json(request, environment, quota, 429);
+        const retainedQuota = await consumeAuthenticatedQuota(
+          environment.VILLAGE_DB,
+          auth.principalId,
+          quotaDeviceId,
+          "retainedRecords",
+          now,
+        );
+        if (!retainedQuota.ok)
+          return json(request, environment, retainedQuota, 429);
+        const result = await coordinator.requestDesktopNotification({
+          principalId: auth.principalId,
+          reason: body.data.reason,
+          now,
+        });
+        return json(
+          request,
+          environment,
+          result,
+          authenticatedMutationStatus(result),
+        );
+      }
       if (request.method === "GET" && operation === "observer") {
+        const quota = await consumeAuthenticatedQuota(
+          environment.VILLAGE_DB,
+          auth.principalId,
+          quotaDeviceId,
+          "replays",
+          new Date().toISOString(),
+        );
+        if (!quota.ok) return json(request, environment, quota, 429);
         const cursor = Number(url.searchParams.get("cursor") ?? "0");
         const result = await getObserverWorkflowProjection(
           environment,
@@ -812,6 +936,23 @@ export async function routeRequest(
             { ok: false, code: "INVALID_CURSOR" },
             400,
           );
+        const connectionQuota = await consumeAuthenticatedQuota(
+          environment.VILLAGE_DB,
+          auth.principalId,
+          quotaDeviceId,
+          "connections",
+          new Date().toISOString(),
+        );
+        if (!connectionQuota.ok)
+          return json(request, environment, connectionQuota, 429);
+        const quota = await consumeAuthenticatedQuota(
+          environment.VILLAGE_DB,
+          auth.principalId,
+          quotaDeviceId,
+          "replays",
+          new Date().toISOString(),
+        );
+        if (!quota.ok) return json(request, environment, quota, 429);
         return openBrowserEventStream(
           environment,
           auth.principalId,
@@ -821,6 +962,14 @@ export async function routeRequest(
         );
       }
       if (request.method === "GET" && operation === "events") {
+        const quota = await consumeAuthenticatedQuota(
+          environment.VILLAGE_DB,
+          auth.principalId,
+          quotaDeviceId,
+          "replays",
+          new Date().toISOString(),
+        );
+        if (!quota.ok) return json(request, environment, quota, 429);
         const cursor = Number(url.searchParams.get("cursor") ?? "0");
         const limit = Number(url.searchParams.get("limit") ?? "100");
         const result = await coordinator.eventsAfter(
@@ -849,14 +998,30 @@ export async function routeRequest(
             { ok: false, code: "INVALID_CANCEL" },
             400,
           );
+        const now = new Date().toISOString();
+        const commandQuota = await consumeAuthenticatedQuota(
+          environment.VILLAGE_DB,
+          auth.principalId,
+          quotaDeviceId,
+          "commands",
+          now,
+        );
+        if (!commandQuota.ok)
+          return json(request, environment, commandQuota, 429);
+        const retainedQuota = await consumeAuthenticatedQuota(
+          environment.VILLAGE_DB,
+          auth.principalId,
+          quotaDeviceId,
+          "retainedRecords",
+          now,
+        );
+        if (!retainedQuota.ok)
+          return json(request, environment, retainedQuota, 429);
         let cancellation = parsed.data;
         if (cancellation === null) {
           // Rollback-compatible legacy clients sent an empty body. They retain
           // the existing principal-bound cancel semantics during rollout.
-          const result = await coordinator.cancel(
-            auth.principalId,
-            new Date().toISOString(),
-          );
+          const result = await coordinator.cancel(auth.principalId, now);
           return json(request, environment, result, result.ok ? 200 : 409);
         }
         const workflow = await environment.VILLAGE_DB.prepare(
@@ -902,13 +1067,22 @@ export async function routeRequest(
         const result = await coordinator.cancel({
           principalId: auth.principalId,
           ...cancellation,
-          now: new Date().toISOString(),
+          now,
         });
         return json(request, environment, result, result.ok ? 200 : 409);
       }
       if (request.method === "POST" && operation === "project") {
         const csrf = authorizeBrowserMutation(request, environment);
         if (!csrf.ok) return json(request, environment, csrf, 403);
+        const retainedQuota = await consumeAuthenticatedQuota(
+          environment.VILLAGE_DB,
+          auth.principalId,
+          quotaDeviceId,
+          "retainedRecords",
+          new Date().toISOString(),
+        );
+        if (!retainedQuota.ok)
+          return json(request, environment, retainedQuota, 429);
         const result = await projectSessionEvents(
           environment,
           auth.principalId,
@@ -920,6 +1094,23 @@ export async function routeRequest(
       if (request.method === "POST" && operation === "rebuild-projection") {
         const csrf = authorizeBrowserMutation(request, environment);
         if (!csrf.ok) return json(request, environment, csrf, 403);
+        const quota = await consumeAuthenticatedQuota(
+          environment.VILLAGE_DB,
+          auth.principalId,
+          quotaDeviceId,
+          "replays",
+          new Date().toISOString(),
+        );
+        if (!quota.ok) return json(request, environment, quota, 429);
+        const retainedQuota = await consumeAuthenticatedQuota(
+          environment.VILLAGE_DB,
+          auth.principalId,
+          quotaDeviceId,
+          "retainedRecords",
+          new Date().toISOString(),
+        );
+        if (!retainedQuota.ok)
+          return json(request, environment, retainedQuota, 429);
         const result = await rebuildSessionProjection(
           environment,
           auth.principalId,

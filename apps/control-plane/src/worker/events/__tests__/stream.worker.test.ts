@@ -19,6 +19,31 @@ const ownerHeaders = {
 
 beforeEach(async () => {
   await applyD1Migrations(env.VILLAGE_DB, env.TEST_MIGRATIONS!);
+  await env.VILLAGE_DB.batch([
+    env.VILLAGE_DB.prepare("DELETE FROM principals"),
+    env.VILLAGE_DB.prepare(
+      "INSERT INTO principals (principal_id, created_at) VALUES (?, ?)",
+    ).bind(principalId, now),
+    env.VILLAGE_DB.prepare(
+      `INSERT INTO devices
+       (principal_id, device_id, public_key, credential_status, protocol_version,
+        last_accepted_sequence, created_at)
+       VALUES (?, ?, '{}', 'ACTIVE', 1, 0, ?)`,
+    ).bind(principalId, deviceId, now),
+    env.VILLAGE_DB.prepare(
+      `INSERT INTO jobs
+       (principal_id, job_id, state, version, last_event_sequence, created_at, updated_at)
+       VALUES (?, ?, 'WAITING_FOR_BROWSER', 2, 2, ?, ?)`,
+    ).bind(principalId, jobId, now, now),
+    env.VILLAGE_DB.prepare(
+      `INSERT INTO browser_sessions
+       (principal_id, browser_session_id, job_id, device_id, host_id, site,
+        controller, connection_state, lease_epoch, last_accepted_sequence,
+        automation_blocked, takeover_state, profile_state, updated_at)
+       VALUES (?, ?, ?, ?, 'hst_01J00000000000000000000005', 'OWNED_FIXTURE',
+        'NONE', 'ONLINE', 0, 0, 1, 'NONE', 'PRESENT', ?)`,
+    ).bind(principalId, browserSessionId, jobId, deviceId, now),
+  ]);
   const control: BrowserControlState = {
     principalId,
     deviceId,
@@ -119,7 +144,7 @@ describe("authoritative browser event stream", () => {
       ...ownerHeaders,
       "x-village-development-principal": "prn_01J00000000000000000000006",
     });
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(404);
 
     const hostileOrigin = await connect(0, {
       ...ownerHeaders,

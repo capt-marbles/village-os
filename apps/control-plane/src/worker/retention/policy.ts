@@ -29,7 +29,9 @@ const defaultRecordPolicy: RecordRetentionPolicy = {
   verification: "TOMBSTONE_AND_ABSENCE_CHECK",
 };
 
-/** Declarative lifecycle contract for every cloud record exposed to an owner. */
+/** Typed convenience for owner-exported 30-day history classes.
+ * The exhaustive, CI-audited authority is cloud-record-lifecycle.yaml.
+ */
 export const recordRetentionPolicies: Readonly<
   Record<CloudRecordClass, RecordRetentionPolicy>
 > = {
@@ -64,7 +66,61 @@ export async function executeRetentionBatch(
       AND jobs.state IN ('SUCCEEDED', 'FAILED', 'CANCELED')
       AND jobs.updated_at < ?
   )`;
+  const expiredPairings = await db
+    .prepare(
+      `UPDATE pairing_challenges SET state = 'EXPIRED'
+       WHERE rowid IN (
+         SELECT rowid FROM pairing_challenges
+         WHERE state = 'PENDING_CONFIRMATION' AND expires_at <= ?
+         ORDER BY expires_at LIMIT ?
+       )`,
+    )
+    .bind(now, batchSize)
+    .run();
   const statements = [
+    db
+      .prepare(
+        `DELETE FROM pairing_challenges WHERE rowid IN (
+           SELECT rowid FROM pairing_challenges
+           WHERE state IN ('EXPIRED', 'REJECTED', 'CONSUMED') AND expires_at < ?
+           ORDER BY expires_at LIMIT ?
+         )`,
+      )
+      .bind(cutoff, batchSize),
+    db
+      .prepare(
+        `DELETE FROM authenticated_quota_usage
+         WHERE rowid IN (
+           SELECT rowid FROM authenticated_quota_usage
+           WHERE window_started_at < ? ORDER BY window_started_at LIMIT ?
+         )`,
+      )
+      .bind(
+        new Date(parsedNow - 86_400_000).toISOString().slice(0, 16),
+        batchSize,
+      ),
+    db
+      .prepare(
+        `DELETE FROM authenticated_principal_quota_usage
+         WHERE rowid IN (
+           SELECT rowid FROM authenticated_principal_quota_usage
+           WHERE window_started_at < ? ORDER BY window_started_at LIMIT ?
+         )`,
+      )
+      .bind(
+        new Date(parsedNow - 86_400_000).toISOString().slice(0, 16),
+        batchSize,
+      ),
+    db
+      .prepare(
+        `DELETE FROM projection_outbox WHERE rowid IN (
+           SELECT target.rowid FROM projection_outbox AS target
+           WHERE target.projected_at IS NOT NULL
+             AND target.created_at < ? AND ${terminalJobs}
+           ORDER BY target.created_at LIMIT ?
+         )`,
+      )
+      .bind(cutoff, cutoff, batchSize),
     db
       .prepare(
         `DELETE FROM workflow_last_effect_actor WHERE rowid IN (
@@ -144,6 +200,50 @@ export async function executeRetentionBatch(
   );
   return {
     deleted,
-    hasMore: results.some((result) => result.meta.changes === batchSize),
+    hasMore:
+      expiredPairings.meta.changes === batchSize ||
+      results.some((result) => result.meta.changes === batchSize),
+  };
+}
+
+export async function executeCloudRetentionBatch(
+  environment: import("../../env.js").Environment,
+  now: string,
+  batchSize = 500,
+): Promise<{ deleted: number; hasMore: boolean }> {
+  const d1 = await executeRetentionBatch(
+    environment.VILLAGE_DB,
+    now,
+    batchSize,
+  );
+  const cutoff = new Date(Date.parse(now) - 30 * 86_400_000).toISOString();
+  const grants = await environment.VILLAGE_DB.prepare(
+    `SELECT principal_id AS principalId, grant_id AS grantId
+     FROM continuity_grants
+     WHERE state IN ('REVOKED', 'DELETED', 'EXPIRED')
+       AND COALESCE(deleted_at, revoked_at, expires_at) < ?
+     ORDER BY COALESCE(deleted_at, revoked_at, expires_at) LIMIT ?`,
+  )
+    .bind(cutoff, batchSize)
+    .all<{ principalId: string; grantId: string }>();
+  let deletedGrants = 0;
+  for (const grant of grants.results) {
+    const mailbox = environment.SITE_SESSION_MAILBOX.getByName(
+      `${grant.principalId}:${grant.grantId}`,
+    );
+    const destroyed = await mailbox.destroy(grant.principalId);
+    if (!destroyed.ok && destroyed.code !== "MAILBOX_NOT_FOUND") continue;
+    const deletion = await environment.VILLAGE_DB.prepare(
+      `DELETE FROM continuity_grants
+       WHERE principal_id = ? AND grant_id = ?
+         AND state IN ('REVOKED', 'DELETED', 'EXPIRED')`,
+    )
+      .bind(grant.principalId, grant.grantId)
+      .run();
+    deletedGrants += deletion.meta.changes ?? 0;
+  }
+  return {
+    deleted: d1.deleted + deletedGrants,
+    hasMore: d1.hasMore || grants.results.length === batchSize,
   };
 }

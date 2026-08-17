@@ -294,4 +294,34 @@ export class ObserverApiClient {
     }
     return { state: "DURABLY_ACCEPTED", acknowledgedAt: acknowledgedAt.data };
   }
+
+  async requestDesktopAttention(candidate: ObserverSelection): Promise<void> {
+    const browserSessionId = browserSessionIdSchema.safeParse(
+      candidate.browserSessionId,
+    );
+    if (!browserSessionId.success)
+      throw new Error("OBSERVER_SELECTION_INVALID");
+    const csrf = this.csrfToken();
+    if (!csrf || csrf.length < 32) throw new Error("OBSERVER_CSRF_UNAVAILABLE");
+    const response = await this.request(
+      new URL(
+        `/api/browser-sessions/${browserSessionId.data}/notifications`,
+        this.baseUrl,
+      ),
+      {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json", "x-village-csrf": csrf },
+        body: JSON.stringify({ reason: "ATTENTION_REQUIRED" }),
+      },
+    );
+    const body = object(await response.json());
+    if (!response.ok || body?.ok !== true) {
+      throw new Error(
+        typeof body?.code === "string"
+          ? body.code
+          : "OBSERVER_NOTIFICATION_FAILED",
+      );
+    }
+  }
 }

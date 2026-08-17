@@ -75,6 +75,14 @@ export async function createOwnedBrowserSession(
   ) {
     return { ok: false as const, code: "DESTINATION_SITE_MISMATCH" };
   }
+  const retainedQuota = await consumeAuthenticatedQuota(
+    environment.VILLAGE_DB,
+    input.principalId,
+    input.deviceId,
+    "retainedRecords",
+    input.now,
+  );
+  if (!retainedQuota.ok) return retainedQuota;
   const control = browserControlStateSchema.parse({
     principalId: input.principalId,
     deviceId: input.deviceId,
@@ -238,6 +246,14 @@ export async function dispatchAuthenticatedCommand(
     now,
   );
   if (!quota.ok) return quota;
+  const retainedQuota = await consumeAuthenticatedQuota(
+    environment.VILLAGE_DB,
+    envelope.principalId,
+    envelope.deviceId,
+    "retainedRecords",
+    now,
+  );
+  if (!retainedQuota.ok) return retainedQuota;
   return environment.BROWSER_SESSION_COORDINATOR.getByName(
     envelope.browserSessionId,
   ).acceptAuthenticatedCommand({ envelope, connectionId, now });
@@ -270,14 +286,6 @@ export async function dispatchAuthenticatedSessionOpen(
   }
   const authenticated = await authenticatedDevice(environment, envelope);
   if (!authenticated.ok) return authenticated;
-  const quota = await consumeAuthenticatedQuota(
-    environment.VILLAGE_DB,
-    envelope.principalId,
-    envelope.deviceId,
-    "connections",
-    now,
-  );
-  if (!quota.ok) return quota;
   const session = await environment.VILLAGE_DB.prepare(
     `SELECT site FROM browser_sessions
      WHERE principal_id = ? AND browser_session_id = ? AND job_id = ? AND device_id = ?`,
@@ -293,6 +301,22 @@ export async function dispatchAuthenticatedSessionOpen(
   if (session.site !== envelope.command.site) {
     return { ok: false as const, code: "DESTINATION_SITE_MISMATCH" };
   }
+  const quota = await consumeAuthenticatedQuota(
+    environment.VILLAGE_DB,
+    envelope.principalId,
+    envelope.deviceId,
+    "connections",
+    now,
+  );
+  if (!quota.ok) return quota;
+  const retainedQuota = await consumeAuthenticatedQuota(
+    environment.VILLAGE_DB,
+    envelope.principalId,
+    envelope.deviceId,
+    "retainedRecords",
+    now,
+  );
+  if (!retainedQuota.ok) return retainedQuota;
   const coordinator = environment.BROWSER_SESSION_COORDINATOR.getByName(
     envelope.browserSessionId,
   );
@@ -381,6 +405,14 @@ export async function dispatchAuthenticatedResult(
     now,
   );
   if (!quota.ok) return quota;
+  const retainedQuota = await consumeAuthenticatedQuota(
+    environment.VILLAGE_DB,
+    envelope.principalId,
+    envelope.deviceId,
+    "retainedRecords",
+    now,
+  );
+  if (!retainedQuota.ok) return retainedQuota;
   return environment.BROWSER_SESSION_COORDINATOR.getByName(
     envelope.browserSessionId,
   ).acceptAuthenticatedResult({ envelope, connectionId, now });
@@ -442,6 +474,22 @@ export async function dispatchAuthenticatedAutomationSync(
     .bind(envelope.principalId, envelope.deviceId, envelope.browserSessionId)
     .first<{ owned: number }>();
   if (!session) return { ok: false as const, code: "SESSION_NOT_OWNED" };
+  const commandQuota = await consumeAuthenticatedQuota(
+    environment.VILLAGE_DB,
+    envelope.principalId,
+    envelope.deviceId,
+    "commands",
+    now,
+  );
+  if (!commandQuota.ok) return commandQuota;
+  const retainedQuota = await consumeAuthenticatedQuota(
+    environment.VILLAGE_DB,
+    envelope.principalId,
+    envelope.deviceId,
+    "retainedRecords",
+    now,
+  );
+  if (!retainedQuota.ok) return retainedQuota;
   const accepted = await environment.VILLAGE_DB.prepare(
     `UPDATE browser_sessions SET last_automation_sync_sequence = ?
      WHERE principal_id = ? AND device_id = ? AND browser_session_id = ?
@@ -520,15 +568,20 @@ export async function dispatchAuthenticatedAutomationSync(
                   leaseEpoch: snapshot.control.leaseEpoch,
                 },
         };
+  const notifications = await environment.BROWSER_SESSION_COORDINATOR.getByName(
+    envelope.browserSessionId,
+  ).notificationsAfter(envelope.principalId, envelope.cursor);
+  if (!notifications.ok) return notifications;
   return automationSyncResponseSchema.parse({
     ok: true as const,
-    cursor: snapshot.eventSequence,
+    cursor: notifications.cursor,
     jobId: snapshot.control.jobId,
     controller: snapshot.control.controller,
     connection: snapshot.control.connection,
     leaseEpoch: snapshot.control.leaseEpoch,
     automationBlocked: snapshot.control.automationBlocked,
     canceled: snapshot.canceled,
+    notifications: notifications.notifications,
     workflow,
   });
 }
@@ -591,6 +644,22 @@ export async function dispatchAuthenticatedWorkflowOperation(
     )
     .first<{ owned: number }>();
   if (!session) return { ok: false as const, code: "SESSION_NOT_OWNED" };
+  const commandQuota = await consumeAuthenticatedQuota(
+    environment.VILLAGE_DB,
+    envelope.principalId,
+    envelope.deviceId,
+    "commands",
+    now,
+  );
+  if (!commandQuota.ok) return commandQuota;
+  const retainedQuota = await consumeAuthenticatedQuota(
+    environment.VILLAGE_DB,
+    envelope.principalId,
+    envelope.deviceId,
+    "retainedRecords",
+    now,
+  );
+  if (!retainedQuota.ok) return retainedQuota;
   const accepted = await environment.VILLAGE_DB.prepare(
     `UPDATE browser_sessions SET last_workflow_operation_sequence = ?
      WHERE principal_id = ? AND device_id = ? AND job_id = ?

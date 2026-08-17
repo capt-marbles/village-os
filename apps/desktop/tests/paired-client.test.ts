@@ -412,6 +412,13 @@ describe("paired desktop connector", () => {
         leaseEpoch: 5,
         automationBlocked: true,
         canceled: true,
+        notifications: [
+          {
+            eventSequence: 8,
+            reason: "ATTENTION_REQUIRED",
+            requestedAt: "2026-08-14T12:00:00.000Z",
+          },
+        ],
         workflow: null,
       }),
     );
@@ -421,6 +428,8 @@ describe("paired desktop connector", () => {
       keys.privateKey,
       { reserveNext: async () => ++sequence },
       request,
+      30_000,
+      vi.fn(async () => undefined),
     );
     const identity = {
       principalId: "prn_01J00000000000000000000000",
@@ -454,6 +463,56 @@ describe("paired desktop connector", () => {
     expect(
       automationSyncRequestSchema.parse(JSON.parse(init!.body as string)),
     ).toMatchObject({ ...identity, cursor: 7, sequence: 1 });
+  });
+
+  it("delivers fixed notifications before advancing the durable cursor", async () => {
+    const keys = await generateDeviceSigningKey();
+    const cursorStore = new MemoryAutomationSyncCursorStore(7);
+    const deliverNotification = vi.fn(async () => {
+      throw new Error("LOCAL_NOTIFICATION_UNAVAILABLE");
+    });
+    const request = vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        ok: true,
+        cursor: 9,
+        jobId: "job_01J00000000000000000000000",
+        controller: "NONE",
+        connection: "ONLINE",
+        leaseEpoch: 5,
+        automationBlocked: true,
+        canceled: false,
+        notifications: [
+          {
+            eventSequence: 8,
+            reason: "ATTENTION_REQUIRED",
+            requestedAt: "2026-08-14T12:00:00.000Z",
+          },
+        ],
+        workflow: null,
+      }),
+    );
+    const client = new ControlPlaneClient(
+      "https://village.test",
+      "connector-desktop",
+      keys.privateKey,
+      { reserveNext: async () => 1 },
+      request,
+      30_000,
+      deliverNotification,
+    );
+
+    await expect(
+      client.synchronizeAutomation(
+        {
+          principalId: "prn_01J00000000000000000000000",
+          deviceId: "dev_01J00000000000000000000000",
+          browserSessionId: "brs_01J00000000000000000000000",
+        },
+        cursorStore,
+      ),
+    ).rejects.toThrow("LOCAL_NOTIFICATION_UNAVAILABLE");
+    expect(deliverNotification).toHaveBeenCalledWith("ATTENTION_REQUIRED");
+    expect(await cursorStore.load("brs_01J00000000000000000000000")).toBe(7);
   });
 
   it("does not advance the cursor for a malformed or regressing response", async () => {

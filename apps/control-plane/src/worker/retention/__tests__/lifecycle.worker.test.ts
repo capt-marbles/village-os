@@ -7,7 +7,11 @@ import {
   planPrincipalDeletion,
   verifyPrincipalDeletion,
 } from "../deletion.js";
-import { executeRetentionBatch, recordRetentionPolicies } from "../policy.js";
+import {
+  executeCloudRetentionBatch,
+  executeRetentionBatch,
+  recordRetentionPolicies,
+} from "../policy.js";
 import type { SiteSessionMailbox } from "../../site-session-continuity/mailbox.js";
 import type { BrowserControlState } from "@village/contracts";
 
@@ -216,7 +220,7 @@ beforeEach(async () => {
 });
 
 describe("principal data lifecycle", () => {
-  it("declares principal isolation, bounded retention, export, deletion, backup, and verification for every cloud record class", () => {
+  it("declares lifecycle controls for every owner-exported history class", () => {
     expect(recordRetentionPolicies).toEqual(
       expect.objectContaining({
         PROJECTIONS: expect.objectContaining({
@@ -426,5 +430,86 @@ describe("principal data lifecycle", () => {
       otherPrincipalId,
     );
     expect(active.events).toHaveLength(1);
+  });
+
+  it("prunes expired ceremony, quota, and projected outbox records", async () => {
+    await env.VILLAGE_DB.prepare(
+      "UPDATE jobs SET state = 'SUCCEEDED', updated_at = ? WHERE principal_id = ?",
+    )
+      .bind("2026-06-01T00:00:00.000Z", principalId)
+      .run();
+    await env.VILLAGE_DB.batch([
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO pairing_challenges
+         (principal_id, pairing_id, device_id, device_display_name, public_key_json,
+          protection, secret_hash, fingerprint, attempts_remaining, state,
+          created_at, expires_at)
+         VALUES (?, 'par_01J00000000000000000000020',
+          'dev_01J00000000000000000000020', 'Old Mac', '{}',
+          'OS_PROTECTED_FALLBACK', 'hash', 'fingerprint', 0, 'EXPIRED', ?, ?)`,
+      ).bind(
+        principalId,
+        "2026-05-01T00:00:00.000Z",
+        "2026-05-01T00:05:00.000Z",
+      ),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO authenticated_quota_usage
+         (principal_id, device_id, window_started_at, connections)
+         VALUES (?, 'dev_01J00000000000000000000020', '2026-06-01T00:00', 1)`,
+      ).bind(principalId),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO authenticated_principal_quota_usage
+         (principal_id, window_started_at, connections)
+         VALUES (?, '2026-06-01T00:00', 1)`,
+      ).bind(principalId),
+      env.VILLAGE_DB.prepare(
+        `INSERT INTO projection_outbox
+         (principal_id, job_id, event_sequence, projection_type, payload_json,
+          projected_at, created_at)
+         VALUES (?, ?, 1, 'JOB', '{}', ?, ?)`,
+      ).bind(
+        principalId,
+        jobId,
+        "2026-06-01T00:00:00.000Z",
+        "2026-06-01T00:00:00.000Z",
+      ),
+    ]);
+
+    await executeRetentionBatch(env.VILLAGE_DB, now, 100);
+    for (const table of [
+      "pairing_challenges",
+      "authenticated_quota_usage",
+      "authenticated_principal_quota_usage",
+      "projection_outbox",
+    ]) {
+      await expect(
+        env.VILLAGE_DB.prepare(`SELECT COUNT(*) AS count FROM ${table}`).first<{
+          count: number;
+        }>(),
+      ).resolves.toEqual({ count: 0 });
+    }
+  });
+
+  it("destroys terminal continuity ciphertext before deleting old grant metadata", async () => {
+    const mailbox = await seedContinuityMailbox();
+    await env.VILLAGE_DB.prepare(
+      `UPDATE continuity_grants SET state = 'EXPIRED', expires_at = ?
+       WHERE principal_id = ?`,
+    )
+      .bind("2026-06-01T00:00:00.000Z", principalId)
+      .run();
+
+    await executeCloudRetentionBatch(env, "2026-08-12T18:00:00.000Z", 100);
+    await expect(mailbox.diagnostics(principalId)).resolves.toEqual({
+      ok: false,
+      code: "MAILBOX_NOT_FOUND",
+    });
+    await expect(
+      env.VILLAGE_DB.prepare(
+        "SELECT COUNT(*) AS count FROM continuity_grants WHERE principal_id = ?",
+      )
+        .bind(principalId)
+        .first<{ count: number }>(),
+    ).resolves.toEqual({ count: 0 });
   });
 });
