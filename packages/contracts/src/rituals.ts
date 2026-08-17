@@ -603,13 +603,34 @@ export const ritualStoreSchema = z.strictObject({
   schedules: z.array(ritualScheduleSchema).max(100),
 });
 
-export const ritualStewardContextSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  draftId: ritualDraftIdSchema,
-  requestRevision: z.number().int().positive(),
-  ownerPurpose: sentenceSchema,
-  starter: ritualStarterSchema.optional(),
-});
+export const ritualStewardContextSchema = z
+  .strictObject({
+    schemaVersion: z.literal(1),
+    draftId: ritualDraftIdSchema,
+    requestRevision: z.number().int().positive(),
+    ownerPurpose: sentenceSchema,
+    starter: ritualStarterSchema.optional(),
+    clarifications: z
+      .array(
+        z.strictObject({
+          questionId: z.string().regex(/^[a-z][a-z0-9-]{1,31}$/),
+          answer: sentenceSchema,
+        }),
+      )
+      .max(4)
+      .optional(),
+  })
+  .superRefine((context, refinement) => {
+    const questionIds =
+      context.clarifications?.map((answer) => answer.questionId) ?? [];
+    if (new Set(questionIds).size !== questionIds.length) {
+      refinement.addIssue({
+        code: "custom",
+        path: ["clarifications"],
+        message: "clarification question ids must be unique",
+      });
+    }
+  });
 
 const ritualStewardProposalFields = {
   stewardMessage: sentenceSchema,
@@ -630,6 +651,48 @@ export const ritualStewardProposalContentJsonSchema = z.toJSONSchema(
   ritualStewardProposalContentSchema,
 );
 
+const ritualStewardOptionSchema = z.strictObject({
+  optionId: z.string().regex(/^[a-z][a-z0-9-]{1,31}$/),
+  label: shortLabelSchema,
+  detail: z.string().trim().min(1).max(160),
+});
+
+export const ritualStewardQuestionContentSchema = z
+  .strictObject({
+    stewardMessage: sentenceSchema,
+    questionId: z.string().regex(/^[a-z][a-z0-9-]{1,31}$/),
+    prompt: sentenceSchema,
+    options: z.array(ritualStewardOptionSchema).min(2).max(4),
+    allowFreeText: z.literal(true),
+  })
+  .superRefine((question, context) => {
+    const optionIds = question.options.map((option) => option.optionId);
+    if (new Set(optionIds).size !== optionIds.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["options"],
+        message: "clarification option ids must be unique",
+      });
+    }
+    const optionLabels = question.options.map((option) =>
+      option.label.normalize("NFKC").toLocaleLowerCase("en-US"),
+    );
+    if (new Set(optionLabels).size !== optionLabels.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["options"],
+        message: "clarification option labels must be unique",
+      });
+    }
+  });
+
+export const ritualStewardTurnContentJsonSchema = z.toJSONSchema(
+  z.union([
+    ritualStewardProposalContentSchema,
+    ritualStewardQuestionContentSchema,
+  ]),
+);
+
 export const ritualStewardProposalSchema = z.strictObject({
   status: z.literal("proposal"),
   draftId: ritualDraftIdSchema,
@@ -637,8 +700,16 @@ export const ritualStewardProposalSchema = z.strictObject({
   ...ritualStewardProposalContentSchema.shape,
 });
 
+export const ritualStewardQuestionSchema =
+  ritualStewardQuestionContentSchema.safeExtend({
+    status: z.literal("question"),
+    draftId: ritualDraftIdSchema,
+    requestRevision: z.number().int().positive(),
+  });
+
 export const ritualStewardResultSchema = z.discriminatedUnion("status", [
   ritualStewardProposalSchema,
+  ritualStewardQuestionSchema,
   z.strictObject({
     status: z.literal("waiting"),
     draftId: ritualDraftIdSchema,
@@ -655,6 +726,7 @@ export type ApprovedRitualRevision = z.infer<
 export type ApprovedRitualStore = z.infer<typeof approvedRitualStoreSchema>;
 export type RitualStewardContext = z.infer<typeof ritualStewardContextSchema>;
 export type RitualStewardProposal = z.infer<typeof ritualStewardProposalSchema>;
+export type RitualStewardQuestion = z.infer<typeof ritualStewardQuestionSchema>;
 export type RitualStewardResult = z.infer<typeof ritualStewardResultSchema>;
 export type RitualResearch = z.infer<typeof ritualResearchSchema>;
 export type RitualStarter = z.infer<typeof ritualStarterSchema>;
@@ -749,6 +821,24 @@ export function validateRitualStewardResult(
       requestRevision: context.requestRevision,
       reason: "MALFORMED_PROVIDER_OUTPUT",
     };
+  }
+  if (result.data.status === "question") {
+    const questionId = result.data.questionId;
+    const repeated = context.clarifications?.some(
+      (clarification) => clarification.questionId === questionId,
+    );
+    if (
+      context.starter ||
+      (context.clarifications?.length ?? 0) >= 4 ||
+      repeated
+    ) {
+      return {
+        status: "waiting",
+        draftId: context.draftId,
+        requestRevision: context.requestRevision,
+        reason: "MALFORMED_PROVIDER_OUTPUT",
+      };
+    }
   }
   return result.data;
 }

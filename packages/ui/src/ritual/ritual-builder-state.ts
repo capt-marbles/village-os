@@ -16,6 +16,7 @@ import {
   type RitualDraft,
   type RitualStarter,
   type RitualStewardProposal,
+  type RitualStewardQuestion,
   type RitualLearningProposal,
   type RitualRun,
   type RitualRunReceipt,
@@ -46,6 +47,20 @@ export type RitualBuilderState =
       approved: null;
       pendingDraftId: string;
       pendingRequestRevision: number;
+      ownerPurpose: string;
+      starter?: RitualStarter;
+      clarifications: readonly { questionId: string; answer: string }[];
+    })
+  | (RitualBuilderStateBase & {
+      phase: "CLARIFYING";
+      draft: null;
+      approved: null;
+      pendingDraftId: string;
+      pendingRequestRevision: number;
+      ownerPurpose: string;
+      starter?: RitualStarter;
+      clarifications: readonly { questionId: string; answer: string }[];
+      question: RitualStewardQuestion;
     })
   | (RitualBuilderStateBase & {
       phase: "CHOOSE_TRIGGER" | "CHOOSE_REVIEW" | "READY_FOR_APPROVAL";
@@ -153,6 +168,13 @@ export type RitualBuilderEvent =
       type: "STEWARD_PROPOSED";
       proposal: RitualStewardProposal;
       occurredAt: string;
+    }
+  | { type: "STEWARD_ASKED"; question: RitualStewardQuestion }
+  | {
+      type: "ANSWER_CLARIFICATION";
+      questionId: string;
+      selection:
+        { kind: "OPTION"; optionId: string } | { kind: "TEXT"; text: string };
     }
   | { type: "STEWARD_FAILED"; message: string }
   | { type: "RESTORE_APPROVED"; approved: ApprovedRitualRevision }
@@ -336,6 +358,96 @@ export function reduceRitualBuilder(
         phase: "DRAFTING",
         pendingDraftId: event.draftId,
         pendingRequestRevision: requestRevision,
+        ownerPurpose: purpose,
+        ...(starter ? { starter } : {}),
+        clarifications: [],
+        requestRevision,
+        messages,
+        error: null,
+      };
+    }
+    case "STEWARD_ASKED": {
+      if (state.phase !== "DRAFTING") return state;
+      if (
+        event.question.draftId !== state.pendingDraftId ||
+        event.question.requestRevision !== state.pendingRequestRevision
+      ) {
+        const error = "The Steward returned an outdated question. Try again.";
+        return {
+          phase: "DESCRIBE_PURPOSE",
+          draft: null,
+          approved: null,
+          messages: message(state.messages, "SYSTEM", error),
+          error,
+          requestRevision: state.requestRevision,
+        };
+      }
+      return {
+        ...state,
+        phase: "CLARIFYING",
+        question: event.question,
+        messages: message(
+          state.messages,
+          "STEWARD",
+          event.question.stewardMessage,
+        ),
+        error: null,
+      };
+    }
+    case "ANSWER_CLARIFICATION": {
+      if (
+        state.phase !== "CLARIFYING" ||
+        event.questionId !== state.question.questionId
+      ) {
+        return state;
+      }
+      const answer = (() => {
+        if (event.selection.kind === "TEXT") {
+          return event.selection.text.trim();
+        }
+        const optionId = event.selection.optionId;
+        return state.question.options.find(
+          (option) => option.optionId === optionId,
+        )?.label;
+      })();
+      if (!answer) {
+        return { ...state, error: "Choose an option or add a short answer." };
+      }
+      const clarifications = [
+        ...state.clarifications,
+        { questionId: state.question.questionId, answer },
+      ];
+      const requestRevision = state.requestRevision + 1;
+      if (
+        !ritualStewardContextSchema.safeParse({
+          schemaVersion: 1,
+          draftId: state.pendingDraftId,
+          requestRevision,
+          ownerPurpose: state.ownerPurpose,
+          ...(state.starter ? { starter: state.starter } : {}),
+          clarifications,
+        }).success
+      ) {
+        return {
+          ...state,
+          error: "That answer is too long. Keep it concise and try again.",
+        };
+      }
+      let messages = message(state.messages, "OWNER", answer);
+      messages = message(
+        messages,
+        "STEWARD",
+        "I’ll use that as I continue shaping the Ritual.",
+      );
+      return {
+        phase: "DRAFTING",
+        draft: null,
+        approved: null,
+        pendingDraftId: state.pendingDraftId,
+        pendingRequestRevision: requestRevision,
+        ownerPurpose: state.ownerPurpose,
+        ...(state.starter ? { starter: state.starter } : {}),
+        clarifications,
         requestRevision,
         messages,
         error: null,

@@ -65,6 +65,62 @@ const learningContext = {
 };
 
 describe("CodexRitualStewardProvider", () => {
+  it("returns a locally bound clarification and includes only bounded answers on the next turn", async () => {
+    const prompts: unknown[] = [];
+    const transport = {
+      request: async (method: string) => {
+        if (method === "initialize") return {};
+        if (method === "account/read") return { account: { type: "chatgpt" } };
+        return { thread: { id: "thread-clarify" } };
+      },
+      notify: () => undefined,
+      runToolTurn: async (_threadId: string, prompt: unknown) => {
+        prompts.push(prompt);
+        return {
+          stewardMessage: "One choice will make this Ritual more useful.",
+          questionId: "delivery-rhythm",
+          prompt: "When should I prepare the review?",
+          options: [
+            {
+              optionId: "on-demand",
+              label: "Only when I ask",
+              detail: "Keep it manual while it learns.",
+            },
+            {
+              optionId: "weekdays",
+              label: "Every weekday",
+              detail: "Prepare it each weekday morning.",
+            },
+          ],
+          allowFreeText: true,
+        };
+      },
+      close: async () => undefined,
+    };
+    const provider = new CodexRitualStewardProvider(transport);
+    const result = await provider.draft(context);
+    expect(result).toMatchObject({
+      status: "question",
+      draftId: context.draftId,
+      requestRevision: 1,
+      questionId: "delivery-rhythm",
+    });
+
+    await provider.draft({
+      ...context,
+      requestRevision: 2,
+      clarifications: [
+        { questionId: "delivery-rhythm", answer: "Every weekday" },
+      ],
+    });
+    expect(prompts[1]).toMatchObject({
+      clarifications: [
+        { questionId: "delivery-rhythm", answer: "Every weekday" },
+      ],
+    });
+    expect(JSON.stringify(prompts[1])).not.toContain(context.draftId);
+  });
+
   it("constructs its app-server transport lazily", async () => {
     const factory = vi.fn(() => ({
       request: async () => ({ account: null }),

@@ -50,6 +50,53 @@ function applyStewardProposal(
 }
 
 describe("Ritual Builder state", () => {
+  it("answers one Steward clarification before creating the draft", () => {
+    let state = reduceRitualBuilder(createRitualBuilderState(), {
+      type: "SUBMIT_PURPOSE",
+      draftId,
+      purpose: "Review my email and identify the highest priority reply.",
+    });
+    state = reduceRitualBuilder(state, {
+      type: "STEWARD_ASKED",
+      question: {
+        status: "question",
+        draftId,
+        requestRevision: 1,
+        stewardMessage: "One choice will make this Ritual more useful.",
+        questionId: "delivery-rhythm",
+        prompt: "When should I prepare the review?",
+        options: [
+          {
+            optionId: "on-demand",
+            label: "Only when I ask",
+            detail: "Keep it manual while it learns.",
+          },
+          {
+            optionId: "weekdays",
+            label: "Every weekday",
+            detail: "Prepare it each weekday morning.",
+          },
+        ],
+        allowFreeText: true,
+      },
+    });
+    expect(state.phase).toBe("CLARIFYING");
+
+    state = reduceRitualBuilder(state, {
+      type: "ANSWER_CLARIFICATION",
+      questionId: "delivery-rhythm",
+      selection: { kind: "OPTION", optionId: "weekdays" },
+    });
+    expect(state).toMatchObject({
+      phase: "DRAFTING",
+      pendingRequestRevision: 2,
+      clarifications: [
+        { questionId: "delivery-rhythm", answer: "Every weekday" },
+      ],
+    });
+    expect(state.messages.at(-2)?.text).toBe("Every weekday");
+  });
+
   it("builds one revisioned draft through focused Steward questions", () => {
     let state = createRitualBuilderState();
     state = reduceRitualBuilder(state, {

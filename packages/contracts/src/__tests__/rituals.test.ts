@@ -9,6 +9,7 @@ import {
   ritualLearningContextSchema,
   ritualLearningProposalSchema,
   ritualStewardContextSchema,
+  ritualStewardQuestionContentSchema,
   ritualStewardProposalSchema,
   ritualTestRunRequestSchema,
   ritualTestRunResultSchema,
@@ -70,6 +71,106 @@ const draft = {
 };
 
 describe("Ritual contracts", () => {
+  it("binds one bounded clarification question and rejects repeated question ids", () => {
+    const question = ritualStewardQuestionContentSchema.parse({
+      stewardMessage: "One choice will make this Ritual more useful.",
+      questionId: "delivery-rhythm",
+      prompt: "When should the Steward prepare this result?",
+      options: [
+        {
+          optionId: "on-demand",
+          label: "Only when I ask",
+          detail: "Keep the Ritual manual while it is learning.",
+        },
+        {
+          optionId: "weekdays",
+          label: "Every weekday",
+          detail: "Prepare it each weekday morning.",
+        },
+      ],
+      allowFreeText: true,
+    });
+    expect(question.options).toHaveLength(2);
+    expect(
+      ritualStewardQuestionContentSchema.safeParse({
+        ...question,
+        options: [question.options[0], question.options[0]],
+      }).success,
+    ).toBe(false);
+    expect(
+      ritualStewardQuestionContentSchema.safeParse({
+        ...question,
+        allowFreeText: false,
+      }).success,
+    ).toBe(false);
+    expect(
+      ritualStewardQuestionContentSchema.safeParse({
+        ...question,
+        options: [
+          question.options[0],
+          {
+            ...question.options[1],
+            label: question.options[0]!.label.toUpperCase(),
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      validateRitualStewardResult(
+        {
+          schemaVersion: 1,
+          draftId: "rtd_01J00000000000000000000000",
+          requestRevision: 1,
+          ownerPurpose:
+            "Review my email and identify the highest priority reply.",
+        },
+        {
+          status: "question",
+          draftId: "rtd_01J00000000000000000000000",
+          requestRevision: 1,
+          ...question,
+          options: [question.options[0], question.options[0]],
+        },
+      ),
+    ).toMatchObject({
+      status: "waiting",
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    });
+
+    const context = ritualStewardContextSchema.parse({
+      schemaVersion: 1,
+      draftId: "rtd_01J00000000000000000000000",
+      requestRevision: 2,
+      ownerPurpose: "Review my email and identify the highest priority reply.",
+      clarifications: [
+        { questionId: "delivery-rhythm", answer: "Every weekday" },
+      ],
+    });
+    expect(context.clarifications).toEqual([
+      { questionId: "delivery-rhythm", answer: "Every weekday" },
+    ]);
+    expect(
+      ritualStewardContextSchema.safeParse({
+        ...context,
+        clarifications: [
+          ...(context.clarifications ?? []),
+          { questionId: "delivery-rhythm", answer: "Only when I ask" },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      validateRitualStewardResult(context, {
+        status: "question",
+        draftId: context.draftId,
+        requestRevision: context.requestRevision,
+        ...question,
+      }),
+    ).toMatchObject({
+      status: "waiting",
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    });
+  });
+
   it("binds an executable local schedule to one approved Ritual revision", () => {
     const schedule = ritualScheduleSchema.parse({
       schemaVersion: 1,

@@ -8,9 +8,10 @@ import {
   ritualLearningProposalContentSchema,
   ritualLearningResultSchema,
   ritualStewardContextSchema,
-  ritualStewardProposalContentJsonSchema,
   ritualStewardProposalContentSchema,
+  ritualStewardQuestionContentSchema,
   ritualStewardResultSchema,
+  ritualStewardTurnContentJsonSchema,
   researchForRitualStarter,
   type RitualStewardContext,
   type RitualStewardResult,
@@ -157,8 +158,15 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
           schemaVersion: 1,
           ownerPurpose: context.ownerPurpose,
           ...(context.starter ? { starter: context.starter } : {}),
+          ...(context.clarifications
+            ? { clarifications: context.clarifications }
+            : {}),
           constraints: {
             maximumSteps: 6,
+            maximumClarifications: 4,
+            clarificationMode: context.starter
+              ? "NONE"
+              : "ONE_CONSEQUENTIAL_QUESTION_AT_A_TIME",
             externalEffects: "OWNER_APPROVAL_REQUIRED",
             publicWebResearch: "EXA_OPTIONAL_MAX_30_DAYS",
             learning: "PROPOSE_ONLY",
@@ -167,6 +175,15 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
         },
         { toolName: "village_ritual_draft", timeoutMs: 30_000 },
       );
+      const question = ritualStewardQuestionContentSchema.safeParse(raw);
+      if (question.success) {
+        return ritualStewardResultSchema.parse({
+          status: "question",
+          draftId: context.draftId,
+          requestRevision: context.requestRevision,
+          ...question.data,
+        });
+      }
       const proposal = ritualStewardProposalContentSchema.safeParse(
         normalizeProposalStepKeys(raw),
       );
@@ -271,14 +288,14 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
       experimentalRawEvents: false,
       environments: [],
       baseInstructions:
-        "You are the Village Steward. Turn one bounded owner purpose into a concise Ritual draft. Call village_ritual_draft exactly once. Use 1 to 6 semantic steps. Add one bounded EXA research resource only when the outcome requires current public-web information; use a focused query, at most 5 results, and a lookback of at most 30 days. When starter.kind is LAST_30_DAYS, shape a grounded public-web signal brief for its exact topic; Village binds the resource locally to that topic, 5 results, and 30 days. Do not claim Reddit, X, YouTube, or engagement-specific coverage. Do not use public-web research for private email, accounts, messages, or connected records. Every external effect must require owner approval. Never add credentials, raw source content, full URLs, code, execution commands, autonomous learning, or a Run capability.",
+        "You are the Village Steward. Shape one bounded owner purpose into a concise Ritual agreement through the village_ritual_draft tool. For a custom purpose with no answers, prefer one consequential clarification when the trigger, input, approval, or expected result is materially ambiguous; otherwise propose the draft. Ask at most one question per turn with 2 to 4 materially distinct options and an honest free-text escape hatch. Never repeat an answered question and propose after at most 4 answers. Starters are already bounded and must go directly to a proposal. A proposal uses 1 to 6 semantic steps. Add one bounded EXA research resource only when the outcome requires current public-web information; use a focused query, at most 5 results, and a lookback of at most 30 days. When starter.kind is LAST_30_DAYS, shape a grounded public-web signal brief for its exact topic; Village binds the resource locally to that topic, 5 results, and 30 days. Do not claim Reddit, X, YouTube, or engagement-specific coverage. Do not use public-web research for private email, accounts, messages, or connected records. Every external effect must require owner approval. Never add credentials, raw source content, full URLs, code, execution commands, autonomous learning, or a Run capability.",
       dynamicTools: [
         {
           type: "function",
           name: "village_ritual_draft",
           description:
-            "Propose a bounded Ritual charter. Village validates it locally and does not execute it.",
-          inputSchema: ritualStewardProposalContentJsonSchema,
+            "Ask one bounded clarification or propose a bounded Ritual agreement. Village validates it locally and does not execute it.",
+          inputSchema: ritualStewardTurnContentJsonSchema,
         },
       ],
     })) as { thread?: { id?: unknown } };
