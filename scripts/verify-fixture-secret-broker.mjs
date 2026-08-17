@@ -90,6 +90,10 @@ export function assertFixtureSecretBrokerEvidence(
     report.devToolsOpened !== false ||
     report.browserStorageSeeded !== true ||
     report.permissionPolicyEnforced !== true ||
+    report.browserCrashFenced !== true ||
+    report.browserCrashWaiting !== true ||
+    report.trustedRendererRecovered !== true ||
+    report.crashDiagnosticsBounded !== true ||
     report.bindingMatrixRejected !== true ||
     report.absentTokenRejected !== true ||
     report.expiredTokenRejected !== true ||
