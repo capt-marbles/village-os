@@ -1,5 +1,13 @@
 import { OWNED_FIXTURE_ORIGIN } from "@village/contracts";
-import { app, BaseWindow, clipboard, session, type Session } from "electron";
+import {
+  app,
+  BaseWindow,
+  clipboard,
+  protocol,
+  session,
+  type Session,
+  WebContentsView,
+} from "electron";
 import {
   createCipheriv,
   createDecipheriv,
@@ -33,6 +41,11 @@ import {
   completePendingSessionErasure,
   PendingSessionErasureStore,
 } from "./pending-session-erasure.js";
+import { registerVillageScheme } from "./local-app-protocol.js";
+import { RenderProcessRecovery } from "./render-process-recovery.js";
+import { LocalActionExecutor } from "../browser/local-action-executor.js";
+import { DesktopBrowserUiState } from "./desktop-browser-ui-state.js";
+import type { LocalDiagnostic } from "./crash-reporting.js";
 
 const targetProfileScope: ProfileScope = {
   principalId: "prn_01J00000000000000000000000",
@@ -51,6 +64,7 @@ const siblingCookieValue = "sibling-session-preserved";
 // The release package excludes this entry; the dedicated profile proof owns
 // the real macOS Keychain gate.
 app.commandLine.appendSwitch("use-mock-keychain");
+registerVillageScheme(protocol);
 
 function reportProofStage(stage: string): void {
   process.stderr.write(`VILLAGE_PROOF_STAGE:${stage}\n`);
@@ -224,6 +238,16 @@ async function run(): Promise<void> {
   app.setPath("userData", profilePath);
   installGlobalSecurityPolicy(app);
   await app.whenReady();
+  await session.defaultSession.protocol.handle("village", async (request) => {
+    const url = new URL(request.url);
+    if (url.host !== "app" || url.pathname !== "/") {
+      return new Response("Not found", { status: 404 });
+    }
+    return new Response(
+      "<!doctype html><html><body><p>Village crash recovery proof</p></body></html>",
+      { headers: { "content-type": "text/html; charset=utf-8" } },
+    );
+  });
   reportProofStage("APP_READY");
   if (restartErasureReport) {
     await runRestartErasureVerification(profilePath, restartErasureReport);
@@ -464,6 +488,70 @@ async function run(): Promise<void> {
     );
     const devToolsOpened = host.view.webContents.isDevToolsOpened();
 
+    const trustedView = new WebContentsView();
+    trustedView.setBounds({ x: 799, y: 599, width: 1, height: 1 });
+    window.contentView.addChildView(trustedView);
+    await trustedView.webContents.loadURL("village://app/");
+    const crashUiState = new DesktopBrowserUiState();
+    const crashExecutor = new LocalActionExecutor({ leaseEpoch: 1 });
+    const crashDiagnostics: LocalDiagnostic[] = [];
+    let trustedReloadUrl: string | undefined;
+    let trustedStateRepublished = false;
+    const crashRecovery = new RenderProcessRecovery({
+      browser: host.view.webContents,
+      trustedRenderer: trustedView.webContents,
+      fenceBrowser: () => crashExecutor.markOfflineTakeover(),
+      markBrowserUnavailable: () => crashUiState.markConnection("ABSENT"),
+      capture: (diagnostic) => crashDiagnostics.push(diagnostic),
+      reloadTrustedRenderer: async (url) => {
+        trustedReloadUrl = url;
+        await trustedView.webContents.loadURL(url);
+      },
+      republishTrustedState: () => {
+        trustedStateRepublished = true;
+      },
+    });
+    crashRecovery.start();
+    const remoteRendererGone = new Promise<void>((resolve) =>
+      host!.view.webContents.once("render-process-gone", () => resolve()),
+    );
+    host.view.webContents.forcefullyCrashRenderer();
+    await remoteRendererGone;
+    const browserCrashFenced = crashExecutor.isAutomationBlocked();
+    const browserCrashWaiting =
+      crashUiState.current().connection === "ABSENT" &&
+      crashUiState.current().jobState === "WAITING_FOR_BROWSER" &&
+      crashUiState.current().controller === "NONE";
+
+    const trustedRendererGone = new Promise<void>((resolve) =>
+      trustedView.webContents.once("render-process-gone", () => resolve()),
+    );
+    trustedView.webContents.forcefullyCrashRenderer();
+    await trustedRendererGone;
+    await crashRecovery.settled();
+    const trustedRendererRecovered =
+      trustedReloadUrl === "village://app/" &&
+      trustedStateRepublished &&
+      trustedView.webContents.getURL() === "village://app/";
+    const crashDiagnosticsBounded =
+      JSON.stringify(crashDiagnostics) ===
+      JSON.stringify([
+        {
+          component: "BROWSER_HOST",
+          code: "REMOTE_RENDERER_GONE",
+          retriable: true,
+        },
+        {
+          component: "BROWSER_HOST",
+          code: "TRUSTED_RENDERER_GONE",
+          retriable: true,
+        },
+      ]);
+    crashRecovery.stop();
+    if (!trustedView.webContents.isDestroyed()) trustedView.webContents.close();
+    window.contentView.removeChildView(trustedView);
+    reportProofStage("RENDERER_CRASH_RECOVERY_VERIFIED");
+
     const erasureBinding = {
       principalId: targetProfileScope.principalId,
       deviceId: targetProfileScope.deviceId,
@@ -591,6 +679,10 @@ async function run(): Promise<void> {
         devToolsOpened,
         browserStorageSeeded,
         permissionPolicyEnforced,
+        browserCrashFenced,
+        browserCrashWaiting,
+        trustedRendererRecovered,
+        crashDiagnosticsBounded,
         bindingMatrixRejected,
         absentTokenRejected,
         expiredTokenRejected:

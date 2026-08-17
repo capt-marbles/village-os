@@ -31,6 +31,7 @@ import { ControlTransferGate } from "./control-transfer-gate.js";
 import { BrowserControlTransfer } from "./browser-control-transfer.js";
 import { isTrustedVillageSender, trustedWebPreferences } from "./security.js";
 import { CrashReporter, type LocalDiagnostic } from "./crash-reporting.js";
+import { RenderProcessRecovery } from "./render-process-recovery.js";
 import type { ModelProviderAccountOperations } from "./model-provider-account.js";
 import {
   personalAgentTaskActivitySchema,
@@ -175,6 +176,7 @@ export async function createVillageAppWindow(
   });
   let browserHost: LocalBrowserHost | undefined;
   let fixtureBrowserHost: LocalBrowserHost | undefined;
+  let stopFixtureCrashRecovery: (() => void) | undefined;
   try {
     const [primaryHost] = await Promise.all([browserHostCreation, shieldLoad]);
     browserHost = primaryHost;
@@ -254,11 +256,16 @@ export async function createVillageAppWindow(
         attached = true;
         fixtureBrowserHost = fixtureHost;
         hostManager = manager;
+        stopFixtureCrashRecovery = renderProcessRecovery.watchBrowser(
+          fixtureHost.view.webContents,
+        );
         layout();
         return manager;
       } catch (error) {
         fixtureBrowserHost = undefined;
         hostManager = undefined;
+        stopFixtureCrashRecovery?.();
+        stopFixtureCrashRecovery = undefined;
         if (attached) window.contentView.removeChildView(fixtureHost.view);
         options.delegatedWorkflow!.invalidateFixtureHost?.(fixtureHost);
         await fixtureHost.close();
@@ -284,6 +291,33 @@ export async function createVillageAppWindow(
       );
     }
   };
+  const publishTrustedState = () => {
+    if (appView.webContents.isDestroyed()) return;
+    appView.webContents.send("village:browser-ui-state", uiState.current());
+    appView.webContents.send(
+      "village:browser-diagnostics",
+      diagnostics.snapshot(),
+    );
+    if (options.delegatedWorkflow) {
+      appView.webContents.send(
+        "village:delegated-workflow-state",
+        options.delegatedWorkflow.snapshot(),
+      );
+    }
+  };
+  const renderProcessRecovery = new RenderProcessRecovery({
+    browser: browserHost.view.webContents,
+    trustedRenderer: appView.webContents,
+    fenceBrowser: () => {
+      executor.markOfflineTakeover();
+      options.delegatedWorkflow?.fence("TASK_SWITCH");
+      viewport.restoreAgentControl();
+    },
+    markBrowserUnavailable: () => uiState.markConnection("ABSENT"),
+    capture: reportLocalDiagnostic,
+    reloadTrustedRenderer: async (url) => appView.webContents.loadURL(url),
+    republishTrustedState: publishTrustedState,
+  });
   const controlTransfer = new BrowserControlTransfer(
     uiState,
     viewport,
@@ -690,6 +724,8 @@ export async function createVillageAppWindow(
     if (closing) return;
     event.preventDefault();
     closing = true;
+    renderProcessRecovery.stop();
+    stopFixtureCrashRecovery?.();
     unsubscribeUiState();
     unsubscribeWorkflow?.();
     for (const channel of [
@@ -718,6 +754,7 @@ export async function createVillageAppWindow(
       options.modelProviderAccount.close(),
     ]).finally(() => window.destroy());
   });
+  renderProcessRecovery.start();
   try {
     await appView.webContents.loadURL("village://app/");
   } catch (error) {
