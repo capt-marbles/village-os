@@ -99,6 +99,112 @@ export const ritualResearchEvidenceSchema = z.strictObject({
   sources: z.array(ritualResearchEvidenceSourceSchema).max(5),
 });
 
+const ritualResearchReportTextSchema = (maximum: number) =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(maximum)
+    .refine((value) => !/(?:https?:\/\/|www\.)/i.test(value), {
+      message: "Research report text must not contain URLs",
+    });
+
+export const ritualResearchReportContentSchema = z.strictObject({
+  headline: ritualResearchReportTextSchema(160),
+  summary: ritualResearchReportTextSchema(1_200),
+  findings: z
+    .array(
+      z.strictObject({
+        claim: ritualResearchReportTextSchema(600),
+        sourceNumbers: z.array(z.number().int().min(1).max(5)).min(1).max(5),
+      }),
+    )
+    .min(1)
+    .max(6),
+  uncertainties: z.array(ritualResearchReportTextSchema(280)).max(6),
+});
+
+export const ritualResearchReportSchema = ritualResearchReportContentSchema
+  .safeExtend({
+    availableSourceCount: z.number().int().min(1).max(5),
+  })
+  .superRefine((report, context) => {
+    for (const [findingIndex, finding] of report.findings.entries()) {
+      if (
+        new Set(finding.sourceNumbers).size !== finding.sourceNumbers.length
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["findings", findingIndex, "sourceNumbers"],
+          message: "Research citations must be unique",
+        });
+      }
+      if (
+        finding.sourceNumbers.some(
+          (sourceNumber) => sourceNumber > report.availableSourceCount,
+        )
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["findings", findingIndex, "sourceNumbers"],
+          message: "Research citations must reference supplied sources",
+        });
+      }
+    }
+  });
+
+export const ritualResearchSynthesisContextSchema = z
+  .strictObject({
+    schemaVersion: z.literal(1),
+    ritual: z.strictObject({
+      name: shortLabelSchema,
+      purpose: sentenceSchema,
+      completion: sentenceSchema,
+    }),
+    sources: z
+      .array(
+        z.strictObject({
+          sourceNumber: z.number().int().min(1).max(5),
+          title: ritualResearchEvidenceSourceSchema.shape.title,
+          publishedAt: ritualResearchEvidenceSourceSchema.shape.publishedAt,
+          author: ritualResearchEvidenceSourceSchema.shape.author,
+          highlight: z.string().trim().min(1).max(500).nullable(),
+          taint: z.literal("UNTRUSTED_WEB"),
+        }),
+      )
+      .min(1)
+      .max(5),
+  })
+  .superRefine((context, refinement) => {
+    if (
+      context.sources.some((source, index) => source.sourceNumber !== index + 1)
+    ) {
+      refinement.addIssue({
+        code: "custom",
+        path: ["sources"],
+        message: "Research sources must use contiguous local citation numbers",
+      });
+    }
+  });
+
+export const ritualResearchReportContentJsonSchema = z.toJSONSchema(
+  ritualResearchReportContentSchema,
+);
+
+export const ritualResearchSynthesisResultSchema = z.discriminatedUnion(
+  "status",
+  [
+    z.strictObject({
+      status: z.literal("report"),
+      report: ritualResearchReportSchema,
+    }),
+    z.strictObject({
+      status: z.literal("waiting"),
+      reason: ritualProviderWaitingReasonSchema,
+    }),
+  ],
+);
+
 const ritualDefinition = {
   name: shortLabelSchema,
   purpose: sentenceSchema,
@@ -280,25 +386,28 @@ export const ritualRunCancelRequestSchema = z.strictObject({
   runId: ritualRunIdSchema,
 });
 
-export const ritualRunStepStateSchema = z.strictObject({
-  stepKey: ritualStepSchema.shape.stepKey,
-  title: ritualStepSchema.shape.title,
-  actor: ritualActorSchema,
-  approval: ritualStepSchema.shape.approval,
-  status: z.enum([
-    "PENDING",
-    "WAITING_FOR_OWNER",
-    "RUNNING",
-    "WAITING_FOR_RESOURCE",
-    "COMPLETED",
-    "FAILED",
-    "CANCELED",
-  ]),
-  startedAt: instantSchema.nullable(),
-  approvedAt: instantSchema.nullable(),
-  completedAt: instantSchema.nullable(),
-  research: ritualResearchEvidenceSchema.nullable().optional(),
-});
+export const ritualRunStepStateSchema = z
+  .strictObject({
+    stepKey: ritualStepSchema.shape.stepKey,
+    title: ritualStepSchema.shape.title,
+    actor: ritualActorSchema,
+    approval: ritualStepSchema.shape.approval,
+    status: z.enum([
+      "PENDING",
+      "WAITING_FOR_OWNER",
+      "RUNNING",
+      "WAITING_FOR_RESOURCE",
+      "COMPLETED",
+      "FAILED",
+      "CANCELED",
+    ]),
+    startedAt: instantSchema.nullable(),
+    approvedAt: instantSchema.nullable(),
+    completedAt: instantSchema.nullable(),
+    research: ritualResearchEvidenceSchema.nullable().optional(),
+    report: ritualResearchReportSchema.nullable().optional(),
+  })
+  .superRefine(validateResearchReportBinding);
 
 export const ritualRunSchema = z
   .strictObject({
@@ -326,6 +435,7 @@ export const ritualRunSchema = z
       .enum(["EXECUTOR_FAILED", "INTERRUPTED", "POLICY_DENIED"])
       .nullable(),
     waitingReason: webResearchWaitingReasonSchema.nullable().optional(),
+    waitingSource: z.enum(["RESEARCH", "STEWARD"]).nullable().optional(),
     createdAt: instantSchema,
     startedAt: instantSchema.nullable(),
     updatedAt: instantSchema,
@@ -426,6 +536,13 @@ export const ritualRunSchema = z
         message: "Only resource waits carry a reason",
       });
     }
+    if (run.waitingSource != null && run.status !== "WAITING_FOR_RESOURCE") {
+      context.addIssue({
+        code: "custom",
+        path: ["waitingSource"],
+        message: "Only resource waits identify a provider",
+      });
+    }
     if (
       (run.status === "COMPLETED" || run.status === "NEEDS_REVIEW") &&
       (run.currentStepKey !== null ||
@@ -458,12 +575,15 @@ export const ritualRunReceiptSchema = z.strictObject({
   summary: z.string().trim().min(1).max(2_000),
   stepEvidence: z
     .array(
-      z.strictObject({
-        stepKey: ritualStepSchema.shape.stepKey,
-        title: ritualStepSchema.shape.title,
-        actor: ritualActorSchema,
-        research: ritualResearchEvidenceSchema.nullable().optional(),
-      }),
+      z
+        .strictObject({
+          stepKey: ritualStepSchema.shape.stepKey,
+          title: ritualStepSchema.shape.title,
+          actor: ritualActorSchema,
+          research: ritualResearchEvidenceSchema.nullable().optional(),
+          report: ritualResearchReportSchema.nullable().optional(),
+        })
+        .superRefine(validateResearchReportBinding),
     )
     .min(1)
     .max(12),
@@ -899,6 +1019,13 @@ export type RitualStarter = z.infer<typeof ritualStarterSchema>;
 export type RitualResearchEvidence = z.infer<
   typeof ritualResearchEvidenceSchema
 >;
+export type RitualResearchReport = z.infer<typeof ritualResearchReportSchema>;
+export type RitualResearchSynthesisContext = z.infer<
+  typeof ritualResearchSynthesisContextSchema
+>;
+export type RitualResearchSynthesisResult = z.infer<
+  typeof ritualResearchSynthesisResultSchema
+>;
 export type RitualTestRunRequest = z.infer<typeof ritualTestRunRequestSchema>;
 export type RitualTestRunProviderContext = z.infer<
   typeof ritualTestRunProviderContextSchema
@@ -1090,11 +1217,13 @@ export function createRitualRun(input: {
       approvedAt: null,
       completedAt: null,
       research: null,
+      report: null,
     })),
     permissions: approved.permissions,
     externalEffects: [],
     failureCode: null,
     waitingReason: null,
+    waitingSource: null,
     createdAt: input.createdAt,
     startedAt: null,
     updatedAt: input.createdAt,
@@ -1109,11 +1238,20 @@ export type RitualRunEvent =
       type: "COMPLETE_STEP";
       stepKey: string;
       research?: z.infer<typeof ritualResearchEvidenceSchema>;
+      report?: z.infer<typeof ritualResearchReportSchema>;
+      occurredAt: string;
+    }
+  | {
+      type: "CHECKPOINT_RESEARCH";
+      stepKey: string;
+      research: z.infer<typeof ritualResearchEvidenceSchema>;
       occurredAt: string;
     }
   | {
       type: "WAIT_FOR_RESOURCE";
       reason: z.infer<typeof webResearchWaitingReasonSchema>;
+      source?: "RESEARCH" | "STEWARD";
+      research?: z.infer<typeof ritualResearchEvidenceSchema>;
       occurredAt: string;
     }
   | { type: "RETRY_RESOURCE"; occurredAt: string }
@@ -1196,7 +1334,11 @@ export function reduceRitualRun(
     }
     const steps = current.steps.map((step, stepIndex) =>
       stepIndex === index
-        ? { ...step, status: "WAITING_FOR_RESOURCE" as const }
+        ? {
+            ...step,
+            status: "WAITING_FOR_RESOURCE" as const,
+            research: event.research ?? step.research ?? null,
+          }
         : step,
     );
     return parseRun({
@@ -1205,6 +1347,28 @@ export function reduceRitualRun(
       status: "WAITING_FOR_RESOURCE",
       steps,
       waitingReason: event.reason,
+      waitingSource: event.source ?? "RESEARCH",
+      updatedAt: event.occurredAt,
+    });
+  }
+
+  if (event.type === "CHECKPOINT_RESEARCH") {
+    const index = current.steps.findIndex(
+      (step) =>
+        step.stepKey === event.stepKey &&
+        step.stepKey === current.currentStepKey &&
+        step.status === "RUNNING",
+    );
+    if (current.status !== "RUNNING" || index < 0) {
+      return illegalRunTransition();
+    }
+    const steps = current.steps.map((step, stepIndex) =>
+      stepIndex === index ? { ...step, research: event.research } : step,
+    );
+    return parseRun({
+      ...current,
+      revision: current.revision + 1,
+      steps,
       updatedAt: event.occurredAt,
     });
   }
@@ -1227,6 +1391,7 @@ export function reduceRitualRun(
       status: "RUNNING",
       steps,
       waitingReason: null,
+      waitingSource: null,
       updatedAt: event.occurredAt,
     });
   }
@@ -1249,6 +1414,7 @@ export function reduceRitualRun(
             status: "COMPLETED" as const,
             completedAt: event.occurredAt,
             research: event.research ?? step.research ?? null,
+            report: event.report ?? step.report ?? null,
           }
         : step,
     );
@@ -1302,6 +1468,7 @@ export function reduceRitualRun(
       steps: stopOpenSteps(current.steps, "FAILED", event.occurredAt),
       failureCode: event.failureCode,
       waitingReason: null,
+      waitingSource: null,
       startedAt: current.startedAt ?? event.occurredAt,
       updatedAt: event.occurredAt,
       completedAt: event.occurredAt,
@@ -1316,6 +1483,7 @@ export function reduceRitualRun(
     currentStepKey: null,
     steps: stopOpenSteps(current.steps, "CANCELED", event.occurredAt),
     waitingReason: null,
+    waitingSource: null,
     updatedAt: event.occurredAt,
     completedAt: event.occurredAt,
   });
@@ -1352,12 +1520,17 @@ export function createRitualRunReceipt(input: {
       title: step.title,
       actor: step.actor,
       research: step.research ?? null,
+      report: step.report ?? null,
     })),
-    uncertainties: run.steps.some((step) => step.research)
+    uncertainties: run.steps.some(
+      (step) => (step.research?.sources.length ?? 0) > 0,
+    )
       ? ["Web evidence is untrusted source material and requires owner review."]
-      : [
-          "No external provider was invoked; this Receipt proves orchestration only.",
-        ],
+      : run.steps.some((step) => step.research != null)
+        ? ["Exa returned no qualifying sources for the approved search window."]
+        : [
+            "No external provider was invoked; this Receipt proves orchestration only.",
+          ],
     externalEffects: [],
     startedAt: run.startedAt,
     recordedAt: input.recordedAt,
@@ -1387,7 +1560,9 @@ export function validateRitualRunReceipt(
         evidence.actor.kind !== step.actor.kind ||
         evidence.actor.role !== step.actor.role ||
         JSON.stringify(evidence.research ?? null) !==
-          JSON.stringify(step.research ?? null)
+          JSON.stringify(step.research ?? null) ||
+        JSON.stringify(evidence.report ?? null) !==
+          JSON.stringify(step.report ?? null)
       );
     })
   ) {
@@ -1703,6 +1878,26 @@ function containsRawTestSample(
     const normalizedField = field.trim().replace(/\s+/g, " ").toLowerCase();
     return normalizedField.includes(normalizedSample);
   });
+}
+
+function validateResearchReportBinding(
+  value: {
+    research?: { sources: readonly unknown[] } | null | undefined;
+    report?: { availableSourceCount: number } | null | undefined;
+  },
+  context: z.RefinementCtx,
+): void {
+  if (
+    value.report &&
+    (!value.research ||
+      value.report.availableSourceCount !== value.research.sources.length)
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["report", "availableSourceCount"],
+      message: "Research reports must bind every available source exactly",
+    });
+  }
 }
 
 function testRunWaiting(

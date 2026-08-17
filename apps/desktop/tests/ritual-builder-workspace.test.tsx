@@ -188,6 +188,18 @@ researchCompletedRun = reduceRitualRun(researchCompletedRun, researchApproved, {
       },
     ],
   },
+  report: {
+    headline: "Agent tooling moved toward reviewable background work",
+    summary: "The announcement presents background work with owner visibility.",
+    findings: [
+      {
+        claim: "The launch emphasizes reviewable background work.",
+        sourceNumbers: [1],
+      },
+    ],
+    uncertainties: ["One announcement is not a reliability benchmark."],
+    availableSourceCount: 1,
+  },
   occurredAt: "2026-08-16T13:00:04.000Z",
 });
 researchCompletedRun = reduceRitualRun(researchCompletedRun, researchApproved, {
@@ -1062,6 +1074,15 @@ describe("RitualBuilderWorkspace", () => {
     expect(screen.getByText("A bounded untrusted excerpt.")).toBeTruthy();
     expect(screen.getByText("https://example.com/announcement")).toBeTruthy();
     expect(
+      screen.getByRole("heading", {
+        name: "Agent tooling moved toward reviewable background work",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByText("The launch emphasizes reviewable background work."),
+    ).toBeTruthy();
+    expect(screen.getByText("Source 1")).toBeTruthy();
+    expect(
       screen.getByText("No external mutations; public-web search only"),
     ).toBeTruthy();
   });
@@ -1084,6 +1105,28 @@ describe("RitualBuilderWorkspace", () => {
     await screen.findByText("Exa research is waiting");
     expect(screen.getByText(/credits are exhausted/u)).toBeTruthy();
     expect(screen.queryByText(/rejected the approved query/u)).toBeNull();
+  });
+
+  it("routes Steward recovery to ChatGPT without blaming Exa", async () => {
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved: researchApproved,
+      receipt: null,
+      run: {
+        ...researchWaitingRun,
+        waitingReason: "AUTHENTICATION_REQUIRED",
+        waitingSource: "STEWARD",
+      } as typeof researchWaitingRun,
+      runReceipt: null,
+    });
+
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+
+    await screen.findByText("Steward report is waiting");
+    expect(screen.getByText(/Connect ChatGPT for the Steward/u)).toBeTruthy();
+    expect(screen.queryByText(/replace the Exa key/u)).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry report" })).toBeTruthy();
   });
 
   it("keeps cancellation available during a deferred research retry and ignores its late result", async () => {

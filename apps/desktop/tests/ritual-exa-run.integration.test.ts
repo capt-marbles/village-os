@@ -71,6 +71,21 @@ describe("approved Ritual Exa execution", () => {
       },
       fetch,
     });
+    const synthesizeResearch = vi.fn(async () => ({
+      status: "report" as const,
+      report: {
+        headline: "Agent launch signals governed background work",
+        summary: "The supplied announcement describes reviewable agent work.",
+        findings: [
+          {
+            claim: "The launch emphasizes visible, reviewable background work.",
+            sourceNumbers: [1],
+          },
+        ],
+        uncertainties: ["One announcement cannot establish reliability."],
+        availableSourceCount: 1,
+      },
+    }));
     const controller = new RitualBuilderController(
       {
         draft: async () => {
@@ -93,6 +108,7 @@ describe("approved Ritual Exa execution", () => {
         now: () => "2026-08-16T12:00:00.000Z",
         runExecutor: new LocalRitualRunExecutor({
           research: provider,
+          synthesis: { synthesizeResearch },
           now: () => "2026-08-16T12:00:00.000Z",
         }),
       },
@@ -122,6 +138,10 @@ describe("approved Ritual Exa execution", () => {
                 },
               ],
             },
+            report: {
+              headline: "Agent launch signals governed background work",
+              findings: [{ sourceNumbers: [1] }],
+            },
           },
         ],
       },
@@ -131,6 +151,28 @@ describe("approved Ritual Exa execution", () => {
       runReceipt: { receiptId: "rcp_01J00000000000000000000010" },
     });
     expect(fetch).toHaveBeenCalledOnce();
+    expect(synthesizeResearch).toHaveBeenCalledOnce();
+    expect(synthesizeResearch).toHaveBeenCalledWith(
+      {
+        schemaVersion: 1,
+        ritual: {
+          name: approved.name,
+          purpose: approved.purpose,
+          completion: approved.completion,
+        },
+        sources: [
+          {
+            sourceNumber: 1,
+            title: "Agent launch",
+            publishedAt: "2026-08-15T00:00:00.000Z",
+            author: "Example author",
+            highlight: "A bounded public excerpt.",
+            taint: "UNTRUSTED_WEB",
+          },
+        ],
+      },
+      { signal: expect.any(AbortSignal) },
+    );
   });
 
   it("retries the same durable waiting Run after restart and persists sanitized evidence", async () => {
@@ -203,7 +245,26 @@ describe("approved Ritual Exa execution", () => {
             ? "rrn_01J00000000000000000000012"
             : "rcp_01J00000000000000000000012",
         now: () => "2026-08-16T12:01:00.000Z",
-        runExecutor: new LocalRitualRunExecutor({ research: { search } }),
+        runExecutor: new LocalRitualRunExecutor({
+          research: { search },
+          synthesis: {
+            synthesizeResearch: async (context) => ({
+              status: "report",
+              report: {
+                headline: "Restarted research produced a cited brief",
+                summary: "The retained Run completed from bounded evidence.",
+                findings: [
+                  {
+                    claim: "The first source supports the brief.",
+                    sourceNumbers: [1],
+                  },
+                ],
+                uncertainties: [],
+                availableSourceCount: context.sources.length,
+              },
+            }),
+          },
+        }),
       },
     );
 
@@ -230,5 +291,186 @@ describe("approved Ritual Exa execution", () => {
       "h".repeat(500),
     ]);
     expect(search).toHaveBeenCalledOnce();
+  });
+
+  it("records an honest Receipt when Exa finds no qualifying sources", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-ritual-exa-"));
+    onTestFinished(() => rm(directory, { recursive: true, force: true }));
+    const repository = new RitualRepository(join(directory, "rituals.json"));
+    await repository.save(approved);
+    const search = vi.fn(async () => ({
+      status: "result" as const,
+      provider: "EXA" as const,
+      requestId: "exa-empty-integrated",
+      sources: [],
+    }));
+    const controller = new RitualBuilderController(
+      {
+        draft: async () => {
+          throw new Error("not used");
+        },
+        testRun: async () => {
+          throw new Error("not used");
+        },
+        learn: async () => {
+          throw new Error("not used");
+        },
+        close: async () => undefined,
+      },
+      repository,
+      {
+        createId: (prefix) =>
+          prefix === "rrn"
+            ? "rrn_01J00000000000000000000015"
+            : "rcp_01J00000000000000000000015",
+        now: () => "2026-08-16T12:00:00.000Z",
+        runExecutor: new LocalRitualRunExecutor({ research: { search } }),
+      },
+    );
+
+    await expect(
+      controller.startRun({
+        schemaVersion: 1,
+        ritualId: approved.ritualId,
+        ritualRevision: approved.ritualRevision,
+      }),
+    ).resolves.toMatchObject({
+      status: "receipt",
+      receipt: {
+        summary:
+          "Exa completed the approved search, but no qualifying sources were found.",
+        uncertainties: [
+          "Exa returned no qualifying sources for the approved search window.",
+        ],
+        stepEvidence: [
+          {
+            research: { requestId: "exa-empty-integrated", sources: [] },
+            report: null,
+          },
+        ],
+      },
+    });
+    expect(search).toHaveBeenCalledOnce();
+  });
+
+  it("restores a durable Exa checkpoint when the process stops during synthesis", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-ritual-exa-"));
+    onTestFinished(() => rm(directory, { recursive: true, force: true }));
+    const path = join(directory, "rituals.json");
+    const repository = new RitualRepository(path);
+    await repository.save(approved);
+    const steward = {
+      draft: async () => {
+        throw new Error("not used");
+      },
+      testRun: async () => {
+        throw new Error("not used");
+      },
+      learn: async () => {
+        throw new Error("not used");
+      },
+      close: async () => undefined,
+    };
+    const search = vi.fn(async () => ({
+      status: "result" as const,
+      provider: "EXA" as const,
+      requestId: "exa-before-process-stop",
+      sources: [
+        {
+          title: "Durable source",
+          url: "https://example.com/durable",
+          publishedAt: null,
+          author: null,
+          highlights: ["Evidence persisted before synthesis."],
+          taint: "UNTRUSTED_WEB" as const,
+        },
+      ],
+    }));
+    let synthesisStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      synthesisStarted = resolve;
+    });
+    const interruptedController = new RitualBuilderController(
+      steward,
+      repository,
+      {
+        createId: (prefix) =>
+          prefix === "rrn"
+            ? "rrn_01J00000000000000000000013"
+            : "rcp_01J00000000000000000000013",
+        now: () => "2026-08-16T12:00:00.000Z",
+        runExecutor: new LocalRitualRunExecutor({
+          research: { search },
+          synthesis: {
+            synthesizeResearch: async () => {
+              synthesisStarted();
+              return new Promise(() => undefined);
+            },
+          },
+        }),
+      },
+    );
+    const request = {
+      schemaVersion: 1 as const,
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+    };
+    void interruptedController.startRun(request);
+    await started;
+    await expect(repository.latestSnapshot()).resolves.toMatchObject({
+      run: {
+        status: "RUNNING",
+        steps: [
+          {
+            research: { requestId: "exa-before-process-stop" },
+            report: null,
+          },
+        ],
+      },
+    });
+
+    const restartedSearch = vi.fn(async () => {
+      throw new Error("Exa must not run after a durable checkpoint");
+    });
+    const restarted = new RitualBuilderController(
+      steward,
+      new RitualRepository(path),
+      {
+        createId: () => "rcp_01J00000000000000000000014",
+        now: () => "2026-08-16T12:01:00.000Z",
+        runExecutor: new LocalRitualRunExecutor({
+          research: { search: restartedSearch },
+          synthesis: {
+            synthesizeResearch: async () => ({
+              status: "report",
+              report: {
+                headline: "Durable evidence survived restart",
+                summary: "The report reused the saved Exa evidence.",
+                findings: [
+                  {
+                    claim: "The evidence remained available.",
+                    sourceNumbers: [1],
+                  },
+                ],
+                uncertainties: [],
+                availableSourceCount: 1,
+              },
+            }),
+          },
+        }),
+      },
+    );
+    await expect(restarted.loadLatestState()).resolves.toMatchObject({
+      run: {
+        status: "WAITING_FOR_RESOURCE",
+        waitingSource: "STEWARD",
+      },
+    });
+    await expect(restarted.startRun(request)).resolves.toMatchObject({
+      status: "receipt",
+      run: { status: "NEEDS_REVIEW" },
+    });
+    expect(search).toHaveBeenCalledOnce();
+    expect(restartedSearch).not.toHaveBeenCalled();
   });
 });

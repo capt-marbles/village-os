@@ -90,7 +90,8 @@ export type AppServerToolName =
   | "village_setup_action"
   | "village_ritual_draft"
   | "village_ritual_test_result"
-  | "village_ritual_learning_proposal";
+  | "village_ritual_learning_proposal"
+  | "village_ritual_research_report";
 
 export interface AppServerTransport {
   request(method: string, params: unknown): Promise<unknown>;

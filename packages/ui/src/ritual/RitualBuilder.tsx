@@ -664,14 +664,25 @@ export function RitualBuilder({
             {state.phase === "RUN_WAITING_FOR_RESOURCE" ? (
               <section className="ritual-receipt" role="status">
                 <p className="ritual-eyebrow">Resource needed</p>
-                <h3>Exa research is waiting</h3>
-                <p>{researchWaitingCopy(state.run.waitingReason)}</p>
+                <h3>
+                  {state.run.waitingSource === "STEWARD"
+                    ? "Steward report is waiting"
+                    : "Exa research is waiting"}
+                </h3>
+                <p>
+                  {resourceWaitingCopy(
+                    state.run.waitingReason,
+                    state.run.waitingSource ?? "RESEARCH",
+                  )}
+                </p>
                 <RunStepProgress run={state.run} />
                 <button
                   type="button"
                   onClick={() => onEvent({ type: "START_RUN" })}
                 >
-                  Retry research
+                  {state.run.waitingSource === "STEWARD"
+                    ? "Retry report"
+                    : "Retry research"}
                 </button>
                 <button
                   type="button"
@@ -733,6 +744,7 @@ export function RitualBuilder({
                   </strong>
                 </div>
                 <RunStepProgress run={state.run} />
+                <ResearchReport receipt={state.runReceipt} />
                 <ResearchEvidence receipt={state.runReceipt} />
                 <div className="ritual-receipt__uncertainty">
                   <h4>Boundary</h4>
@@ -1076,6 +1088,60 @@ function ResearchEvidence({ receipt }: { receipt: RitualRunReceipt }) {
   );
 }
 
+function ResearchReport({ receipt }: { receipt: RitualRunReceipt }) {
+  const reportedSteps = receipt.stepEvidence.filter(
+    (step) => step.report && step.research,
+  );
+  if (reportedSteps.length === 0) return null;
+  return (
+    <section aria-label="Steward research report">
+      {reportedSteps.map((step) => {
+        const report = step.report!;
+        const sources = step.research!.sources;
+        return (
+          <article key={step.stepKey}>
+            <p className="ritual-eyebrow">Steward report</p>
+            <h3>{report.headline}</h3>
+            <p>{report.summary}</p>
+            <ol className="ritual-step-list">
+              {report.findings.map((finding, index) => (
+                <li key={`${step.stepKey}-finding-${index + 1}`}>
+                  <span>{String(index + 1).padStart(2, "0")}</span>
+                  <div>
+                    <p>{finding.claim}</p>
+                    <small>
+                      {finding.sourceNumbers.map(
+                        (sourceNumber, citationIndex) => {
+                          const source = sources[sourceNumber - 1];
+                          if (!source) return null;
+                          return (
+                            <span key={sourceNumber}>
+                              {citationIndex > 0 ? " · " : ""}
+                              <cite title={source.title}>
+                                Source {sourceNumber}
+                              </cite>
+                            </span>
+                          );
+                        },
+                      )}
+                    </small>
+                  </div>
+                </li>
+              ))}
+            </ol>
+            {report.uncertainties.length > 0 ? (
+              <div className="ritual-receipt__uncertainty">
+                <h4>What remains uncertain</h4>
+                <p>{report.uncertainties.join(" ")}</p>
+              </div>
+            ) : null}
+          </article>
+        );
+      })}
+    </section>
+  );
+}
+
 function RitualAuditHistory({
   timeline,
   error,
@@ -1218,7 +1284,22 @@ function auditOutcomeLabel(outcome: RitualRunReceipt["outcome"]): string {
   return outcome === "COMPLETED" ? "Completed" : "Needs review";
 }
 
-function researchWaitingCopy(reason: RitualRun["waitingReason"]): string {
+function resourceWaitingCopy(
+  reason: RitualRun["waitingReason"],
+  source: NonNullable<RitualRun["waitingSource"]>,
+): string {
+  if (source === "STEWARD") {
+    switch (reason) {
+      case "AUTHENTICATION_REQUIRED":
+        return "Connect ChatGPT for the Steward, then retry this report without repeating the saved Exa research.";
+      case "TIME_BUDGET_EXHAUSTED":
+        return "The Steward took too long to shape the report. Retry the report without repeating the saved Exa research.";
+      case "MALFORMED_PROVIDER_OUTPUT":
+        return "The Steward returned a report Village could not safely validate. Retry the report without repeating the saved Exa research.";
+      default:
+        return "The Steward is unavailable on this Mac. Check the ChatGPT connection, then retry the report without repeating the saved Exa research.";
+    }
+  }
   switch (reason) {
     case "AUTHENTICATION_REQUIRED":
       return "Add or replace the Exa key above, then retry this exact Run.";
