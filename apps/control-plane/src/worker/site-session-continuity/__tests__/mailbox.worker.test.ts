@@ -235,6 +235,28 @@ describe("Site Session ciphertext mailbox", () => {
     });
   });
 
+  it("cancels its pending alarm before destroying mailbox storage", async () => {
+    const stub = namespace().getByName(
+      `${binding.principalId}:${binding.grantId}:destroy-with-alarm`,
+    );
+    await stub.initialize({
+      binding,
+      sourceSigningPublicKey: await publicJwk(sourceKeys.publicKey),
+      destinationSigningPublicKey: await publicJwk(destinationKeys.publicKey),
+      createdAt: "2026-08-15T18:59:00.000Z",
+      expiresAt: "2026-08-16T19:00:00.000Z",
+    });
+
+    await expect(stub.destroy(binding.principalId)).resolves.toEqual({
+      ok: true,
+      deleted: true,
+    });
+    await runInDurableObject(stub, async (instance) => {
+      await expect(instance.alarm()).resolves.toBeUndefined();
+    });
+    await expect(runDurableObjectAlarm(stub)).resolves.toBe(false);
+  });
+
   it("expires the grant and clears ciphertext through its at-least-once alarm", async () => {
     const stub = namespace().getByName(
       `${binding.principalId}:${binding.grantId}:expiry`,
