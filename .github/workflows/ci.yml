@@ -53,3 +53,4 @@ jobs:
       - run: pnpm verify:delegated-workflow:owner-recovery
       - run: pnpm verify:delegated-workflow:observer-recovery
       - run: pnpm --filter @village/desktop package:mac:continuity-e2e
+      - run: pnpm --filter @village/desktop package:mac:credential-e2e
