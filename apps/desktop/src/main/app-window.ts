@@ -24,7 +24,10 @@ import {
   type SessionErasureBinding,
 } from "./session-erasure.js";
 import { StepUpAuthorizer } from "./step-up-auth.js";
-import { SessionErasureRequestController } from "./session-erasure-request.js";
+import {
+  confirmSessionErasure,
+  SessionErasureRequestController,
+} from "./session-erasure-request.js";
 import { DeviceRevocationRegistry } from "./device-revocation.js";
 import { DesktopBrowserUiState } from "./desktop-browser-ui-state.js";
 import { ControlTransferGate } from "./control-transfer-gate.js";
@@ -364,19 +367,7 @@ export async function createVillageAppWindow(
       });
       return false;
     },
-    confirm: async () => {
-      const confirmation = await dialog.showMessageBox({
-        type: "warning",
-        title: "Forget this local session?",
-        message:
-          "Village will close the browser, clear this site's data, and restart to finish removing the local profile.",
-        buttons: ["Forget session", "Cancel"],
-        defaultId: 1,
-        cancelId: 1,
-        noLink: true,
-      });
-      return confirmation.response === 0;
-    },
+    confirm: () => confirmSessionErasure(dialog),
     authorizer: stepUpAuthorizer,
     coordinator: sessionErasure,
     onStepUpRequired: () => uiState.requireStepUpForErasure(),
