@@ -4,52 +4,33 @@ import {
   runRitualBuilderApplication,
   runVillageApplication,
 } from "./runtime.js";
-import { activateRuntimeSurface } from "./runtime-surface.js";
+import { createProductionActivationCoordinator } from "./production-activation.js";
 import { claimVillageInstance } from "./single-instance.js";
-
-let workspaceLaunch: ReturnType<typeof runVillageApplication> | undefined;
-
-function openBrowserWorkspace() {
-  if (!workspaceLaunch) {
-    workspaceLaunch = runVillageApplication();
-    void workspaceLaunch.catch(() => {
-      workspaceLaunch = undefined;
-    });
-  }
-  return workspaceLaunch;
-}
 
 function reportActivationFailure(error: unknown) {
   console.error("Village browser workspace activation blocked:", error);
 }
 
+const activation = createProductionActivationCoordinator({
+  acceptPairingLink: acceptRuntimePairingLink,
+  runSteward: runRitualBuilderApplication,
+  runBrowserWorkspace: runVillageApplication,
+  reportActivationFailure,
+});
+
 const ownsInstance = claimVillageInstance(app);
 if (ownsInstance) {
-  const activateWorkspace = (arguments_: readonly string[]) =>
-    activateRuntimeSurface(arguments_, {
-      acceptPairingLink: acceptRuntimePairingLink,
-      openBrowserWorkspace: () =>
-        void openBrowserWorkspace().catch(reportActivationFailure),
-    });
-
   app.on("second-instance", (_event, commandLine) => {
-    activateWorkspace(commandLine);
+    activation.activateExistingInstance(commandLine);
   });
   app.on("open-url", (event, url) => {
-    if (activateWorkspace([url])) event.preventDefault();
+    activation.activateOpenUrl(event, url);
   });
 }
 
-let launch: Promise<unknown> = Promise.resolve();
-if (ownsInstance) {
-  const initialWorkspaceActivated = activateRuntimeSurface(process.argv, {
-    acceptPairingLink: acceptRuntimePairingLink,
-    openBrowserWorkspace: () => {
-      launch = openBrowserWorkspace();
-    },
-  });
-  if (!initialWorkspaceActivated) launch = runRitualBuilderApplication();
-}
+const launch: Promise<unknown> = ownsInstance
+  ? activation.initialLaunch(process.argv)
+  : Promise.resolve();
 
 void launch.catch((error: unknown) => {
   console.error("Village startup blocked:", error);

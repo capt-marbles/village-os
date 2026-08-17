@@ -11,7 +11,7 @@ import {
 import { DeviceIdentityVault } from "./device-identity-vault.js";
 import { ElectronSafeStorageProtector } from "./electron-safe-storage.js";
 import {
-  installVillageProtocol,
+  ensureVillageProtocolInstalled,
   registerVillageScheme,
 } from "./local-app-protocol.js";
 import {
@@ -112,7 +112,7 @@ export async function startVillageRuntime(
     modelProviders?: RuntimeModelProviderComposition;
   },
 ): Promise<VillageAppWindow> {
-  installVillageProtocol(
+  ensureVillageProtocolInstalled(
     protocol,
     fileURLToPath(new URL("../renderer", import.meta.url)),
   );
@@ -288,7 +288,7 @@ export async function runVillageApplication(
 export async function runRitualBuilderApplication(): Promise<RitualBuilderWindow> {
   await app.whenReady();
   await ensureRitualServices();
-  installVillageProtocol(
+  ensureVillageProtocolInstalled(
     protocol,
     fileURLToPath(new URL("../renderer", import.meta.url)),
   );

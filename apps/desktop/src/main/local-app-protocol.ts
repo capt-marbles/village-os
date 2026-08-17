@@ -213,10 +213,17 @@ export function registerVillageScheme(
   ]);
 }
 
-export function installVillageProtocol(
+const installedRendererRoots = new WeakMap<Protocol, string>();
+
+export function ensureVillageProtocolInstalled(
   protocolModule: Protocol,
   rendererRoot: string,
 ): void {
+  const installedRendererRoot = installedRendererRoots.get(protocolModule);
+  if (installedRendererRoot === rendererRoot) return;
+  if (installedRendererRoot !== undefined) {
+    throw new Error("VILLAGE_PROTOCOL_RENDERER_ROOT_MISMATCH");
+  }
   const rendererSource = readFile(join(rendererRoot, "index.js"));
   protocolModule.handle("village", async (request) => {
     const url = new URL(request.url);
@@ -243,4 +250,5 @@ export function installVillageProtocol(
     }
     return new Response("Not found", { status: 404 });
   });
+  installedRendererRoots.set(protocolModule, rendererRoot);
 }
