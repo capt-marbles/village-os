@@ -251,10 +251,11 @@ describe("Site Session ciphertext mailbox", () => {
       ok: true,
       deleted: true,
     });
+    await expect(runDurableObjectAlarm(stub)).resolves.toBe(false);
+    await evictDurableObject(stub);
     await runInDurableObject(stub, async (instance) => {
       await expect(instance.alarm()).resolves.toBeUndefined();
     });
-    await expect(runDurableObjectAlarm(stub)).resolves.toBe(false);
   });
 
   it("expires the grant and clears ciphertext through its at-least-once alarm", async () => {
