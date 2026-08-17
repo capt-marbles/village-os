@@ -37,6 +37,10 @@ interface MacOsArtifactInspectionDependencies {
   readBundleValue(infoPlistPath: string, key: string): Promise<string>;
 }
 
+interface MacOsUpdateArtifactVerifierOptions {
+  platform?: NodeJS.Platform;
+}
+
 const macOsInspectionDefaults: MacOsArtifactInspectionDependencies = {
   async listArchiveEntries(archivePath) {
     const { stdout } = await execFileAsync(
@@ -97,12 +101,17 @@ const macOsInspectionDefaults: MacOsArtifactInspectionDependencies = {
 };
 
 export class MacOsUpdateArtifactVerifier implements UpdateArtifactVerifier {
+  private readonly platform: NodeJS.Platform;
+
   constructor(
     private readonly dependencies: MacOsArtifactInspectionDependencies = macOsInspectionDefaults,
-  ) {}
+    options: MacOsUpdateArtifactVerifierOptions = {},
+  ) {
+    this.platform = options.platform ?? process.platform;
+  }
 
   async inspect(artifactPath: string) {
-    if (process.platform !== "darwin") {
+    if (this.platform !== "darwin") {
       throw new Error("UPDATE_PLATFORM_UNSUPPORTED");
     }
     const extractionRoot = await mkdtemp(join(tmpdir(), "village-update-"));
