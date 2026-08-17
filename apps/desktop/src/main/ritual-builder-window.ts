@@ -55,6 +55,7 @@ export async function createRitualBuilderWindow(options: {
     "village:ritual-builder:create-draft-identity";
   const draftChannel = "village:ritual-builder:draft";
   const approveChannel = "village:ritual-builder:approve";
+  const restoreRevisionChannel = "village:ritual-builder:restore-revision";
   const testRunChannel = "village:ritual-builder:test-run";
   const startRunChannel = "village:ritual-builder:start-run";
   const approveRunStepChannel = "village:ritual-builder:approve-run-step";
@@ -105,6 +106,14 @@ export async function createRitualBuilderWindow(options: {
     }
     return options.controller.approve(candidate);
   });
+  ipcMain.handle(
+    restoreRevisionChannel,
+    async (event, candidate, ...arguments_) => {
+      assertSender(event);
+      if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
+      return options.controller.restoreRevision(candidate);
+    },
+  );
   ipcMain.handle(testRunChannel, async (event, candidate) => {
     assertSender(event);
     return options.controller.testRun(candidate);
@@ -200,6 +209,7 @@ export async function createRitualBuilderWindow(options: {
     ipcMain.removeHandler(createDraftIdentityChannel);
     ipcMain.removeHandler(draftChannel);
     ipcMain.removeHandler(approveChannel);
+    ipcMain.removeHandler(restoreRevisionChannel);
     ipcMain.removeHandler(testRunChannel);
     ipcMain.removeHandler(startRunChannel);
     ipcMain.removeHandler(approveRunStepChannel);

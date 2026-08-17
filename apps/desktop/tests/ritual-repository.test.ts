@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   approveRitualLearningProposal,
+  restoreRitualRevision,
   createRitualRun,
   createRitualRunReceipt,
   reduceRitualRun,
@@ -383,6 +384,87 @@ describe("RitualRepository", () => {
     });
   });
 
+  it("persists an exact prior revision as a new restore revision and pauses the current schedule", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
+    try {
+      const repository = new RitualRepository(join(directory, "rituals.json"));
+      await repository.save(approved);
+      await repository.saveReceipt(receipt);
+      await repository.saveLearningProposal(learningProposal);
+      const learned = approveRitualLearningProposal(
+        approved,
+        learningProposal,
+        {
+          schemaVersion: 1,
+          proposalId: learningProposal.proposalId,
+          ritualId: approved.ritualId,
+          expectedFromRevision: 1,
+          approvedAt: "2026-08-16T16:03:00.000Z",
+        },
+      );
+      await repository.save(learned);
+      await repository.saveSchedule(
+        {
+          schemaVersion: 1,
+          ritualId: approved.ritualId,
+          ritualRevision: 2,
+          state: "ENABLED",
+          cadence: "DAILY",
+          localTime: "06:00",
+          timeZone: "America/Chicago",
+          nextRunAt: "2026-08-18T11:00:00.000Z",
+          pendingOccurrence: null,
+          lastTriggeredAt: null,
+          updatedAt: "2026-08-16T16:04:00.000Z",
+        },
+        { expectedUpdatedAt: null },
+      );
+      const restored = restoreRitualRevision(learned, approved, {
+        schemaVersion: 1,
+        ritualId: approved.ritualId,
+        expectedCurrentRevision: 2,
+        restoreFromRevision: 1,
+        restoredAt: "2026-08-17T16:03:00.000Z",
+      });
+
+      await expect(
+        repository.save({
+          ...restored,
+          purpose: "A forged definition that does not match revision 1.",
+        }),
+      ).rejects.toThrow("STALE_RITUAL_RESTORE_REVISION");
+      await repository.save(restored);
+      await expect(
+        repository.save({
+          ...restored,
+          ritualRevision: 4,
+          approvedAt: "2026-08-17T16:04:00.000Z",
+        }),
+      ).rejects.toThrow("STALE_RITUAL_RESTORE_REVISION");
+
+      expect(await repository.findRevision(approved.ritualId, 1)).toEqual(
+        approved,
+      );
+      expect(await repository.find(approved.ritualId)).toEqual(restored);
+      expect(await repository.listSchedules()).toEqual([
+        expect.objectContaining({ ritualRevision: 3, state: "PAUSED" }),
+      ]);
+      expect((await repository.automationSnapshot()).schedule).toEqual(
+        expect.objectContaining({ ritualRevision: 3, state: "PAUSED" }),
+      );
+      expect((await repository.latestSnapshot()).auditTimeline[0]).toEqual({
+        kind: "REVISION_APPROVED",
+        sourceId: approved.ritualId,
+        ritualRevision: 3,
+        source: "RESTORE",
+        restoredFromRevision: 1,
+        occurredAt: restored.approvedAt,
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("restores only an undecided learning proposal after restart", async () => {
     const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
     try {
@@ -561,17 +643,19 @@ describe("RitualRepository", () => {
     }
   });
 
-  it("caps recent audit history, orders offset instants, and isolates Rituals", async () => {
+  it("retains revision history while capping activity and isolating Rituals", async () => {
     const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
     try {
       const path = join(directory, "rituals.json");
       const repository = new RitualRepository(path);
       await repository.save(approved);
-      for (let index = 1; index <= 21; index += 1) {
+      for (let index = 1; index <= 100; index += 1) {
         await repository.saveReceipt({
           ...receipt,
           receiptId: receiptId(index),
-          recordedAt: `2026-08-17T10:00:${String(index).padStart(2, "0")}.000-05:00`,
+          recordedAt: new Date(
+            Date.parse("2026-08-17T15:00:00.000Z") + index * 1_000,
+          ).toISOString(),
         });
       }
       const second = {
@@ -601,12 +685,15 @@ describe("RitualRepository", () => {
           return (await new RitualRepository(path).latestSnapshot())
             .auditTimeline;
         });
-      expect(firstTimeline).toHaveLength(20);
-      expect(firstTimeline[0]?.sourceId).toBe(receiptId(21));
-      expect(firstTimeline.at(-1)?.sourceId).toBe(receiptId(2));
+      expect(firstTimeline).toHaveLength(100);
+      expect(firstTimeline[0]?.sourceId).toBe(receiptId(100));
+      expect(firstTimeline.at(-1)?.sourceId).toBe(approved.ritualId);
       expect(
         firstTimeline.some((entry) => entry.sourceId === receiptId(1)),
       ).toBe(false);
+      expect(
+        firstTimeline.some((entry) => entry.sourceId === receiptId(2)),
+      ).toBe(true);
       expect(
         firstTimeline.every((entry) => entry.sourceId !== second.ritualId),
       ).toBe(true);

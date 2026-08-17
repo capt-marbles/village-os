@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   approveRitualDraft,
   approveRitualLearningProposal,
+  restoreRitualRevision,
   RITUAL_AUDIT_TIMELINE_LIMIT,
   RitualApprovalError,
   ritualApprovalRequestSchema,
@@ -12,6 +13,7 @@ import {
   ritualLearningProposalSchema,
   ritualLearningDecisionSchema,
   ritualLearningDecisionRequestSchema,
+  ritualRevisionRestoreRequestSchema,
   ritualPendingLearningReviewSchema,
   ritualStewardContextSchema,
   ritualStewardQuestionContentSchema,
@@ -76,6 +78,91 @@ const draft = {
 };
 
 describe("Ritual contracts", () => {
+  it("restores an earlier approved Ritual as a new immutable revision", () => {
+    const original = approveRitualDraft(draft, {
+      schemaVersion: 1,
+      draftId: draft.draftId,
+      expectedRevision: draft.revision,
+      ritualId: "rtl_01J00000000000000000000000",
+      approvedAt: "2026-08-15T16:03:00.000Z",
+    });
+    const learned = {
+      ...original,
+      ritualRevision: 2,
+      learningProposalId: "rlp_01J00000000000000000000000",
+      basedOnReceiptId: "rcp_01J00000000000000000000000",
+      completion: "Three concise bullets are ready for review.",
+      approvedAt: "2026-08-16T16:03:00.000Z",
+    };
+    const request = ritualRevisionRestoreRequestSchema.parse({
+      schemaVersion: 1,
+      ritualId: original.ritualId,
+      expectedCurrentRevision: 2,
+      restoreFromRevision: 1,
+      restoredAt: "2026-08-17T16:03:00.000Z",
+    });
+
+    expect(restoreRitualRevision(learned, original, request)).toEqual({
+      ...original,
+      ritualRevision: 3,
+      approvedDraftId: learned.approvedDraftId,
+      approvedDraftRevision: learned.approvedDraftRevision,
+      restoredFromRevision: 1,
+      approvedAt: request.restoredAt,
+    });
+    const alreadyRestored = restoreRitualRevision(learned, original, request);
+    expect(() =>
+      restoreRitualRevision(alreadyRestored, original, {
+        ...request,
+        expectedCurrentRevision: 3,
+        restoredAt: "2026-08-17T17:03:00.000Z",
+      }),
+    ).toThrow("RITUAL_RESTORE_NO_CHANGE");
+  });
+
+  it("rejects stale, cross-Ritual, future, and unknown restore lineage", () => {
+    const original = approveRitualDraft(draft, {
+      schemaVersion: 1,
+      draftId: draft.draftId,
+      expectedRevision: draft.revision,
+      ritualId: "rtl_01J00000000000000000000000",
+      approvedAt: "2026-08-15T16:03:00.000Z",
+    });
+    const learned = {
+      ...original,
+      ritualRevision: 2,
+      learningProposalId: "rlp_01J00000000000000000000000",
+      basedOnReceiptId: "rcp_01J00000000000000000000000",
+      approvedAt: "2026-08-16T16:03:00.000Z",
+    };
+    const request = {
+      schemaVersion: 1 as const,
+      ritualId: original.ritualId,
+      expectedCurrentRevision: 2,
+      restoreFromRevision: 1,
+      restoredAt: "2026-08-17T16:03:00.000Z",
+    };
+
+    expect(() =>
+      restoreRitualRevision(learned, original, {
+        ...request,
+        expectedCurrentRevision: 1,
+      }),
+    ).toThrow("STALE_RITUAL_RESTORE");
+    expect(() =>
+      restoreRitualRevision(learned, original, {
+        ...request,
+        ritualId: "rtl_01J00000000000000000000001",
+      }),
+    ).toThrow("RITUAL_RESTORE_ID_MISMATCH");
+    expect(() =>
+      restoreRitualRevision(learned, learned, {
+        ...request,
+        restoreFromRevision: 2,
+      }),
+    ).toThrow("RITUAL_RESTORE_SOURCE_MISMATCH");
+  });
+
   it("accepts only bounded metadata in the Ritual audit timeline", () => {
     const timeline = ritualAuditTimelineSchema.parse([
       {

@@ -285,6 +285,7 @@ function bridge() {
       completion: "A reviewable result is ready.",
     })),
     approve: vi.fn(async (ritual) => ritual),
+    restoreRevision: vi.fn(async () => approved),
     testRun: vi.fn(async () => ({ status: "receipt" as const, receipt })),
     startRun: vi.fn(async () => ({ status: "run" as const, run: waitingRun })),
     approveRunStep: vi.fn(async () => ({
@@ -425,6 +426,227 @@ describe("RitualBuilderWorkspace", () => {
     expect(within(history!).getByText("Ritual approved")).toBeTruthy();
     expect(history?.textContent).not.toContain("raw sample");
     expect(history?.textContent).not.toContain("https://");
+  });
+
+  it("confirms an earlier revision before restoring it as a new revision", async () => {
+    const current = {
+      ...approved,
+      ritualRevision: 2,
+      learningProposalId: learningProposal.proposalId,
+      basedOnReceiptId: receipt.receiptId,
+      completion: "A shorter result is ready.",
+      approvedAt: "2026-08-17T14:00:00.000Z",
+    };
+    const restored = {
+      ...approved,
+      ritualRevision: 3,
+      restoredFromRevision: 1,
+      approvedAt: "2026-08-17T15:00:00.000Z",
+    };
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved: current,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [
+        {
+          kind: "REVISION_APPROVED",
+          sourceId: approved.ritualId,
+          ritualRevision: 2,
+          source: "LEARNING",
+          occurredAt: current.approvedAt,
+        },
+        {
+          kind: "REVISION_APPROVED",
+          sourceId: approved.ritualId,
+          ritualRevision: 1,
+          source: "INITIAL",
+          occurredAt: approved.approvedAt,
+        },
+      ],
+      schedule: null,
+      inbox: [],
+    });
+    activeBridge.restoreRevision.mockResolvedValueOnce(restored);
+    activeBridge.getAuditTimeline.mockResolvedValueOnce([
+      {
+        kind: "REVISION_APPROVED",
+        sourceId: approved.ritualId,
+        ritualRevision: 3,
+        source: "RESTORE",
+        restoredFromRevision: 1,
+        occurredAt: restored.approvedAt,
+      },
+    ]);
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+
+    fireEvent.click(
+      (await screen.findByText("Ritual history")).closest("summary")!,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Restore revision 1" }));
+    expect(screen.getByText("Restore revision 1 as revision 3?")).toBeTruthy();
+    expect(activeBridge.restoreRevision).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm restore" }));
+
+    await screen.findByText("Restored from revision 1");
+    expect(activeBridge.restoreRevision).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      ritualId: approved.ritualId,
+      expectedCurrentRevision: 2,
+      restoreFromRevision: 1,
+      restoredAt: expect.any(String),
+    });
+    expect(activeBridge.startRun).not.toHaveBeenCalled();
+    expect(activeBridge.getAutomationState).toHaveBeenCalled();
+  });
+
+  it("does not start a new Ritual while a restore commit is pending", async () => {
+    const current = {
+      ...approved,
+      ritualRevision: 2,
+      learningProposalId: learningProposal.proposalId,
+      basedOnReceiptId: receipt.receiptId,
+      approvedAt: "2026-08-17T14:00:00.000Z",
+    };
+    const restored = {
+      ...approved,
+      ritualRevision: 3,
+      restoredFromRevision: 1,
+      approvedAt: "2026-08-17T15:00:00.000Z",
+    };
+    let resolveRestore!: (value: typeof restored) => void;
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved: current,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [
+        {
+          kind: "REVISION_APPROVED",
+          sourceId: approved.ritualId,
+          ritualRevision: 1,
+          source: "INITIAL",
+          occurredAt: approved.approvedAt,
+        },
+      ],
+      schedule: null,
+      inbox: [],
+    });
+    activeBridge.restoreRevision.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRestore = resolve;
+        }),
+    );
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+
+    fireEvent.click(
+      (await screen.findByText("Ritual history")).closest("summary")!,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Restore revision 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm restore" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Shape another Ritual" }),
+    );
+
+    expect(activeBridge.createDraftIdentity).not.toHaveBeenCalled();
+    await act(async () => resolveRestore(restored));
+    await screen.findByText(
+      "Restored revision 1 as revision 3. No Run has started.",
+    );
+    expect(activeBridge.createDraftIdentity).not.toHaveBeenCalled();
+  });
+
+  it("keeps restore unavailable while a Run needs owner attention", async () => {
+    const current = {
+      ...approved,
+      ritualRevision: 2,
+      learningProposalId: learningProposal.proposalId,
+      basedOnReceiptId: receipt.receiptId,
+      approvedAt: "2026-08-17T14:00:00.000Z",
+    };
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved: current,
+      receipt: null,
+      run: { ...waitingRun, ritualRevision: 2 },
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [
+        {
+          kind: "REVISION_APPROVED",
+          sourceId: approved.ritualId,
+          ritualRevision: 1,
+          source: "INITIAL",
+          occurredAt: approved.approvedAt,
+        },
+      ],
+      schedule: null,
+      inbox: [],
+    });
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+
+    fireEvent.click(
+      (await screen.findByText("Ritual history")).closest("summary")!,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Restore revision 1" }),
+    ).toBeNull();
+  });
+
+  it("keeps a rejected restore reviewable and retryable", async () => {
+    const current = {
+      ...approved,
+      ritualRevision: 2,
+      learningProposalId: learningProposal.proposalId,
+      basedOnReceiptId: receipt.receiptId,
+      approvedAt: "2026-08-17T14:00:00.000Z",
+    };
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved: current,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [
+        {
+          kind: "REVISION_APPROVED",
+          sourceId: approved.ritualId,
+          ritualRevision: 1,
+          source: "INITIAL",
+          occurredAt: approved.approvedAt,
+        },
+      ],
+      schedule: null,
+      inbox: [],
+    });
+    activeBridge.restoreRevision.mockRejectedValueOnce(new Error("stale"));
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+
+    fireEvent.click(
+      (await screen.findByText("Ritual history")).closest("summary")!,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Restore revision 1" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm restore" }));
+
+    expect(
+      await screen.findByText(
+        "Village could not restore that revision. Reopen Ritual Builder to refresh its current revision, then try again.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Confirm restore" }),
+    ).toBeTruthy();
+    expect(activeBridge.startRun).not.toHaveBeenCalled();
   });
 
   it("clears the previous Ritual history after a fresh identity is ready", async () => {

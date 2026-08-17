@@ -18,9 +18,11 @@ import type {
   RitualTestRunRequest,
   RitualAuditTimeline,
   RitualLatestSnapshot,
+  RitualRevisionRestoreRequest,
 } from "@village/contracts";
 import {
   RitualBuilder,
+  canRestoreRitualRevision,
   createRitualBuilderState,
   reduceRitualBuilder,
   type RitualBuilderEvent,
@@ -58,6 +60,9 @@ export interface RitualBuilderBridge extends ExaCredentialBridge {
   createDraftIdentity(): Promise<RitualBuilderIdentity>;
   draft(context: RitualStewardContext): Promise<RitualStewardResult>;
   approve(ritual: ApprovedRitualRevision): Promise<ApprovedRitualRevision>;
+  restoreRevision(
+    request: RitualRevisionRestoreRequest,
+  ): Promise<ApprovedRitualRevision>;
   testRun(
     request: RitualTestRunRequest,
   ): Promise<RitualTestRunControllerResult>;
@@ -99,6 +104,10 @@ export function RitualBuilderWorkspace({
   const [auditTimelineError, setAuditTimelineError] = useState<string | null>(
     null,
   );
+  const [restoreRevisionPending, setRestoreRevisionPending] = useState(false);
+  const [restoreRevisionError, setRestoreRevisionError] = useState<
+    string | null
+  >(null);
   const [automationPending, setAutomationPending] = useState(false);
   const [automationError, setAutomationError] = useState<string | null>(null);
   const generation = useRef(0);
@@ -109,6 +118,7 @@ export function RitualBuilderWorkspace({
   const cancelRunInFlight = useRef(false);
   const automationMutation = useRef(0);
   const auditTimelineMutation = useRef(0);
+  const restoreRevisionInFlight = useRef(false);
   const automationInFlight = useRef(false);
   const mounted = useRef(true);
   const refreshAutomation = useCallback(async () => {
@@ -144,6 +154,64 @@ export function RitualBuilderWorkspace({
       );
     }
   }, [bridge]);
+  const restoreRevision = useCallback(
+    async (restoreFromRevision: number): Promise<boolean> => {
+      const current = state.approved;
+      if (
+        !bridge ||
+        !current ||
+        restoreRevisionInFlight.current ||
+        restoreFromRevision >= current.ritualRevision
+      ) {
+        return false;
+      }
+      restoreRevisionInFlight.current = true;
+      const requestGeneration = ++generation.current;
+      setRestoreRevisionPending(true);
+      setRestoreRevisionError(null);
+      try {
+        const restored = await bridge.restoreRevision({
+          schemaVersion: 1,
+          ritualId: current.ritualId,
+          expectedCurrentRevision: current.ritualRevision,
+          restoreFromRevision,
+          restoredAt: new Date().toISOString(),
+        });
+        if (!mounted.current || requestGeneration !== generation.current) {
+          return false;
+        }
+        setState((previous) =>
+          reduceRitualBuilder(previous, {
+            type: "REVISION_RESTORE_SAVED",
+            approved: restored,
+          }),
+        );
+        automationMutation.current += 1;
+        await Promise.all([
+          refreshAutomation().catch(() => {
+            if (mounted.current) {
+              setAutomationError(
+                "The Ritual was restored, but schedule details may be out of date.",
+              );
+            }
+          }),
+          refreshAuditTimeline(),
+        ]);
+        return true;
+      } catch {
+        if (mounted.current && requestGeneration === generation.current) {
+          setRestoreRevisionError(
+            "Village could not restore that revision. Reopen Ritual Builder to refresh its current revision, then try again.",
+          );
+        }
+        return false;
+      } finally {
+        restoreRevisionInFlight.current = false;
+        if (mounted.current) setRestoreRevisionPending(false);
+      }
+    },
+    [bridge, refreshAuditTimeline, refreshAutomation, state.approved],
+  );
 
   useEffect(() => {
     mounted.current = true;
@@ -172,7 +240,7 @@ export function RitualBuilderWorkspace({
         if (initialized.approved) {
           setState((current) => {
             const restored = reduceRitualBuilder(current, {
-              type: "RESTORE_APPROVED",
+              type: "HYDRATE_APPROVED_REVISION",
               approved: initialized.approved!,
             });
             if (initialized.learningReview) {
@@ -348,6 +416,7 @@ export function RitualBuilderWorkspace({
 
   const onEvent = (event: RitualBuilderEvent) => {
     if (!bridge || !identity) return;
+    if (restoreRevisionInFlight.current) return;
     if (event.type === "START_NEW_RITUAL") {
       const next = reduceRitualBuilder(state, event);
       setState(next);
@@ -707,6 +776,15 @@ export function RitualBuilderWorkspace({
       auditTimeline={auditTimeline}
       auditTimelineError={auditTimelineError}
       onRefreshAuditTimeline={() => void refreshAuditTimeline()}
+      {...(canRestoreRitualRevision(state)
+        ? {
+            revisionRestore: {
+              pending: restoreRevisionPending,
+              error: restoreRevisionError,
+              submit: restoreRevision,
+            },
+          }
+        : {})}
       researchSetup={<ExaApiKeyCard bridge={bridge} />}
     />
   );

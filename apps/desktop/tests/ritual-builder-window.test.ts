@@ -96,6 +96,7 @@ describe("Ritual Builder window", () => {
     pauseSchedule: vi.fn(async (schedule) => schedule),
     draft: vi.fn(async () => ({ status: "waiting" })),
     approve: vi.fn(async (ritual) => ritual),
+    restoreRevision: vi.fn(async (ritual) => ritual),
     testRun: vi.fn(async () => ({ status: "waiting" })),
     startRun: vi.fn(async () => ({ status: "run" })),
     approveRunStep: vi.fn(async () => ({ status: "run" })),
@@ -186,6 +187,9 @@ describe("Ritual Builder window", () => {
     )!;
     const draft = electron.handlers.get("village:ritual-builder:draft")!;
     const approve = electron.handlers.get("village:ritual-builder:approve")!;
+    const restoreRevision = electron.handlers.get(
+      "village:ritual-builder:restore-revision",
+    )!;
     const testRun = electron.handlers.get("village:ritual-builder:test-run")!;
     const startRun = electron.handlers.get("village:ritual-builder:start-run")!;
     const approveRunStep = electron.handlers.get(
@@ -236,6 +240,10 @@ describe("Ritual Builder window", () => {
       ritualId: initialized.identity.ritualId,
       approvedDraftId: initialized.identity.draftId,
     });
+    await restoreRevision(event, {
+      ritualId: initialized.identity.ritualId,
+      restoreFromRevision: 1,
+    });
     await testRun(event, { ritualId: initialized.identity.ritualId });
     await startRun(event, { ritualId: initialized.identity.ritualId });
     await approveRunStep(event, { runId: "bounded" });
@@ -274,6 +282,10 @@ describe("Ritual Builder window", () => {
       ritualId: initialized.identity.ritualId,
       approvedDraftId: initialized.identity.draftId,
     });
+    expect(controller.restoreRevision).toHaveBeenCalledWith({
+      ritualId: initialized.identity.ritualId,
+      restoreFromRevision: 1,
+    });
     expect(controller.testRun).toHaveBeenCalledWith({
       ritualId: initialized.identity.ritualId,
     });
@@ -307,6 +319,13 @@ describe("Ritual Builder window", () => {
     await expect(auditTimeline(event, "extra")).rejects.toThrow(
       "MALFORMED_IPC_REQUEST",
     );
+    await expect(
+      restoreRevision(
+        event,
+        { ritualId: initialized.identity.ritualId },
+        "extra",
+      ),
+    ).rejects.toThrow("MALFORMED_IPC_REQUEST");
 
     const nextIdentity = (await createDraftIdentity(event)) as {
       draftId: string;

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import {
   approvedRitualRevisionSchema,
   approveRitualLearningProposal,
+  restoreRitualRevision,
   createRitualRun,
   createRitualRunReceipt,
   createRitualTestReceipt,
@@ -19,6 +20,7 @@ import {
   ritualLearningApprovalRequestSchema,
   ritualLearningFeedbackRequestSchema,
   ritualLearningDecisionRequestSchema,
+  ritualRevisionRestoreRequestSchema,
   validateRitualTestRunResult,
   validateRitualLearningResult,
   ritualStewardContextSchema,
@@ -39,6 +41,7 @@ import {
   type RitualStewardResult,
   type RitualAuditTimeline,
   type RitualLatestSnapshot,
+  type RitualRevisionRestoreRequest,
 } from "@village/contracts";
 import type { RitualStewardProvider } from "../model-provider/ritual-steward.js";
 import { createVillageId } from "./local-village-id.js";
@@ -51,6 +54,10 @@ import { nextRitualOccurrence } from "./ritual-scheduler.js";
 export interface RitualPersistence {
   latestSnapshot(): Promise<RitualLatestSnapshot>;
   find(ritualId: string): Promise<ApprovedRitualRevision | null>;
+  findRevision(
+    ritualId: string,
+    ritualRevision: number,
+  ): Promise<ApprovedRitualRevision | null>;
   findReceipt(receiptId: string): Promise<RitualLearningReceipt | null>;
   findLearningProposal(
     proposalId: string,
@@ -243,6 +250,41 @@ export class RitualBuilderController {
     const ritual = approvedRitualRevisionSchema.parse(candidate);
     await this.repository.save(ritual);
     return ritual;
+  }
+
+  async restoreRevision(candidate: unknown): Promise<ApprovedRitualRevision> {
+    const request: RitualRevisionRestoreRequest =
+      ritualRevisionRestoreRequestSchema.parse(candidate);
+    return this.enqueueRun(async () => {
+      const [current, source, activeRun, snapshot] = await Promise.all([
+        this.repository.find(request.ritualId),
+        this.repository.findRevision(
+          request.ritualId,
+          request.restoreFromRevision,
+        ),
+        this.repository.findNonterminalRun(
+          request.ritualId,
+          request.expectedCurrentRevision,
+        ),
+        this.repository.latestSnapshot(),
+      ]);
+      if (!current || !source) throw new Error("RITUAL_RESTORE_NOT_FOUND");
+      if (activeRun) throw new Error("RITUAL_RESTORE_RUN_ACTIVE");
+      if (
+        snapshot.learningReview &&
+        snapshot.approved?.ritualId === request.ritualId &&
+        snapshot.approved.ritualRevision === request.expectedCurrentRevision
+      ) {
+        throw new Error("RITUAL_RESTORE_LEARNING_PENDING");
+      }
+      const restored = restoreRitualRevision(current, source, {
+        ...request,
+        restoredAt: this.dependencies.now(),
+      });
+      await this.repository.save(restored);
+      this.dependencies.onScheduleChanged();
+      return restored;
+    });
   }
 
   async startRun(candidate: unknown): Promise<RitualRunControllerResult> {

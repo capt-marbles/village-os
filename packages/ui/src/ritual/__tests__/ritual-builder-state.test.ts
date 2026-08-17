@@ -52,7 +52,7 @@ function applyStewardProposal(
 describe("Ritual Builder state", () => {
   it("restores a pending learning proposal for Review", () => {
     let state = reduceRitualBuilder(createRitualBuilderState(), {
-      type: "RESTORE_APPROVED",
+      type: "HYDRATE_APPROVED_REVISION",
       approved: {
         schemaVersion: 1,
         ritualId,
@@ -266,7 +266,7 @@ describe("Ritual Builder state", () => {
       approvedAt: "2026-08-15T16:03:00.000Z",
     };
     const state = reduceRitualBuilder(createRitualBuilderState(), {
-      type: "RESTORE_APPROVED",
+      type: "HYDRATE_APPROVED_REVISION",
       approved,
     });
     expect(state).toMatchObject({ phase: "APPROVED", approved });
@@ -302,7 +302,7 @@ describe("Ritual Builder state", () => {
       approvedAt: "2026-08-15T16:03:00.000Z",
     };
     let state = reduceRitualBuilder(createRitualBuilderState(), {
-      type: "RESTORE_APPROVED",
+      type: "HYDRATE_APPROVED_REVISION",
       approved,
     });
     state = reduceRitualBuilder(state, { type: "START_RUN" });
@@ -372,7 +372,7 @@ describe("Ritual Builder state", () => {
       recordedAt: "2026-08-16T12:00:04.000Z",
     });
     let restored = reduceRitualBuilder(createRitualBuilderState(), {
-      type: "RESTORE_APPROVED",
+      type: "HYDRATE_APPROVED_REVISION",
       approved,
     });
     restored = reduceRitualBuilder(restored, { type: "RESTORE_RUN", run });
@@ -546,7 +546,7 @@ describe("Ritual Builder state", () => {
       occurredAt: "2026-08-16T13:00:02.000Z",
     });
     let state = reduceRitualBuilder(createRitualBuilderState(), {
-      type: "RESTORE_APPROVED",
+      type: "HYDRATE_APPROVED_REVISION",
       approved: researchApproved,
     });
     state = reduceRitualBuilder(state, { type: "RESTORE_RUN", run });
@@ -593,7 +593,7 @@ describe("Ritual Builder state", () => {
       approvedAt: "2026-08-15T16:03:00.000Z",
     };
     let state = reduceRitualBuilder(createRitualBuilderState(), {
-      type: "RESTORE_APPROVED",
+      type: "HYDRATE_APPROVED_REVISION",
       approved,
     });
 

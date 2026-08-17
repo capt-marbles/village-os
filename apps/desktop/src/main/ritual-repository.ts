@@ -25,6 +25,7 @@ import {
   ritualStoreV3Schema,
   ritualStoreV4Schema,
   ritualStoreV5Schema,
+  ritualDefinitionOf,
   ritualTestReceiptSchema,
   validateRitualRunReceipt,
   type ApprovedRitualRevision,
@@ -57,6 +58,21 @@ export class RitualRepository {
 
   list(): Promise<readonly ApprovedRitualRevision[]> {
     return this.enqueue(async () => (await this.read()).rituals);
+  }
+
+  findRevision(
+    ritualId: string,
+    ritualRevision: number,
+  ): Promise<ApprovedRitualRevision | null> {
+    return this.enqueue(async () => {
+      return (
+        (await this.read()).rituals.find(
+          (ritual) =>
+            ritual.ritualId === ritualId &&
+            ritual.ritualRevision === ritualRevision,
+        ) ?? null
+      );
+    });
   }
 
   latestSnapshot(): Promise<RitualLatestSnapshot> {
@@ -257,22 +273,39 @@ export class RitualRepository {
         throw new Error("STALE_RITUAL_REVISION");
       }
       assertLearningLineage(current, ritual, latest);
+      assertRestoreLineage(current, ritual, latest);
       if (current.rituals.length >= 100) throw new Error("RITUAL_STORE_FULL");
+      const restoredSchedule = ritual.restoredFromRevision
+        ? current.schedules.find(
+            (schedule) =>
+              schedule.ritualId === ritual.ritualId &&
+              schedule.ritualRevision === latest?.ritualRevision,
+          )
+        : undefined;
       await this.write({
         ...current,
         rituals: [...current.rituals, ritual],
-        schedules: current.schedules.map((schedule) =>
-          schedule.ritualId === ritual.ritualId &&
-          schedule.ritualRevision !== ritual.ritualRevision &&
-          schedule.state === "ENABLED"
+        schedules: current.schedules.map((schedule) => {
+          if (schedule === restoredSchedule) {
+            return ritualScheduleSchema.parse({
+              ...schedule,
+              ritualRevision: ritual.ritualRevision,
+              state: "PAUSED",
+              pendingOccurrence: null,
+              updatedAt: ritual.approvedAt,
+            });
+          }
+          return schedule.ritualId === ritual.ritualId &&
+            schedule.ritualRevision !== ritual.ritualRevision &&
+            schedule.state === "ENABLED"
             ? ritualScheduleSchema.parse({
                 ...schedule,
                 state: "PAUSED",
                 pendingOccurrence: null,
                 updatedAt: ritual.approvedAt,
               })
-            : schedule,
-        ),
+            : schedule;
+        }),
       });
     });
   }
@@ -745,18 +778,23 @@ function projectAuditTimeline(
   store: RitualStore,
   ritualId: string,
 ): RitualAuditTimeline {
-  const entries = [
-    ...store.rituals
-      .filter((ritual) => ritual.ritualId === ritualId)
-      .map((ritual) => ({
-        kind: "REVISION_APPROVED" as const,
-        sourceId: ritual.ritualId,
-        ritualRevision: ritual.ritualRevision,
-        source: ritual.learningProposalId
-          ? ("LEARNING" as const)
+  const revisionEntries = store.rituals
+    .filter((ritual) => ritual.ritualId === ritualId)
+    .map((ritual) => ({
+      kind: "REVISION_APPROVED" as const,
+      sourceId: ritual.ritualId,
+      ritualRevision: ritual.ritualRevision,
+      source: ritual.learningProposalId
+        ? ("LEARNING" as const)
+        : ritual.restoredFromRevision
+          ? ("RESTORE" as const)
           : ("INITIAL" as const),
-        occurredAt: ritual.approvedAt,
-      })),
+      ...(ritual.restoredFromRevision
+        ? { restoredFromRevision: ritual.restoredFromRevision }
+        : {}),
+      occurredAt: ritual.approvedAt,
+    }));
+  const activityEntries = [
     ...store.receipts
       .filter((receipt) => receipt.ritualId === ritualId)
       .map((receipt) => ({
@@ -784,12 +822,20 @@ function projectAuditTimeline(
         decision: decision.decision,
         occurredAt: decision.decidedAt,
       })),
-  ]
-    .sort((left, right) => {
-      const byTime = Date.parse(right.occurredAt) - Date.parse(left.occurredAt);
-      return byTime || left.kind.localeCompare(right.kind);
-    })
-    .slice(0, RITUAL_AUDIT_TIMELINE_LIMIT);
+  ].sort((left, right) => {
+    const byTime = Date.parse(right.occurredAt) - Date.parse(left.occurredAt);
+    return byTime || left.kind.localeCompare(right.kind);
+  });
+  const entries = [
+    ...revisionEntries,
+    ...activityEntries.slice(
+      0,
+      Math.max(0, RITUAL_AUDIT_TIMELINE_LIMIT - revisionEntries.length),
+    ),
+  ].sort((left, right) => {
+    const byTime = Date.parse(right.occurredAt) - Date.parse(left.occurredAt);
+    return byTime || left.kind.localeCompare(right.kind);
+  });
   return ritualAuditTimelineSchema.parse(entries);
 }
 
@@ -937,6 +983,30 @@ function assertLearningLineage(
     receipt.ritualRevision !== prior.ritualRevision
   ) {
     throw new Error("STALE_RITUAL_LEARNING_REVISION");
+  }
+}
+
+function assertRestoreLineage(
+  store: RitualStore,
+  ritual: ApprovedRitualRevision,
+  prior: ApprovedRitualRevision | undefined,
+): void {
+  if (ritual.restoredFromRevision === undefined) return;
+  const source = store.rituals.find(
+    (entry) =>
+      entry.ritualId === ritual.ritualId &&
+      entry.ritualRevision === ritual.restoredFromRevision,
+  );
+  if (
+    !prior ||
+    !source ||
+    prior.ritualRevision + 1 !== ritual.ritualRevision ||
+    JSON.stringify(ritualDefinitionOf(source)) ===
+      JSON.stringify(ritualDefinitionOf(prior)) ||
+    JSON.stringify(ritualDefinitionOf(source)) !==
+      JSON.stringify(ritualDefinitionOf(ritual))
+  ) {
+    throw new Error("STALE_RITUAL_RESTORE_REVISION");
   }
 }
 
