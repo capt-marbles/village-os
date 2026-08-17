@@ -199,6 +199,7 @@ export function packagedDelegatedWorkflowArguments({
   provider,
   coordinator = "LOCAL_PROOF",
   fixtureBrowserSessionId,
+  mockKeychain = false,
 }) {
   if (!path.isAbsolute(profilePath)) {
     throw new Error("PACKAGED_DELEGATED_WORKFLOW_PROFILE_UNSAFE");
@@ -228,6 +229,7 @@ export function packagedDelegatedWorkflowArguments({
   } else if (coordinator !== "LOCAL_PROOF" || fixtureBrowserSessionId) {
     throw new Error("PACKAGED_DELEGATED_WORKFLOW_COORDINATOR_INVALID");
   }
+  if (mockKeychain) arguments_.push("--village-proof-mock-keychain");
   return arguments_;
 }
 
@@ -267,6 +269,7 @@ export async function runPackagedDelegatedWorkflow({
   resumedFrom,
   coordinator = "LOCAL_PROOF",
   fixtureBrowserSessionId,
+  mockKeychain = false,
   timeoutMs = 180_000,
 } = {}) {
   await verifyPackagedMac(applicationPath);
@@ -284,6 +287,7 @@ export async function runPackagedDelegatedWorkflow({
       profilePath: effectiveProfilePath,
       provider,
       coordinator,
+      mockKeychain,
       ...(fixtureBrowserSessionId ? { fixtureBrowserSessionId } : {}),
     });
     if (interruption) {

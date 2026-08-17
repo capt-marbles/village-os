@@ -194,28 +194,172 @@ describe("BrowserSessionCoordinator lease contention", () => {
       now: reconnectedAt,
       expiresAt: new Date(Date.parse(reconnectedAt) + 30_000).toISOString(),
     });
-    expect(resumed).toMatchObject({ ok: true, leaseEpoch: 2 });
+    expect(resumed).toEqual({
+      ok: false,
+      code: "RECOVERY_REQUIRES_USER",
+    });
 
     const firstPage = await stub.eventsAfter(principalId, 0, 2);
     const secondPage = await stub.eventsAfter(principalId, 2, 100);
     expect(firstPage).toMatchObject({
       ok: true,
       events: [{ sequence: 1 }, { sequence: 2 }],
-      latestSequence: 5,
+      latestSequence: 4,
     });
     expect(secondPage).toMatchObject({
       ok: true,
-      events: [{ sequence: 3 }, { sequence: 4 }, { sequence: 5 }],
-      latestSequence: 5,
+      events: [{ sequence: 3 }, { sequence: 4 }],
+      latestSequence: 4,
     });
     expect(await stub.cancel(principalId, reconnectedAt)).toEqual({ ok: true });
     expect(await stub.snapshot(principalId)).toMatchObject({
       control: {
         controller: "NONE",
-        leaseEpoch: 3,
+        leaseEpoch: 2,
         automationBlocked: true,
       },
-      eventSequence: 6,
+      eventSequence: 5,
     });
+  });
+
+  it("allows one fresh lease for a pre-dispatch action while keeping its safe retry evidence", async () => {
+    const recoverySessionId = "brs_01J00000000000000000000002" as const;
+    const stub = env.BROWSER_SESSION_COORDINATOR.getByName(recoverySessionId);
+    const issuedAt = new Date(Date.now() + 120_000).toISOString();
+    const expiresAt = new Date(Date.parse(issuedAt) + 30_000).toISOString();
+    await stub.initialize({
+      principalId,
+      browserSessionId: recoverySessionId,
+      site: "OWNED_FIXTURE",
+      initializedAt: issuedAt,
+      control: { ...initial, browserSessionId: recoverySessionId },
+    });
+    await stub.claimAgentLease({
+      principalId,
+      deviceId,
+      connectionId: "connector-before-crash",
+      now: issuedAt,
+      expiresAt,
+    });
+    const accepted: BrowserAction = {
+      actionId: "act_01J00000000000000000000008",
+      browserSessionId: recoverySessionId,
+      phase: "ACCEPTED",
+      mutationClass: "NON_IDEMPOTENT",
+      acceptedAt: issuedAt,
+      updatedAt: issuedAt,
+      postcondition: "UNOBSERVED",
+    };
+    await runInDurableObject(
+      stub,
+      async (_instance: BrowserSessionCoordinator, state) => {
+        state.storage.sql.exec(
+          `INSERT INTO accepted_actions
+           (action_id, command_sequence, action_json) VALUES (?, 1, ?)`,
+          accepted.actionId,
+          JSON.stringify(accepted),
+        );
+      },
+    );
+
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    const reconnectedAt = new Date(Date.parse(expiresAt) + 1_000).toISOString();
+    expect(
+      await stub.hostReconnected(principalId, deviceId, reconnectedAt),
+    ).toEqual({ ok: true });
+    expect(await stub.action(principalId, accepted.actionId)).toMatchObject({
+      ok: true,
+      action: { phase: "ACCEPTED", postcondition: "UNOBSERVED" },
+    });
+    const beforeClaim = await stub.snapshot(principalId);
+    await runInDurableObject(
+      stub,
+      async (_instance: BrowserSessionCoordinator, state) => {
+        state.storage.sql.exec(
+          "UPDATE accepted_actions SET action_json = '{}' WHERE action_id = ?",
+          accepted.actionId,
+        );
+      },
+    );
+    await expect(
+      stub.claimAgentLease({
+        principalId,
+        deviceId,
+        connectionId: "connector-corrupt-recovery",
+        now: reconnectedAt,
+        expiresAt: new Date(Date.parse(reconnectedAt) + 30_000).toISOString(),
+      }),
+    ).resolves.toEqual({ ok: false, code: "RECOVERY_STATE_CORRUPT" });
+    expect(await stub.snapshot(principalId)).toEqual(beforeClaim);
+    await runInDurableObject(
+      stub,
+      async (_instance: BrowserSessionCoordinator, state) => {
+        state.storage.sql.exec(
+          "UPDATE accepted_actions SET action_json = ? WHERE action_id = ?",
+          JSON.stringify(accepted),
+          accepted.actionId,
+        );
+      },
+    );
+    await expect(
+      stub.claimAgentLease({
+        principalId,
+        deviceId,
+        connectionId: "connector-after-crash",
+        now: reconnectedAt,
+        expiresAt: new Date(Date.parse(reconnectedAt) + 30_000).toISOString(),
+      }),
+    ).resolves.toMatchObject({ ok: true, leaseEpoch: 2 });
+  });
+
+  it("fails closed without advancing reconnect state when retained action evidence is corrupt", async () => {
+    const corruptSessionId = "brs_01J00000000000000000000003" as const;
+    const stub = env.BROWSER_SESSION_COORDINATOR.getByName(corruptSessionId);
+    const issuedAt = new Date(Date.now() + 180_000).toISOString();
+    const expiresAt = new Date(Date.parse(issuedAt) + 30_000).toISOString();
+    await stub.initialize({
+      principalId,
+      browserSessionId: corruptSessionId,
+      site: "OWNED_FIXTURE",
+      initializedAt: issuedAt,
+      control: { ...initial, browserSessionId: corruptSessionId },
+    });
+    await stub.claimAgentLease({
+      principalId,
+      deviceId,
+      connectionId: "connector-corrupt",
+      now: issuedAt,
+      expiresAt,
+    });
+    const inconsistentAction: BrowserAction = {
+      actionId: "act_01J00000000000000000000007",
+      browserSessionId: corruptSessionId,
+      phase: "ACCEPTED",
+      mutationClass: "NON_IDEMPOTENT",
+      acceptedAt: issuedAt,
+      updatedAt: issuedAt,
+      postcondition: "SATISFIED",
+    };
+    await runInDurableObject(
+      stub,
+      async (_instance: BrowserSessionCoordinator, state) => {
+        state.storage.sql.exec(
+          `INSERT INTO accepted_actions
+           (action_id, command_sequence, action_json) VALUES (?, 1, ?)`,
+          inconsistentAction.actionId,
+          JSON.stringify(inconsistentAction),
+        );
+      },
+    );
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    const before = await stub.snapshot(principalId);
+    expect(
+      await stub.hostReconnected(
+        principalId,
+        deviceId,
+        new Date(Date.parse(expiresAt) + 1_000).toISOString(),
+      ),
+    ).toEqual({ ok: false, code: "RECOVERY_STATE_CORRUPT" });
+    expect(await stub.snapshot(principalId)).toEqual(before);
   });
 });

@@ -104,6 +104,7 @@ export function createProductionControlPlaneConfig(environment) {
       VILLAGE_DEPLOYMENT_NAME: "production",
       VILLAGE_AUTH_MODE: "cloudflare-access",
       VILLAGE_ENVIRONMENT: "production",
+      VILLAGE_EXPERIMENTAL_CONTINUITY: "disabled",
       VILLAGE_ALLOWED_ORIGINS: origin.origin,
       CF_ACCESS_TEAM_DOMAIN: accessDomain.origin,
       CF_ACCESS_AUD: audience,

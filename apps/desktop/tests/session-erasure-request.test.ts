@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { RestartStagedSessionErasureCoordinator } from "../src/main/session-erasure.js";
-import { SessionErasureRequestController } from "../src/main/session-erasure-request.js";
+import {
+  confirmSessionErasure,
+  SessionErasureRequestController,
+} from "../src/main/session-erasure-request.js";
 import { StepUpAuthorizer } from "../src/main/step-up-auth.js";
 
 const binding = {
@@ -49,6 +52,35 @@ function setup(
 }
 
 describe("session erasure request controller", () => {
+  it("uses one native confirmation ceremony in production and owner proof", async () => {
+    const calls: unknown[] = [];
+    await expect(
+      confirmSessionErasure({
+        showMessageBox: async (options) => {
+          calls.push(options);
+          return { response: 0 };
+        },
+      }),
+    ).resolves.toBe(true);
+    expect(calls).toEqual([
+      {
+        type: "warning",
+        title: "Forget this local session?",
+        message:
+          "Village will close the browser, clear this site's data, and restart to finish removing the local profile.",
+        buttons: ["Forget session", "Cancel"],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+      },
+    ]);
+    await expect(
+      confirmSessionErasure({
+        showMessageBox: async () => ({ response: 1 }),
+      }),
+    ).resolves.toBe(false);
+  });
+
   it("preserves the profile when native confirmation is declined", async () => {
     const fixture = setup({ confirm: false });
     await expect(fixture.controller.request()).resolves.toBe("DECLINED");

@@ -29,6 +29,7 @@ test("production control plane serves the authenticated web shell and API on one
     VILLAGE_DEPLOYMENT_NAME: "production",
     VILLAGE_AUTH_MODE: "cloudflare-access",
     VILLAGE_ENVIRONMENT: "production",
+    VILLAGE_EXPERIMENTAL_CONTINUITY: "disabled",
     VILLAGE_ALLOWED_ORIGINS: "https://village.example.com",
     CF_ACCESS_TEAM_DOMAIN: "https://andrew.cloudflareaccess.com",
     CF_ACCESS_AUD: "a".repeat(64),

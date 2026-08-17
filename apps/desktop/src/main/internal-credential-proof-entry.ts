@@ -1,5 +1,13 @@
 import { OWNED_FIXTURE_ORIGIN } from "@village/contracts";
-import { app, BaseWindow, clipboard, session, type Session } from "electron";
+import {
+  app,
+  BaseWindow,
+  clipboard,
+  protocol,
+  session,
+  type Session,
+  WebContentsView,
+} from "electron";
 import {
   createCipheriv,
   createDecipheriv,
@@ -33,6 +41,11 @@ import {
   completePendingSessionErasure,
   PendingSessionErasureStore,
 } from "./pending-session-erasure.js";
+import { registerVillageScheme } from "./local-app-protocol.js";
+import { RenderProcessRecovery } from "./render-process-recovery.js";
+import { LocalActionExecutor } from "../browser/local-action-executor.js";
+import { DesktopBrowserUiState } from "./desktop-browser-ui-state.js";
+import type { LocalDiagnostic } from "./crash-reporting.js";
 
 const targetProfileScope: ProfileScope = {
   principalId: "prn_01J00000000000000000000000",
@@ -46,11 +59,13 @@ const siblingProfileScope: ProfileScope = {
 const targetCookieName = "__Host-village_erasure_target";
 const siblingCookieName = "__Host-village_erasure_sibling";
 const siblingCookieValue = "sibling-session-preserved";
+const siblingStorageValue = "sibling-storage-preserved";
 
 // This internal-only package proves broker and erasure behavior, not OS-crypt.
 // The release package excludes this entry; the dedicated profile proof owns
 // the real macOS Keychain gate.
 app.commandLine.appendSwitch("use-mock-keychain");
+registerVillageScheme(protocol);
 
 function reportProofStage(stage: string): void {
   process.stderr.write(`VILLAGE_PROOF_STAGE:${stage}\n`);
@@ -84,6 +99,106 @@ async function pathAbsent(path: string): Promise<boolean> {
   }
 }
 
+async function createSiblingProofHost(
+  userDataPath: string,
+): Promise<LocalBrowserHost> {
+  return LocalBrowserHost.create({
+    ...siblingProfileScope,
+    profileRoot: LocalBrowserHost.profileRoot(userDataPath),
+    initialUrl: `${OWNED_FIXTURE_ORIGIN}/login`,
+    profileProtection: internalProofProfileProtection,
+    prepareSession: (browserSession: Session) =>
+      installFixtureSessionHandler(
+        browserSession.protocol,
+        async () =>
+          new Response(
+            "<!doctype html><html><body><p>Sibling profile proof</p></body></html>",
+            { headers: { "content-type": "text/html; charset=utf-8" } },
+          ),
+      ),
+  });
+}
+
+async function seedSiblingBrowserStorage(
+  host: LocalBrowserHost,
+): Promise<void> {
+  await host.view.webContents.executeJavaScript(
+    `(async () => {
+      localStorage.setItem("village-erasure-sibling", ${JSON.stringify(siblingStorageValue)});
+      await new Promise((resolve, reject) => {
+        const request = indexedDB.open("village-erasure-sibling-indexeddb", 1);
+        request.onupgradeneeded = () => request.result.createObjectStore("records");
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const database = request.result;
+          const transaction = database.transaction("records", "readwrite");
+          transaction.objectStore("records").put(${JSON.stringify(siblingStorageValue)}, "status");
+          transaction.oncomplete = () => {
+            database.close();
+            resolve(true);
+          };
+          transaction.onerror = () => reject(transaction.error);
+        };
+      });
+      const cache = await caches.open("village-erasure-sibling-cache");
+      await cache.put("/sibling-cached-proof", new Response(${JSON.stringify(siblingStorageValue)}));
+      return true;
+    })()`,
+    true,
+  );
+}
+
+async function inspectSiblingBrowserStorage(host: LocalBrowserHost): Promise<{
+  localStorage: boolean;
+  indexedDb: boolean;
+  cache: boolean;
+  permissionPolicy: boolean;
+}> {
+  const storage = (await host.view.webContents.executeJavaScript(
+    `(async () => {
+      const expected = ${JSON.stringify(siblingStorageValue)};
+      const databases = await indexedDB.databases();
+      const hasDatabase = databases.some(
+        (database) => database.name === "village-erasure-sibling-indexeddb"
+      );
+      const indexedDbValue = hasDatabase
+        ? await new Promise((resolve, reject) => {
+            const request = indexedDB.open("village-erasure-sibling-indexeddb");
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => {
+              const database = request.result;
+              const transaction = database.transaction("records", "readonly");
+              const read = transaction.objectStore("records").get("status");
+              read.onsuccess = () => {
+                database.close();
+                resolve(read.result);
+              };
+              read.onerror = () => reject(read.error);
+            };
+          })
+        : undefined;
+      const cached = await caches.match("/sibling-cached-proof");
+      return {
+        localStorage: localStorage.getItem("village-erasure-sibling") === expected,
+        indexedDb: indexedDbValue === expected,
+        cache: cached !== undefined && (await cached.text()) === expected,
+      };
+    })()`,
+    true,
+  )) as { localStorage: boolean; indexedDb: boolean; cache: boolean };
+  const permissionPolicy = await host.view.webContents.executeJavaScript(
+    `new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        () => resolve(false),
+        (error) => resolve(error.code === 1),
+        { timeout: 1000 }
+      );
+    })`,
+    true,
+  );
+  return { ...storage, permissionPolicy: permissionPolicy === true };
+}
+
 async function runRestartErasureVerification(
   profilePath: string,
   reportPath: string,
@@ -103,17 +218,20 @@ async function runRestartErasureVerification(
     process.platform,
     internalProofProfileProtection,
   );
-  const siblingLock = await ProfileLock.acquire(siblingProfile.path);
-  const siblingCookies = await (async () => {
+  const siblingHost = await createSiblingProofHost(profilePath);
+  const siblingEvidence = await (async () => {
     try {
-      return await session
-        .fromPath(siblingProfile.path, { cache: true })
-        .cookies.get({
-          url: OWNED_FIXTURE_ORIGIN,
-          name: siblingCookieName,
-        });
+      return {
+        cookies: await session
+          .fromPath(siblingProfile.path, { cache: true })
+          .cookies.get({
+            url: OWNED_FIXTURE_ORIGIN,
+            name: siblingCookieName,
+          }),
+        storage: await inspectSiblingBrowserStorage(siblingHost),
+      };
     } finally {
-      await siblingLock.release();
+      await siblingHost.close();
     }
   })();
   await writeFile(
@@ -122,8 +240,13 @@ async function runRestartErasureVerification(
       targetAbsentAfterRestart: await scopedProfileAbsent(targetPath),
       targetLockAbsentAfterRestart: await pathAbsent(`${targetPath}.lock`),
       siblingCookiePreserved:
-        siblingCookies.length === 1 &&
-        siblingCookies[0]?.value === siblingCookieValue,
+        siblingEvidence.cookies.length === 1 &&
+        siblingEvidence.cookies[0]?.value === siblingCookieValue,
+      siblingLocalStoragePreserved: siblingEvidence.storage.localStorage,
+      siblingIndexedDbPreserved: siblingEvidence.storage.indexedDb,
+      siblingCachePreserved: siblingEvidence.storage.cache,
+      siblingPermissionPolicyPreserved:
+        siblingEvidence.storage.permissionPolicy,
       siblingJournalPreserved: !(await pathAbsent(
         join(siblingProfile.path, "action-journal.json"),
       )),
@@ -218,12 +341,25 @@ async function waitForDestination(
 
 async function run(): Promise<void> {
   const profilePath = requiredPath("--village-fixture-secret-profile");
+  const crashDumpPath = join(profilePath, "crash-dumps");
   const restartErasureReport = optionalPath(
     "--village-fixture-erasure-restart-report",
   );
+  await mkdir(crashDumpPath, { recursive: true, mode: 0o700 });
   app.setPath("userData", profilePath);
+  app.setPath("crashDumps", crashDumpPath);
   installGlobalSecurityPolicy(app);
   await app.whenReady();
+  await session.defaultSession.protocol.handle("village", async (request) => {
+    const url = new URL(request.url);
+    if (url.host !== "app" || url.pathname !== "/") {
+      return new Response("Not found", { status: 404 });
+    }
+    return new Response(
+      "<!doctype html><html><body><p>Village crash recovery proof</p></body></html>",
+      { headers: { "content-type": "text/html; charset=utf-8" } },
+    );
+  });
   reportProofStage("APP_READY");
   if (restartErasureReport) {
     await runRestartErasureVerification(profilePath, restartErasureReport);
@@ -333,6 +469,15 @@ async function run(): Promise<void> {
       { mode: 0o600, flag: "wx" },
     ),
   ]);
+  const siblingHost = await createSiblingProofHost(profilePath);
+  try {
+    await seedSiblingBrowserStorage(siblingHost);
+    await session
+      .fromPath(siblingProfile.path, { cache: true })
+      .flushStorageData();
+  } finally {
+    await siblingHost.close();
+  }
 
   const fixtureRoot = join(
     process.resourcesPath,
@@ -464,6 +609,70 @@ async function run(): Promise<void> {
     );
     const devToolsOpened = host.view.webContents.isDevToolsOpened();
 
+    const trustedView = new WebContentsView();
+    trustedView.setBounds({ x: 799, y: 599, width: 1, height: 1 });
+    window.contentView.addChildView(trustedView);
+    await trustedView.webContents.loadURL("village://app/");
+    const crashUiState = new DesktopBrowserUiState();
+    const crashExecutor = new LocalActionExecutor({ leaseEpoch: 1 });
+    const crashDiagnostics: LocalDiagnostic[] = [];
+    let trustedReloadUrl: string | undefined;
+    let trustedStateRepublished = false;
+    const crashRecovery = new RenderProcessRecovery({
+      browser: host.view.webContents,
+      trustedRenderer: trustedView.webContents,
+      fenceBrowser: () => crashExecutor.markOfflineTakeover(),
+      markBrowserUnavailable: () => crashUiState.markConnection("ABSENT"),
+      capture: (diagnostic) => crashDiagnostics.push(diagnostic),
+      reloadTrustedRenderer: async (url) => {
+        trustedReloadUrl = url;
+        await trustedView.webContents.loadURL(url);
+      },
+      republishTrustedState: () => {
+        trustedStateRepublished = true;
+      },
+    });
+    crashRecovery.start();
+    const remoteRendererGone = new Promise<void>((resolve) =>
+      host!.view.webContents.once("render-process-gone", () => resolve()),
+    );
+    host.view.webContents.forcefullyCrashRenderer();
+    await remoteRendererGone;
+    const browserCrashFenced = crashExecutor.isAutomationBlocked();
+    const browserCrashWaiting =
+      crashUiState.current().connection === "ABSENT" &&
+      crashUiState.current().jobState === "WAITING_FOR_BROWSER" &&
+      crashUiState.current().controller === "NONE";
+
+    const trustedRendererGone = new Promise<void>((resolve) =>
+      trustedView.webContents.once("render-process-gone", () => resolve()),
+    );
+    trustedView.webContents.forcefullyCrashRenderer();
+    await trustedRendererGone;
+    await crashRecovery.settled();
+    const trustedRendererRecovered =
+      trustedReloadUrl === "village://app/" &&
+      trustedStateRepublished &&
+      trustedView.webContents.getURL() === "village://app/";
+    const crashDiagnosticsBounded =
+      JSON.stringify(crashDiagnostics) ===
+      JSON.stringify([
+        {
+          component: "BROWSER_HOST",
+          code: "REMOTE_RENDERER_GONE",
+          retriable: true,
+        },
+        {
+          component: "BROWSER_HOST",
+          code: "TRUSTED_RENDERER_GONE",
+          retriable: true,
+        },
+      ]);
+    crashRecovery.stop();
+    if (!trustedView.webContents.isDestroyed()) trustedView.webContents.close();
+    window.contentView.removeChildView(trustedView);
+    reportProofStage("RENDERER_CRASH_RECOVERY_VERIFIED");
+
     const erasureBinding = {
       principalId: targetProfileScope.principalId,
       deviceId: targetProfileScope.deviceId,
@@ -591,6 +800,11 @@ async function run(): Promise<void> {
         devToolsOpened,
         browserStorageSeeded,
         permissionPolicyEnforced,
+        browserCrashFenced,
+        browserCrashWaiting,
+        trustedRendererRecovered,
+        crashDiagnosticsBounded,
+        crashDumpSinkScoped: app.getPath("crashDumps") === crashDumpPath,
         bindingMatrixRejected,
         absentTokenRejected,
         expiredTokenRejected:

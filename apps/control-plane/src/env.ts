@@ -8,6 +8,7 @@ export interface Environment {
   VILLAGE_DEPLOYMENT_NAME: string;
   VILLAGE_AUTH_MODE: "development-header" | "cloudflare-access";
   VILLAGE_ENVIRONMENT: "development" | "production" | "test";
+  VILLAGE_EXPERIMENTAL_CONTINUITY: "disabled" | "enabled";
   VILLAGE_ALLOWED_ORIGINS: string;
   CF_ACCESS_TEAM_DOMAIN?: string;
   CF_ACCESS_AUD?: string;

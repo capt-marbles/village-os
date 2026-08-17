@@ -11,7 +11,12 @@ export default defineConfig({
   plugins: [
     cloudflareTest({
       wrangler: { configPath: "./apps/control-plane/wrangler.jsonc" },
-      miniflare: { bindings: { TEST_MIGRATIONS: d1Migrations } },
+      miniflare: {
+        bindings: {
+          TEST_MIGRATIONS: d1Migrations,
+          VILLAGE_EXPERIMENTAL_CONTINUITY: "enabled",
+        },
+      },
     }),
   ],
   resolve: {

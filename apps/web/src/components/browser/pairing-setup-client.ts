@@ -28,7 +28,6 @@ export interface PairedBrowserSession {
   jobId: string;
   browserSessionId: string;
   hostId: string;
-  fixtureBrowserSessionId: string;
 }
 
 interface ProvisionedSiteSession {
@@ -39,7 +38,6 @@ interface ProvisionedSiteSession {
 
 interface SessionProvisioningState {
   personal?: ProvisionedSiteSession;
-  fixture?: ProvisionedSiteSession;
   inFlight?: Promise<PairedBrowserSession>;
 }
 
@@ -245,14 +243,7 @@ export class PairingSetupClient {
         parsedDeviceId,
         "LINKEDIN",
       );
-      state.fixture ??= await this.createSiteSession(
-        parsedDeviceId,
-        "OWNED_FIXTURE",
-      );
-      return {
-        ...state.personal,
-        fixtureBrowserSessionId: state.fixture.browserSessionId,
-      };
+      return state.personal;
     })();
     try {
       return await state.inFlight;
@@ -296,27 +287,6 @@ export function pairingCompletionUrl(challenge: PairingChallenge): string {
 }
 
 export function pairingSessionUrl(
-  challenge: PairingChallenge,
-  session: PairedBrowserSession,
-): string {
-  const url = new URL("village-pair://session");
-  url.searchParams.set(
-    "principalId",
-    principalIdSchema.parse(challenge.principalId),
-  );
-  url.searchParams.set("deviceId", deviceIdSchema.parse(challenge.deviceId));
-  url.searchParams.set(
-    "browserSessionId",
-    browserSessionIdSchema.parse(session.browserSessionId),
-  );
-  url.searchParams.set(
-    "fixtureBrowserSessionId",
-    browserSessionIdSchema.parse(session.fixtureBrowserSessionId),
-  );
-  return url.toString();
-}
-
-export function pairingLegacySessionUrl(
   challenge: PairingChallenge,
   session: PairedBrowserSession,
 ): string {
