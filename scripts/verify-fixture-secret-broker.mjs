@@ -1,14 +1,12 @@
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { verifyPackagedMac } from "./verify-packaged-mac.mjs";
 
-const execFileAsync = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const defaultApplicationPath = path.join(
   root,
@@ -17,7 +15,69 @@ const defaultApplicationPath = path.join(
   "Village.app",
 );
 
-export function assertFixtureSecretBrokerEvidence(report, leakage) {
+export async function runBoundedProcess(
+  executable,
+  arguments_,
+  { timeoutMs, environment = process.env },
+) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(executable, arguments_, {
+      cwd: root,
+      env: environment,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const output = { stdout: [], stderr: [] };
+    const outputBytes = { stdout: 0, stderr: 0 };
+    const capture = (name, chunk) => {
+      if (outputBytes[name] >= 4 * 1024 * 1024) return;
+      const bytes = Buffer.from(chunk);
+      output[name].push(bytes);
+      outputBytes[name] += bytes.length;
+    };
+    child.stdout.on("data", (chunk) => capture("stdout", chunk));
+    child.stderr.on("data", (chunk) => capture("stderr", chunk));
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      setTimeout(() => child.kill("SIGKILL"), 2_000).unref();
+    }, timeoutMs);
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("exit", (code, signal) => {
+      clearTimeout(timeout);
+      const stdout = Buffer.concat(output.stdout).toString("utf8");
+      const stderr = Buffer.concat(output.stderr).toString("utf8");
+      if (timedOut) {
+        const stages = stderr
+          .split(/\r?\n/u)
+          .filter((line) => line.startsWith("VILLAGE_PROOF_STAGE:"));
+        const lastStage = stages.at(-1)?.slice("VILLAGE_PROOF_STAGE:".length);
+        reject(
+          new Error(
+            `PACKAGED_FIXTURE_SECRET_TIMEOUT${lastStage ? `_AT_${lastStage}` : ""}`,
+          ),
+        );
+      } else if (code === 0) {
+        resolve({ stdout, stderr });
+      } else {
+        reject(
+          new Error(
+            `PACKAGED_FIXTURE_SECRET_EXIT_${code ?? signal ?? "UNKNOWN"}${stderr ? `:${stderr.trim()}` : ""}`,
+          ),
+        );
+      }
+    });
+  });
+}
+
+export function assertFixtureSecretBrokerEvidence(
+  report,
+  leakage,
+  restartReport,
+) {
   if (
     report.status !== "PASS" ||
     report.authorizationResult !== "OK" ||
@@ -27,9 +87,37 @@ export function assertFixtureSecretBrokerEvidence(report, leakage) {
     report.destinationRequestCount !== 1 ||
     report.secretBufferCleared !== true ||
     report.clipboardUnchanged !== true ||
-    report.devToolsOpened !== false
+    report.devToolsOpened !== false ||
+    report.browserStorageSeeded !== true ||
+    report.permissionPolicyEnforced !== true ||
+    report.bindingMatrixRejected !== true ||
+    report.absentTokenRejected !== true ||
+    report.expiredTokenRejected !== true ||
+    report.replayRejected !== true ||
+    report.mainProcessRequestPathUsed !== true ||
+    report.cancelPreservedProfile !== true ||
+    report.partialFailureObserved !== true ||
+    report.erasureStaged !== true ||
+    report.automationFenced !== true ||
+    report.credentialReferenceRevoked !== true ||
+    report.credentialAbsent !== true ||
+    report.targetPresentUntilRestart !== true
   ) {
     throw new Error("PACKAGED_FIXTURE_SECRET_EVIDENCE_INCOMPLETE");
+  }
+  const missingRestartEvidence = [
+    "targetAbsentAfterRestart",
+    "targetLockAbsentAfterRestart",
+    "siblingCookiePreserved",
+    "siblingJournalPreserved",
+    "siblingVaultReferencePreserved",
+    "credentialReferenceAbsentAfterRestart",
+    "pendingErasureConsumed",
+  ].filter((field) => restartReport?.[field] !== true);
+  if (missingRestartEvidence.length > 0) {
+    throw new Error(
+      `PACKAGED_FIXTURE_SESSION_ERASURE_INCOMPLETE_${missingRestartEvidence.join("_")}`,
+    );
   }
   if (report.nonDestinationRequests !== 0) {
     throw new Error("PACKAGED_FIXTURE_SECRET_DESTINATION_NOT_EXCLUSIVE");
@@ -109,12 +197,16 @@ export async function runPackagedFixtureSecretBroker({
   );
   const seedPath = path.join(temporaryDirectory, "seed.bin");
   const reportPath = path.join(temporaryDirectory, "report.json");
+  const restartReportPath = path.join(
+    temporaryDirectory,
+    "restart-report.json",
+  );
   const profilePath = path.join(temporaryDirectory, "profile");
   const secret = `village-${randomBytes(24).toString("base64url")}`;
   await writeFile(seedPath, secret, { mode: 0o600, flag: "wx" });
   try {
     const executable = path.join(applicationPath, "Contents/MacOS/Village");
-    const { stdout, stderr } = await execFileAsync(
+    const { stdout, stderr } = await runBoundedProcess(
       executable,
       [
         "--village-fixture-secret-seed",
@@ -124,12 +216,26 @@ export async function runPackagedFixtureSecretBroker({
         "--village-fixture-secret-profile",
         profilePath,
       ],
-      { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 },
+      { timeoutMs },
     );
+    const { stdout: restartStdout, stderr: restartStderr } =
+      await runBoundedProcess(
+        executable,
+        [
+          "--village-fixture-secret-profile",
+          profilePath,
+          "--village-fixture-erasure-restart-report",
+          restartReportPath,
+        ],
+        { timeoutMs },
+      );
     const report = JSON.parse(await readFile(reportPath, "utf8"));
+    const restartReport = JSON.parse(await readFile(restartReportPath, "utf8"));
     const leakage = await scanFixtureSecretSinks(secret, [
       { name: "stdout", value: stdout },
       { name: "stderr", value: stderr },
+      { name: "restart-stdout", value: restartStdout },
+      { name: "restart-stderr", value: restartStderr },
     ]);
     for await (const file of filesBelow(temporaryDirectory)) {
       leakage.matches.push(
@@ -140,7 +246,7 @@ export async function runPackagedFixtureSecretBroker({
         )),
       );
     }
-    return assertFixtureSecretBrokerEvidence(report, leakage);
+    return assertFixtureSecretBrokerEvidence(report, leakage, restartReport);
   } finally {
     await rm(temporaryDirectory, { recursive: true, force: true });
   }
@@ -150,7 +256,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   runPackagedFixtureSecretBroker()
     .then((report) => {
       console.log(
-        `Packaged fixture secret broker passed: ${report.destinationRequestCount} destination request, 0 prohibited-sink matches.`,
+        `Packaged fixture secret broker and restart-safe erasure passed: ${report.destinationRequestCount} destination request, 0 prohibited-sink matches.`,
       );
     })
     .catch((error) => {
