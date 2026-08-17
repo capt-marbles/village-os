@@ -114,12 +114,14 @@ async function runPackagedProof(
   });
 }
 
-function assertProfileProtectionReport(report) {
+export function assertProfileProtectionReport(report) {
   const expectedKeys = [
     "backupExclusion",
     "cookieName",
     "indexExclusion",
+    "nativeConfirmation",
     "osCryptBackend",
+    "ownerPresence",
     "status",
   ];
   if (
@@ -130,7 +132,9 @@ function assertProfileProtectionReport(report) {
     report.cookieName !== "__Host-village_oscrypt_probe" ||
     report.osCryptBackend !== "keychain" ||
     report.backupExclusion !== "VERIFIED" ||
-    report.indexExclusion !== "VERIFIED"
+    report.indexExclusion !== "VERIFIED" ||
+    report.ownerPresence !== "VERIFIED" ||
+    report.nativeConfirmation !== "VERIFIED"
   ) {
     throw new Error("PACKAGED_PROFILE_PROTECTION_REPORT_INVALID");
   }
@@ -154,6 +158,9 @@ export async function verifyPackagedProfileProtection(
   const profileRoot = path.join(profilePath, "browser-profiles");
   const sentinel = randomBytes(32).toString("hex");
   try {
+    console.log(
+      "Village will request Keychain access, macOS owner authorization, and native forget-session confirmation.",
+    );
     await runPackagedProof(
       path.join(applicationPath, "Contents/MacOS/Village"),
       [
@@ -198,6 +205,8 @@ export async function verifyPackagedProfileProtection(
       cookieEncryption: "VERIFIED",
       backupExclusion: "VERIFIED",
       indexExclusion: "VERIFIED",
+      ownerPresence: "VERIFIED",
+      nativeConfirmation: "VERIFIED",
     };
   } finally {
     await execFileAsync("/usr/bin/tmutil", [
@@ -211,6 +220,6 @@ export async function verifyPackagedProfileProtection(
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   await verifyPackagedProfileProtection(process.argv[2]);
   console.log(
-    "Packaged macOS profile encryption, Time Machine exclusion, and Spotlight exclusion are valid.",
+    "Packaged macOS profile encryption, Time Machine exclusion, Spotlight exclusion, owner authorization, and native confirmation are valid.",
   );
 }
