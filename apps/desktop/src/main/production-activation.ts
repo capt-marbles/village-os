@@ -54,6 +54,10 @@ export function createProductionActivationCoordinator(
       openBrowserWorkspace: onWorkspace,
     });
 
+  const openActivatedBrowserWorkspace = () => {
+    void openBrowserWorkspace().catch(dependencies.reportActivationFailure);
+  };
+
   return {
     initialLaunch: (arguments_) => {
       let launch: Promise<BrowserWorkspaceLifecycle> | undefined;
@@ -63,18 +67,10 @@ export function createProductionActivationCoordinator(
       return workspaceActivated ? launch! : dependencies.runSteward();
     },
     activateExistingInstance: (arguments_) => {
-      activateWorkspace(arguments_, () => {
-        void openBrowserWorkspace().catch(dependencies.reportActivationFailure);
-      });
+      activateWorkspace(arguments_, openActivatedBrowserWorkspace);
     },
     activateOpenUrl: (event, url) => {
-      if (
-        activateWorkspace([url], () => {
-          void openBrowserWorkspace().catch(
-            dependencies.reportActivationFailure,
-          );
-        })
-      ) {
+      if (activateWorkspace([url], openActivatedBrowserWorkspace)) {
         event.preventDefault();
       }
     },
