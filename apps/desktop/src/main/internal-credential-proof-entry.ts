@@ -59,6 +59,7 @@ const siblingProfileScope: ProfileScope = {
 const targetCookieName = "__Host-village_erasure_target";
 const siblingCookieName = "__Host-village_erasure_sibling";
 const siblingCookieValue = "sibling-session-preserved";
+const siblingStorageValue = "sibling-storage-preserved";
 
 // This internal-only package proves broker and erasure behavior, not OS-crypt.
 // The release package excludes this entry; the dedicated profile proof owns
@@ -98,6 +99,106 @@ async function pathAbsent(path: string): Promise<boolean> {
   }
 }
 
+async function createSiblingProofHost(
+  userDataPath: string,
+): Promise<LocalBrowserHost> {
+  return LocalBrowserHost.create({
+    ...siblingProfileScope,
+    profileRoot: LocalBrowserHost.profileRoot(userDataPath),
+    initialUrl: `${OWNED_FIXTURE_ORIGIN}/login`,
+    profileProtection: internalProofProfileProtection,
+    prepareSession: (browserSession: Session) =>
+      installFixtureSessionHandler(
+        browserSession.protocol,
+        async () =>
+          new Response(
+            "<!doctype html><html><body><p>Sibling profile proof</p></body></html>",
+            { headers: { "content-type": "text/html; charset=utf-8" } },
+          ),
+      ),
+  });
+}
+
+async function seedSiblingBrowserStorage(
+  host: LocalBrowserHost,
+): Promise<void> {
+  await host.view.webContents.executeJavaScript(
+    `(async () => {
+      localStorage.setItem("village-erasure-sibling", ${JSON.stringify(siblingStorageValue)});
+      await new Promise((resolve, reject) => {
+        const request = indexedDB.open("village-erasure-sibling-indexeddb", 1);
+        request.onupgradeneeded = () => request.result.createObjectStore("records");
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+          const database = request.result;
+          const transaction = database.transaction("records", "readwrite");
+          transaction.objectStore("records").put(${JSON.stringify(siblingStorageValue)}, "status");
+          transaction.oncomplete = () => {
+            database.close();
+            resolve(true);
+          };
+          transaction.onerror = () => reject(transaction.error);
+        };
+      });
+      const cache = await caches.open("village-erasure-sibling-cache");
+      await cache.put("/sibling-cached-proof", new Response(${JSON.stringify(siblingStorageValue)}));
+      return true;
+    })()`,
+    true,
+  );
+}
+
+async function inspectSiblingBrowserStorage(host: LocalBrowserHost): Promise<{
+  localStorage: boolean;
+  indexedDb: boolean;
+  cache: boolean;
+  permissionPolicy: boolean;
+}> {
+  const storage = (await host.view.webContents.executeJavaScript(
+    `(async () => {
+      const expected = ${JSON.stringify(siblingStorageValue)};
+      const databases = await indexedDB.databases();
+      const hasDatabase = databases.some(
+        (database) => database.name === "village-erasure-sibling-indexeddb"
+      );
+      const indexedDbValue = hasDatabase
+        ? await new Promise((resolve, reject) => {
+            const request = indexedDB.open("village-erasure-sibling-indexeddb");
+            request.onerror = () => reject(request.error);
+            request.onsuccess = () => {
+              const database = request.result;
+              const transaction = database.transaction("records", "readonly");
+              const read = transaction.objectStore("records").get("status");
+              read.onsuccess = () => {
+                database.close();
+                resolve(read.result);
+              };
+              read.onerror = () => reject(read.error);
+            };
+          })
+        : undefined;
+      const cached = await caches.match("/sibling-cached-proof");
+      return {
+        localStorage: localStorage.getItem("village-erasure-sibling") === expected,
+        indexedDb: indexedDbValue === expected,
+        cache: cached !== undefined && (await cached.text()) === expected,
+      };
+    })()`,
+    true,
+  )) as { localStorage: boolean; indexedDb: boolean; cache: boolean };
+  const permissionPolicy = await host.view.webContents.executeJavaScript(
+    `new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        () => resolve(false),
+        (error) => resolve(error.code === 1),
+        { timeout: 1000 }
+      );
+    })`,
+    true,
+  );
+  return { ...storage, permissionPolicy: permissionPolicy === true };
+}
+
 async function runRestartErasureVerification(
   profilePath: string,
   reportPath: string,
@@ -117,17 +218,20 @@ async function runRestartErasureVerification(
     process.platform,
     internalProofProfileProtection,
   );
-  const siblingLock = await ProfileLock.acquire(siblingProfile.path);
-  const siblingCookies = await (async () => {
+  const siblingHost = await createSiblingProofHost(profilePath);
+  const siblingEvidence = await (async () => {
     try {
-      return await session
-        .fromPath(siblingProfile.path, { cache: true })
-        .cookies.get({
-          url: OWNED_FIXTURE_ORIGIN,
-          name: siblingCookieName,
-        });
+      return {
+        cookies: await session
+          .fromPath(siblingProfile.path, { cache: true })
+          .cookies.get({
+            url: OWNED_FIXTURE_ORIGIN,
+            name: siblingCookieName,
+          }),
+        storage: await inspectSiblingBrowserStorage(siblingHost),
+      };
     } finally {
-      await siblingLock.release();
+      await siblingHost.close();
     }
   })();
   await writeFile(
@@ -136,8 +240,13 @@ async function runRestartErasureVerification(
       targetAbsentAfterRestart: await scopedProfileAbsent(targetPath),
       targetLockAbsentAfterRestart: await pathAbsent(`${targetPath}.lock`),
       siblingCookiePreserved:
-        siblingCookies.length === 1 &&
-        siblingCookies[0]?.value === siblingCookieValue,
+        siblingEvidence.cookies.length === 1 &&
+        siblingEvidence.cookies[0]?.value === siblingCookieValue,
+      siblingLocalStoragePreserved: siblingEvidence.storage.localStorage,
+      siblingIndexedDbPreserved: siblingEvidence.storage.indexedDb,
+      siblingCachePreserved: siblingEvidence.storage.cache,
+      siblingPermissionPolicyPreserved:
+        siblingEvidence.storage.permissionPolicy,
       siblingJournalPreserved: !(await pathAbsent(
         join(siblingProfile.path, "action-journal.json"),
       )),
@@ -357,6 +466,15 @@ async function run(): Promise<void> {
       { mode: 0o600, flag: "wx" },
     ),
   ]);
+  const siblingHost = await createSiblingProofHost(profilePath);
+  try {
+    await seedSiblingBrowserStorage(siblingHost);
+    await session
+      .fromPath(siblingProfile.path, { cache: true })
+      .flushStorageData();
+  } finally {
+    await siblingHost.close();
+  }
 
   const fixtureRoot = join(
     process.resourcesPath,
