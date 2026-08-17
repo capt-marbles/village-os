@@ -39,6 +39,17 @@ test("the packaged proof rejects relative profile paths", () => {
   );
 });
 
+test("the clean-install proof can explicitly select the internal mock Keychain", () => {
+  const arguments_ = packagedDelegatedWorkflowArguments({
+    reportPath: "/tmp/village-proof-report.json",
+    profilePath: "/tmp/village-clean-install-profile",
+    provider: "DETERMINISTIC",
+    mockKeychain: true,
+  });
+
+  assert.equal(arguments_.at(-1), "--village-proof-mock-keychain");
+});
+
 test("the genuine proof selects the paired coordinator and a distinct fixture session", () => {
   const arguments_ = packagedDelegatedWorkflowArguments({
     reportPath: "/tmp/village-proof-report.json",

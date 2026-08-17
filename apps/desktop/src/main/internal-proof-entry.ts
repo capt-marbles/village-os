@@ -41,6 +41,10 @@ import { internalProofProfileProtection } from "./internal-profile-protection.js
 import { confirmSessionErasure } from "./session-erasure-request.js";
 import { verifyMacOsOwnerPresence } from "./step-up-auth.js";
 
+if (process.argv.includes("--village-proof-mock-keychain")) {
+  app.commandLine.appendSwitch("use-mock-keychain");
+}
+
 function argument(name: string): string | undefined {
   const index = process.argv.indexOf(name);
   return index === -1 ? undefined : process.argv[index + 1];
