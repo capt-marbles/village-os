@@ -559,7 +559,10 @@ describe("RitualBuilderWorkspace", () => {
 
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
 
-    await screen.findByText("Exa research is waiting");
+    const exaWait = await screen.findByText("Exa research is waiting");
+    expect(exaWait.closest("aside")?.getAttribute("aria-label")).toBe(
+      "Ritual agreement and activity",
+    );
     expect(screen.getByText(/Add or replace the Exa key/u)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry research" }));
     await screen.findByText("Run Receipt");

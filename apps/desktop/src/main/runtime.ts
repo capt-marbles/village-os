@@ -76,10 +76,6 @@ interface RitualRuntimeServices {
   scheduler: RitualScheduler;
   exaCredentials: ExaCredentialController;
 }
-app.on("open-url", (event, url) => {
-  event.preventDefault();
-  pairingInbox.accept(url);
-});
 app.on(
   "before-quit",
   createRitualShutdownHandler(
@@ -91,6 +87,10 @@ app.on(
     },
   ),
 );
+
+export function acceptRuntimePairingLink(value: string): boolean {
+  return pairingInbox.accept(value);
+}
 
 export function resolveRuntimeControlPlaneUrl(storedOrigin?: string): URL {
   const configured = storedOrigin ?? process.env.VILLAGE_CONTROL_PLANE_URL;

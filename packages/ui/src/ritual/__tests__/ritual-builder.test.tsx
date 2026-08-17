@@ -132,6 +132,7 @@ describe("Ritual Builder", () => {
     );
     expect(triggerHtml).toContain("Weekdays");
     expect(triggerHtml).toContain("When new work arrives");
+    expect(triggerHtml).not.toContain("What should we make repeatable?");
 
     state = reduceRitualBuilder(state, {
       type: "SELECT_TRIGGER",
