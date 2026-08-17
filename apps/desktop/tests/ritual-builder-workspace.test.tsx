@@ -370,7 +370,10 @@ describe("RitualBuilderWorkspace", () => {
     });
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
 
-    await screen.findByText("Steward inbox");
+    const inboxHeading = await screen.findByText("Steward inbox");
+    expect(
+      inboxHeading.closest('aside[aria-label="Ritual agreement and activity"]'),
+    ).not.toBeNull();
     expect(screen.getByText("2 needs attention")).toBeTruthy();
     expect(screen.getAllByText("Approve")[0]).toBeTruthy();
     expect(screen.getByText(runReceipt.summary)).toBeTruthy();
@@ -811,7 +814,7 @@ describe("RitualBuilderWorkspace", () => {
   it("does not call the Steward when local purpose validation fails", async () => {
     const activeBridge = bridge();
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
-    await screen.findByText("Shape a Ritual with your Steward");
+    await screen.findByText("What should we make repeatable?");
     fireEvent.change(screen.getByLabelText("What should become repeatable?"), {
       target: { value: "   " },
     });
@@ -823,7 +826,7 @@ describe("RitualBuilderWorkspace", () => {
   it("sends the curated 30-day starter through the strict Steward boundary", async () => {
     const activeBridge = bridge();
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
-    await screen.findByText("Shape a Ritual with your Steward");
+    await screen.findByText("What should we make repeatable?");
 
     fireEvent.click(
       screen.getByRole("button", { name: /30-day signal brief/u }),
@@ -855,7 +858,7 @@ describe("RitualBuilderWorkspace", () => {
       reason: "MALFORMED_PROVIDER_OUTPUT",
     });
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
-    await screen.findByText("Shape a Ritual with your Steward");
+    await screen.findByText("What should we make repeatable?");
     fireEvent.change(screen.getByLabelText("What should become repeatable?"), {
       target: { value: "Prepare my pipeline review." },
     });
@@ -879,7 +882,7 @@ describe("RitualBuilderWorkspace", () => {
         }),
     );
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
-    await screen.findByText("Shape a Ritual with your Steward");
+    await screen.findByText("What should we make repeatable?");
 
     fireEvent.change(screen.getByLabelText("What should become repeatable?"), {
       target: { value: "Prepare my pipeline review." },

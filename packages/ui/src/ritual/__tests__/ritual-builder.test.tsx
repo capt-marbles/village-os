@@ -76,13 +76,17 @@ describe("Ritual Builder", () => {
         identity={identity}
         state={createRitualBuilderState()}
         onEvent={vi.fn()}
+        stewardDesk={<div>Steward inbox</div>}
       />,
     );
-    expect(html).toContain("Shape a Ritual with your Steward");
-    expect(html).toContain("Ritual draft");
+    expect(html).toContain("Your Steward");
+    expect(html).toContain("What should we make repeatable?");
     expect(html).toContain('aria-label="Conversation with Steward"');
-    expect(html).toContain('aria-label="Ritual draft side pane"');
+    expect(html).toContain('aria-label="Ritual agreement and activity"');
     expect(html).toContain("What regular work should I take care of?");
+    expect(html.indexOf("Steward inbox")).toBeGreaterThan(
+      html.indexOf('aria-label="Ritual agreement and activity"'),
+    );
   });
 
   it("offers a bounded 30-day signal starter without hiding the source limits", () => {

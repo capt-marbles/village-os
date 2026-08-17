@@ -9,7 +9,7 @@ export function installRitualBuilderMenu(
         label: "Village",
         submenu: [
           {
-            label: "Open Ritual Builder",
+            label: "Open Steward",
             accelerator: "CmdOrCtrl+Shift+R",
             click: () => void openRitualBuilder(),
           },
