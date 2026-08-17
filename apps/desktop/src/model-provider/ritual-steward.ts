@@ -303,6 +303,10 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
       );
       const question = ritualStewardQuestionContentSchema.safeParse(raw);
       if (question.success) {
+        if (context.starter) {
+          this.threadId = undefined;
+          return waiting(context, "MALFORMED_PROVIDER_OUTPUT");
+        }
         return ritualStewardResultSchema.parse({
           status: "question",
           draftId: context.draftId,
@@ -311,9 +315,10 @@ export class CodexRitualStewardProvider implements RitualStewardProvider {
         });
       }
       const proposal = ritualStewardProposalContentSchema.safeParse(
-        normalizeProposalStepKeys(raw),
+        normalizeDraftProposal(raw, context.starter !== undefined),
       );
       if (!proposal.success) {
+        this.threadId = undefined;
         return waiting(context, "MALFORMED_PROVIDER_OUTPUT");
       }
       return ritualStewardResultSchema.parse({
@@ -569,13 +574,46 @@ function normalizeProposalStepKeys(candidate: unknown): unknown {
   return { ...candidate, steps };
 }
 
+function normalizeDraftProposal(
+  candidate: unknown,
+  bindResearchLocally: boolean,
+): unknown {
+  const normalized = normalizeProposalStepKeys(candidate);
+  if (!isRecord(normalized)) return normalized;
+  const proposal = { ...normalized };
+  if (Array.isArray(proposal.permissions)) {
+    proposal.permissions = proposal.permissions.map((permission) =>
+      typeof permission === "string"
+        ? permission.trim().slice(0, 80).trim()
+        : permission,
+    );
+  }
+  if (bindResearchLocally) delete proposal.research;
+  return proposal;
+}
+
 function normalizeProposedDefinitionStepKeys(candidate: unknown): unknown {
   if (!isRecord(candidate) || !isRecord(candidate.proposedDefinition)) {
     return candidate;
   }
+  const proposedDefinition = normalizeProposalStepKeys(
+    candidate.proposedDefinition,
+  );
   return {
     ...candidate,
-    proposedDefinition: normalizeProposalStepKeys(candidate.proposedDefinition),
+    proposedDefinition: isRecord(proposedDefinition)
+      ? {
+          ...proposedDefinition,
+          ...(typeof proposedDefinition.completion === "string"
+            ? {
+                completion: proposedDefinition.completion
+                  .trim()
+                  .slice(0, 320)
+                  .trim(),
+              }
+            : {}),
+        }
+      : proposedDefinition,
   };
 }
 
