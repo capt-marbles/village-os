@@ -41,6 +41,8 @@ The current module validates update evidence but is not yet wired to a productio
 
 For each candidate release, archive evidence for the source commit, dependency audit, static configuration gate, tests, package hash, `codesign` identity and entitlements, notarization result, Gatekeeper assessment, Electron fuse state, update manifest, redirect behavior, and clean-install/update/downgrade tests. A source configuration is not proof that the produced artifact has those properties.
 
+`pnpm audit:sbom` fails closed when an installed production component or the bundled Electron runtime lacks a version, license, or complete dependency reference. A successful release package writes the deterministic CycloneDX 1.6 inventory to `release/sbom/village.cdx.json` after artifact verification. Archive that file beside the signed release artifacts; it contains package URLs and safe distribution references but no local filesystem paths.
+
 ## Response targets
 
 - Triage a credible critical Electron or Village security report within 24 hours.

@@ -391,6 +391,7 @@ export class SiteSessionMailbox extends DurableObject<Environment> {
     if (binding.principalId !== principal.data) {
       return { ok: false as const, code: "MAILBOX_NOT_FOUND" };
     }
+    await this.ctx.storage.deleteAlarm();
     await this.ctx.storage.deleteAll();
     this.destroyed = true;
     return { ok: true as const, deleted: true as const };
@@ -430,6 +431,10 @@ export class SiteSessionMailbox extends DurableObject<Environment> {
   }
 
   override async alarm(): Promise<void> {
+    if (this.destroyed) {
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
     const now = new Date().toISOString();
     this.ctx.storage.sql.exec(
       "DELETE FROM encrypted_revisions WHERE expires_at <= ?",

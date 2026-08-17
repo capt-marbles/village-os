@@ -65,6 +65,16 @@ test("CI delegates packaged dependency preparation to the package command", () =
   );
 });
 
+test("the release package audits and emits its CycloneDX SBOM", () => {
+  const release = desktopPackage.scripts["package:mac:release"];
+  assert.match(release, /pnpm --dir \.\.\/\.\. audit:sbom/);
+  assert.match(release, /pnpm --dir \.\.\/\.\. generate:sbom/);
+  assert.ok(
+    release.indexOf("generate:sbom") >
+      release.indexOf("verify-packaged-mac.mjs --release"),
+  );
+});
+
 test("the Ritual smoke package opens its isolated surface, never the delegated proof harness", () => {
   assert.match(
     desktopPackage.scripts["package:mac:ritual-e2e"],
