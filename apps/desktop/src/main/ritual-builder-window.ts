@@ -64,6 +64,7 @@ export async function createRitualBuilderWindow(options: {
   const pauseScheduleChannel = "village:ritual-builder:pause-schedule";
   const proposeLearningChannel = "village:ritual-builder:propose-learning";
   const approveLearningChannel = "village:ritual-builder:approve-learning";
+  const decideLearningChannel = "village:ritual-builder:decide-learning";
   const exaStatusChannel = "village:ritual-builder:get-exa-credential-status";
   const configureExaChannel = "village:ritual-builder:configure-exa-api-key";
   const removeExaChannel = "village:ritual-builder:remove-exa-api-key";
@@ -140,6 +141,10 @@ export async function createRitualBuilderWindow(options: {
     assertSender(event);
     return options.controller.approveLearning(candidate);
   });
+  ipcMain.handle(decideLearningChannel, async (event, candidate) => {
+    assertSender(event);
+    return options.controller.decideLearning(candidate);
+  });
   ipcMain.handle(exaStatusChannel, async (event, ...arguments_) => {
     assertSender(event);
     if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
@@ -198,6 +203,7 @@ export async function createRitualBuilderWindow(options: {
     ipcMain.removeHandler(pauseScheduleChannel);
     ipcMain.removeHandler(proposeLearningChannel);
     ipcMain.removeHandler(approveLearningChannel);
+    ipcMain.removeHandler(decideLearningChannel);
     ipcMain.removeHandler(exaStatusChannel);
     ipcMain.removeHandler(configureExaChannel);
     ipcMain.removeHandler(removeExaChannel);

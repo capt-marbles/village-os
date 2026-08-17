@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld(
       ipcRenderer.invoke("village:ritual-builder:propose-learning", request),
     approveLearning: (request) =>
       ipcRenderer.invoke("village:ritual-builder:approve-learning", request),
+    decideLearning: (request) =>
+      ipcRenderer.invoke("village:ritual-builder:decide-learning", request),
     getExaCredentialStatus: () =>
       ipcRenderer.invoke("village:ritual-builder:get-exa-credential-status"),
     configureExaApiKey: (apiKey) =>

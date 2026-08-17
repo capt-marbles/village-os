@@ -197,13 +197,14 @@ describe("RitualRepository", () => {
 
     expect(await repository.list()).toEqual([approved]);
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
-      schemaVersion: 5,
+      schemaVersion: 6,
       rituals: [approved],
       receipts: [],
       learningProposals: [],
       runs: [],
       runReceipts: [],
       schedules: [],
+      learningDecisions: [],
     });
     if (process.platform !== "win32") {
       expect((await lstat(path)).mode & 0o077).toBe(0);
@@ -228,16 +229,18 @@ describe("RitualRepository", () => {
       receipt,
       run: null,
       runReceipt: null,
+      learningReview: null,
     });
     const stored = await readFile(path, "utf8");
     expect(JSON.parse(stored)).toEqual({
-      schemaVersion: 5,
+      schemaVersion: 6,
       rituals: [approved],
       receipts: [receipt],
       learningProposals: [],
       runs: [],
       runReceipts: [],
       schedules: [],
+      learningDecisions: [],
     });
     expect(stored).not.toContain("Customer A needs an answer before Friday");
   });
@@ -286,6 +289,7 @@ describe("RitualRepository", () => {
       receipt,
       run: null,
       runReceipt: null,
+      learningReview: null,
     });
 
     await expect(
@@ -320,7 +324,171 @@ describe("RitualRepository", () => {
       receipt: null,
       run: null,
       runReceipt: null,
+      learningReview: null,
     });
+  });
+
+  it("restores only an undecided learning proposal after restart", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
+    try {
+      const path = join(directory, "rituals.json");
+      let decisionTime = 0;
+      const repository = new RitualRepository(path, {
+        now: () =>
+          decisionTime++ === 0
+            ? "2026-08-17T14:00:00.000Z"
+            : "2026-08-17T14:00:01.000Z",
+      });
+      await repository.save(approved);
+      await repository.saveReceipt(receipt);
+      await repository.saveLearningProposal(learningProposal);
+
+      await expect(
+        new RitualRepository(path).latestSnapshot(),
+      ).resolves.toMatchObject({
+        learningReview: {
+          kind: "TEST",
+          proposal: learningProposal,
+          receipt,
+        },
+      });
+
+      await repository.decideLearning({
+        schemaVersion: 1,
+        proposalId: learningProposal.proposalId,
+        ritualId: approved.ritualId,
+        expectedFromRevision: approved.ritualRevision,
+        decision: "REJECTED",
+      });
+      await repository.decideLearning({
+        schemaVersion: 1,
+        proposalId: learningProposal.proposalId,
+        ritualId: approved.ritualId,
+        expectedFromRevision: approved.ritualRevision,
+        decision: "REJECTED",
+      });
+      expect(
+        JSON.parse(await readFile(path, "utf8")).learningDecisions,
+      ).toEqual([
+        expect.objectContaining({
+          proposalId: learningProposal.proposalId,
+          decision: "REJECTED",
+          decidedAt: "2026-08-17T14:00:00.000Z",
+        }),
+      ]);
+      await expect(
+        repository.decideLearning({
+          schemaVersion: 1,
+          proposalId: learningProposal.proposalId,
+          ritualId: approved.ritualId,
+          expectedFromRevision: approved.ritualRevision,
+          decision: "REVISION_REQUESTED",
+        }),
+      ).rejects.toThrow("RITUAL_LEARNING_DECISION_CONFLICT");
+
+      const revision = approveRitualLearningProposal(
+        approved,
+        learningProposal,
+        {
+          schemaVersion: 1,
+          proposalId: learningProposal.proposalId,
+          ritualId: approved.ritualId,
+          expectedFromRevision: approved.ritualRevision,
+          approvedAt: "2026-08-17T14:01:00.000Z",
+        },
+      );
+      await expect(repository.save(revision)).rejects.toThrow(
+        "STALE_RITUAL_LEARNING_REVISION",
+      );
+
+      await expect(
+        new RitualRepository(path).latestSnapshot(),
+      ).resolves.toMatchObject({
+        learningReview: null,
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a decision after the proposal has already become a revision", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
+    try {
+      const repository = new RitualRepository(join(directory, "rituals.json"));
+      await repository.save(approved);
+      await repository.saveReceipt(receipt);
+      await repository.saveLearningProposal(learningProposal);
+      await repository.save(
+        approveRitualLearningProposal(approved, learningProposal, {
+          schemaVersion: 1,
+          proposalId: learningProposal.proposalId,
+          ritualId: approved.ritualId,
+          expectedFromRevision: approved.ritualRevision,
+          approvedAt: "2026-08-17T14:01:00.000Z",
+        }),
+      );
+
+      await expect(
+        repository.decideLearning({
+          schemaVersion: 1,
+          proposalId: learningProposal.proposalId,
+          ritualId: approved.ritualId,
+          expectedFromRevision: approved.ritualRevision,
+          decision: "REJECTED",
+        }),
+      ).rejects.toThrow("STALE_RITUAL_LEARNING_DECISION");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("restores a pending Run-backed learning proposal with exact evidence", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
+    try {
+      const path = join(directory, "rituals.json");
+      const repository = new RitualRepository(path);
+      const run = terminalRunFor("rrn_01J00000000000000000000009");
+      const runReceipt = runReceiptFor(run, "rcp_01J00000000000000000000009");
+      const proposal = {
+        ...learningProposal,
+        proposalId: "rlp_01J00000000000000000000009",
+        receiptId: runReceipt.receiptId,
+      };
+      await repository.save(approved);
+      await repository.saveRun(runFor(run.runId));
+      let advancing = reduceRitualRun(runFor(run.runId), approved, {
+        type: "START",
+        occurredAt: "2026-08-16T12:00:01.000Z",
+      });
+      await repository.saveRun(advancing);
+      advancing = reduceRitualRun(advancing, approved, {
+        type: "APPROVE_STEP",
+        stepKey: approved.steps[0]!.stepKey,
+        occurredAt: "2026-08-16T12:00:02.000Z",
+      });
+      await repository.saveRun(advancing);
+      advancing = reduceRitualRun(advancing, approved, {
+        type: "COMPLETE_STEP",
+        stepKey: approved.steps[0]!.stepKey,
+        occurredAt: "2026-08-16T12:00:03.000Z",
+      });
+      await repository.saveRun(advancing);
+      await repository.completeRun(run, runReceipt);
+      await repository.saveLearningProposal(proposal);
+
+      await expect(
+        new RitualRepository(path).latestSnapshot(),
+      ).resolves.toMatchObject({
+        learningReview: {
+          kind: "RUN",
+          proposal,
+          receipt: runReceipt,
+          run,
+        },
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("preserves Run Receipt lineage through an approved learning revision", async () => {
@@ -443,6 +611,7 @@ describe("RitualRepository", () => {
       receipt: null,
       run: null,
       runReceipt: null,
+      learningReview: null,
     });
   });
 

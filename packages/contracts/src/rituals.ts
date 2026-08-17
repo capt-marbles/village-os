@@ -528,6 +528,56 @@ export const ritualLearningApprovalRequestSchema = z.strictObject({
   approvedAt: instantSchema,
 });
 
+export const ritualLearningDecisionRequestSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  proposalId: ritualLearningProposalIdSchema,
+  ritualId: ritualIdSchema,
+  expectedFromRevision: z.number().int().positive(),
+  decision: z.enum(["REJECTED", "REVISION_REQUESTED"]),
+});
+
+export const ritualLearningDecisionSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  proposalId: ritualLearningProposalIdSchema,
+  ritualId: ritualIdSchema,
+  fromRevision: z.number().int().positive(),
+  decision: ritualLearningDecisionRequestSchema.shape.decision,
+  decidedAt: instantSchema,
+});
+
+export const ritualPendingLearningReviewSchema = z
+  .discriminatedUnion("kind", [
+    z.strictObject({
+      kind: z.literal("TEST"),
+      proposal: ritualLearningProposalSchema,
+      receipt: ritualTestReceiptSchema,
+    }),
+    z.strictObject({
+      kind: z.literal("RUN"),
+      proposal: ritualLearningProposalSchema,
+      receipt: ritualRunReceiptSchema,
+      run: ritualRunSchema,
+    }),
+  ])
+  .superRefine((review, refinement) => {
+    const bindingsMatch =
+      review.proposal.receiptId === review.receipt.receiptId &&
+      review.proposal.ritualId === review.receipt.ritualId &&
+      review.proposal.fromRevision === review.receipt.ritualRevision;
+    const runMatches =
+      review.kind === "TEST" ||
+      (review.run.runId === review.receipt.runId &&
+        review.run.ritualId === review.receipt.ritualId &&
+        review.run.ritualRevision === review.receipt.ritualRevision &&
+        review.run.status === review.receipt.outcome);
+    if (!bindingsMatch || !runMatches) {
+      refinement.addIssue({
+        code: "custom",
+        message: "Pending learning Review lineage must match",
+      });
+    }
+  });
+
 const ritualLocalTimeSchema = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
 
 const ritualTimeZoneSchema = z
@@ -611,7 +661,7 @@ export const ritualStoreV4Schema = z.strictObject({
   runReceipts: z.array(ritualRunReceiptSchema).max(100),
 });
 
-export const ritualStoreSchema = z.strictObject({
+export const ritualStoreV5Schema = z.strictObject({
   schemaVersion: z.literal(5),
   rituals: z.array(approvedRitualRevisionSchema).max(100),
   receipts: z.array(ritualTestReceiptSchema).max(100),
@@ -619,6 +669,12 @@ export const ritualStoreSchema = z.strictObject({
   runs: z.array(ritualRunSchema).max(100),
   runReceipts: z.array(ritualRunReceiptSchema).max(100),
   schedules: z.array(ritualScheduleSchema).max(100),
+});
+
+export const ritualStoreSchema = z.strictObject({
+  schemaVersion: z.literal(6),
+  ...ritualStoreV5Schema.omit({ schemaVersion: true }).shape,
+  learningDecisions: z.array(ritualLearningDecisionSchema).max(100),
 });
 
 export const ritualStewardContextSchema = z
@@ -799,6 +855,15 @@ export type RitualLearningProposal = z.infer<
 export type RitualLearningResult = z.infer<typeof ritualLearningResultSchema>;
 export type RitualLearningApprovalRequest = z.infer<
   typeof ritualLearningApprovalRequestSchema
+>;
+export type RitualLearningDecisionRequest = z.infer<
+  typeof ritualLearningDecisionRequestSchema
+>;
+export type RitualLearningDecision = z.infer<
+  typeof ritualLearningDecisionSchema
+>;
+export type RitualPendingLearningReview = z.infer<
+  typeof ritualPendingLearningReviewSchema
 >;
 
 export function validateRitualStewardResult(

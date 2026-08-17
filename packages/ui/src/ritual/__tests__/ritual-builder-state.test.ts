@@ -50,6 +50,89 @@ function applyStewardProposal(
 }
 
 describe("Ritual Builder state", () => {
+  it("restores a pending learning proposal for Review", () => {
+    let state = reduceRitualBuilder(createRitualBuilderState(), {
+      type: "RESTORE_APPROVED",
+      approved: {
+        schemaVersion: 1,
+        ritualId,
+        ritualRevision: 1,
+        status: "APPROVED",
+        approvedDraftId: draftId,
+        approvedDraftRevision: 3,
+        name: "Pipeline review",
+        purpose: "Prepare a weekday pipeline review.",
+        trigger: { kind: "ON_DEMAND", summary: "Whenever I ask" },
+        steps: [
+          {
+            stepKey: "prepare-review",
+            title: "Prepare the review",
+            description:
+              "Gather the bounded information needed for the review.",
+            actor: { kind: "STEWARD", role: "Steward" },
+            approval: "OWNER_REQUIRED",
+          },
+        ],
+        permissions: ["Read only connected pipeline records"],
+        completion: "A reviewable follow-up list is ready.",
+        reviewPolicy: {
+          ownerReview: "EVERY_RUN",
+          learning: "PROPOSE_ONLY",
+        },
+        approvedAt: at,
+      },
+    });
+    const approved = state.phase === "APPROVED" ? state.approved : null;
+    if (!approved) throw new Error("expected restored approval");
+    const receipt = {
+      schemaVersion: 1 as const,
+      receiptId: "rcp_01J00000000000000000000000",
+      runId: "rrn_01J00000000000000000000000",
+      ritualId,
+      ritualRevision: 1,
+      mode: "TEST" as const,
+      outcome: "NEEDS_REVIEW" as const,
+      summary: "The review found one priority.",
+      evidence: ["The supplied deadline is Friday."],
+      uncertainties: [],
+      sampleDigest: "a".repeat(64),
+      sampleCharacterCount: 42,
+      externalEffects: [] as [],
+      recordedAt: "2026-08-17T13:00:00.000Z",
+    };
+    const proposal = {
+      status: "proposal" as const,
+      proposalId: "rlp_01J00000000000000000000000",
+      ritualId,
+      fromRevision: 1,
+      receiptId: receipt.receiptId,
+      ownerFeedback: "Keep the next result to three concise bullets.",
+      stewardMessage: "I propose a more concise expected result.",
+      rationale: "The owner requested a shorter review.",
+      proposedDefinition: {
+        name: approved.name,
+        purpose: approved.purpose,
+        trigger: approved.trigger,
+        steps: approved.steps,
+        permissions: approved.permissions,
+        completion: "Three concise bullets are ready for review.",
+        reviewPolicy: approved.reviewPolicy,
+      },
+    };
+
+    state = reduceRitualBuilder(state, {
+      type: "RESTORE_LEARNING_REVIEW",
+      review: { kind: "TEST", proposal, receipt },
+    });
+
+    expect(state).toMatchObject({
+      phase: "REVIEW_LEARNING",
+      approved,
+      source: { kind: "TEST", receipt },
+      proposal,
+    });
+  });
+
   it("answers one Steward clarification before creating the draft", () => {
     let state = reduceRitualBuilder(createRitualBuilderState(), {
       type: "SUBMIT_PURPOSE",
@@ -373,7 +456,13 @@ describe("Ritual Builder state", () => {
     if (learningReview.source.kind !== "RUN") {
       throw new Error("expected Run-backed learning source");
     }
-    const rejected = reduceRitualBuilder(state, { type: "REJECT_LEARNING" });
+    const rejecting = reduceRitualBuilder(state, {
+      type: "REJECT_LEARNING",
+    });
+    expect(rejecting.phase).toBe("SAVING_LEARNING_DECISION");
+    const rejected = reduceRitualBuilder(rejecting, {
+      type: "LEARNING_DECISION_SAVED",
+    });
     expect(rejected.phase).toBe("REVIEW_RUN");
     if (rejected.phase !== "REVIEW_RUN") {
       throw new Error("expected exact Run review after rejection");

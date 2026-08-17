@@ -829,6 +829,7 @@ export function RitualBuilder({
             ) : null}
 
             {state.phase === "REVIEW_LEARNING" ||
+            state.phase === "SAVING_LEARNING_DECISION" ||
             state.phase === "SAVING_LEARNING" ? (
               <LearningProposalReview state={state} onEvent={onEvent} />
             ) : null}
@@ -853,13 +854,17 @@ function LearningProposalReview({
 }: {
   state: Extract<
     RitualBuilderState,
-    { phase: "REVIEW_LEARNING" | "SAVING_LEARNING" }
+    {
+      phase: "REVIEW_LEARNING" | "SAVING_LEARNING_DECISION" | "SAVING_LEARNING";
+    }
   >;
   onEvent(event: RitualBuilderEvent): void;
 }) {
   const proposed = state.proposal.proposedDefinition;
   const current = state.approved;
   const saving = state.phase === "SAVING_LEARNING";
+  const deciding = state.phase === "SAVING_LEARNING_DECISION";
+  const busy = saving || deciding;
   return (
     <section className="ritual-learning" aria-labelledby="learning-title">
       <header>
@@ -905,7 +910,7 @@ function LearningProposalReview({
       <footer>
         <button
           type="button"
-          disabled={saving}
+          disabled={busy}
           onClick={() =>
             onEvent({ type: "APPROVE_LEARNING", occurredAt: now() })
           }
@@ -916,17 +921,19 @@ function LearningProposalReview({
         </button>
         <button
           type="button"
-          disabled={saving}
+          disabled={busy}
           onClick={() => onEvent({ type: "REVISE_LEARNING" })}
         >
           Ask for changes
         </button>
         <button
           type="button"
-          disabled={saving}
+          disabled={busy}
           onClick={() => onEvent({ type: "REJECT_LEARNING" })}
         >
-          Reject
+          {deciding && state.pendingDecision === "REJECTED"
+            ? "Saving rejection…"
+            : "Reject"}
         </button>
       </footer>
     </section>
