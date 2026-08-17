@@ -111,6 +111,7 @@ body { margin: 0; min-width: 320px; min-height: 100vh; background: radial-gradie
 .ritual-composer textarea, .ritual-composer input { width: 100%; resize: vertical; border: 1px solid #405242; border-radius: 1rem; padding: 1rem 1.1rem; color: #f2f5ed; background: #151c16; font: inherit; line-height: 1.5; }
 .ritual-composer button, .ritual-approval button { min-height: 46px; margin-top: .8rem; border: 0; border-radius: 999px; padding: .7rem 1.15rem; color: #11200f; background: #b8e19f; font: 800 .84rem ui-sans-serif, system-ui; cursor: pointer; }
 .ritual-composer > p { margin: .65rem 0 0; color: #8fa08e; font-size: .76rem; line-height: 1.45; }
+.ritual-clarification { margin-top: 1rem; }
 .ritual-test-composer p { margin: .55rem 0 0; color: #8fa08e; font-size: .76rem; line-height: 1.45; }
 .ritual-decisions > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; }
 .ritual-decisions button { display: grid; grid-template-columns: 2rem 1fr; gap: .2rem .7rem; min-height: 116px; border: 1px solid #3a4b3c; border-radius: 1rem; padding: .9rem; color: #edf2e9; background: #151c16; text-align: left; cursor: pointer; transition: border-color 160ms ease, transform 160ms ease, background 160ms ease; }

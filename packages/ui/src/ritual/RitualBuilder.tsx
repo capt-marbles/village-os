@@ -68,6 +68,19 @@ export function RitualBuilder({
       feedback: String(data.get("feedback") ?? ""),
     });
   };
+  const submitClarification = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (state.phase !== "CLARIFYING") return;
+    const data = new FormData(event.currentTarget);
+    onEvent({
+      type: "ANSWER_CLARIFICATION",
+      questionId: state.question.questionId,
+      selection: {
+        kind: "TEXT",
+        text: String(data.get("clarification") ?? ""),
+      },
+    });
+  };
   const edit = (field: "name" | "purpose" | "completion", value: string) =>
     onEvent({ type: "EDIT_FIELD", field, value, occurredAt: now() });
   const fieldsEditable =
@@ -199,6 +212,44 @@ export function RitualBuilder({
           </div>
         ) : null}
 
+        {state.phase === "CLARIFYING" ? (
+          <>
+            <DecisionGroup
+              label={state.question.prompt}
+              options={state.question.options.map((option, index) => ({
+                id: option.optionId,
+                title: option.label,
+                detail: option.detail,
+                accent: String(index + 1),
+                action: () =>
+                  onEvent({
+                    type: "ANSWER_CLARIFICATION",
+                    questionId: state.question.questionId,
+                    selection: {
+                      kind: "OPTION",
+                      optionId: option.optionId,
+                    },
+                  }),
+              }))}
+            />
+            <form
+              className="ritual-composer ritual-clarification"
+              onSubmit={submitClarification}
+            >
+              <label htmlFor="ritual-clarification">Something else</label>
+              <input
+                id="ritual-clarification"
+                name="clarification"
+                maxLength={320}
+                placeholder="Add a short answer in your own words"
+                required
+                autoComplete="off"
+              />
+              <button type="submit">Use this answer</button>
+            </form>
+          </>
+        ) : null}
+
         {state.phase === "PREPARING_TEST" ? (
           <form
             className="ritual-composer ritual-test-composer"
@@ -281,6 +332,7 @@ export function RitualBuilder({
             label="Choose how the Ritual begins"
             options={[
               {
+                id: "on-demand",
                 title: "On demand",
                 detail: "Only when you ask",
                 accent: "A",
@@ -293,6 +345,7 @@ export function RitualBuilder({
                   }),
               },
               {
+                id: "weekdays",
                 title: "Weekdays",
                 detail: "8:30 AM in your timezone",
                 accent: "W",
@@ -305,6 +358,7 @@ export function RitualBuilder({
                   }),
               },
               {
+                id: "event",
                 title: "When new work arrives",
                 detail: "Respond to a source event",
                 accent: "N",
@@ -325,6 +379,7 @@ export function RitualBuilder({
             label="Choose your Review rhythm"
             options={[
               {
+                id: "every-run",
                 title: "Review every Run",
                 detail: "Best while the Ritual is learning",
                 accent: "1",
@@ -336,6 +391,7 @@ export function RitualBuilder({
                   }),
               },
               {
+                id: "exceptions-only",
                 title: "Surface exceptions",
                 detail: "Bring me blocked or uncertain work",
                 accent: "!",
@@ -1036,6 +1092,7 @@ function DecisionGroup({
 }: {
   label: string;
   options: readonly {
+    id: string;
     title: string;
     detail: string;
     accent: string;
@@ -1047,7 +1104,7 @@ function DecisionGroup({
       <legend>{label}</legend>
       <div>
         {options.map((option) => (
-          <button key={option.title} type="button" onClick={option.action}>
+          <button key={option.id} type="button" onClick={option.action}>
             <span aria-hidden="true">{option.accent}</span>
             <strong>{option.title}</strong>
             <small>{option.detail}</small>

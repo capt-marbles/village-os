@@ -1,4 +1,3 @@
-import { purposeForRitualStarter } from "@village/contracts";
 import type {
   ApprovedRitualRevision,
   RitualStewardContext,
@@ -99,6 +98,7 @@ export function RitualBuilderWorkspace({
   const [automationPending, setAutomationPending] = useState(false);
   const [automationError, setAutomationError] = useState<string | null>(null);
   const generation = useRef(0);
+  const draftInFlight = useRef(false);
   const testRunInFlight = useRef(false);
   const learningInFlight = useRef(false);
   const runInFlight = useRef(false);
@@ -175,6 +175,7 @@ export function RitualBuilderWorkspace({
     return () => {
       active = false;
       generation.current += 1;
+      draftInFlight.current = false;
       testRunInFlight.current = false;
       learningInFlight.current = false;
       runInFlight.current = false;
@@ -255,6 +256,60 @@ export function RitualBuilderWorkspace({
       });
   };
 
+  const requestDraft = (
+    next: Extract<RitualBuilderState, { phase: "DRAFTING" }>,
+  ) => {
+    if (!bridge || draftInFlight.current) return;
+    draftInFlight.current = true;
+    const requestGeneration = ++generation.current;
+    const context: RitualStewardContext = {
+      schemaVersion: 1,
+      draftId: next.pendingDraftId,
+      requestRevision: next.pendingRequestRevision,
+      ownerPurpose: next.ownerPurpose,
+      ...(next.starter ? { starter: next.starter } : {}),
+      ...(next.clarifications.length
+        ? { clarifications: [...next.clarifications] }
+        : {}),
+    };
+    void bridge
+      .draft(context)
+      .then((result) => {
+        if (generation.current !== requestGeneration) return;
+        setState((current) => {
+          if (result.status === "proposal") {
+            return reduceRitualBuilder(current, {
+              type: "STEWARD_PROPOSED",
+              proposal: result,
+              occurredAt: new Date().toISOString(),
+            });
+          }
+          if (result.status === "question") {
+            return reduceRitualBuilder(current, {
+              type: "STEWARD_ASKED",
+              question: result,
+            });
+          }
+          return reduceRitualBuilder(current, {
+            type: "STEWARD_FAILED",
+            message: providerFailureCopy(result.reason),
+          });
+        });
+      })
+      .catch(() => {
+        if (generation.current !== requestGeneration) return;
+        setState((current) =>
+          reduceRitualBuilder(current, {
+            type: "STEWARD_FAILED",
+            message: "The Steward could not shape the draft. Try again.",
+          }),
+        );
+      })
+      .finally(() => {
+        draftInFlight.current = false;
+      });
+  };
+
   const onEvent = (event: RitualBuilderEvent) => {
     if (!bridge || !identity) return;
     if (event.type === "START_NEW_RITUAL") {
@@ -280,48 +335,19 @@ export function RitualBuilderWorkspace({
       return;
     }
     if (event.type === "SUBMIT_PURPOSE" || event.type === "SUBMIT_STARTER") {
+      if (draftInFlight.current) return;
       const next = reduceRitualBuilder(state, event);
       setState(next);
       if (next.phase !== "DRAFTING") return;
-      const requestGeneration = ++generation.current;
-      const ownerPurpose =
-        event.type === "SUBMIT_STARTER"
-          ? purposeForRitualStarter(event.starter)
-          : event.purpose.trim();
-      void bridge
-        .draft({
-          schemaVersion: 1,
-          draftId: next.pendingDraftId,
-          requestRevision: next.pendingRequestRevision,
-          ownerPurpose,
-          ...(event.type === "SUBMIT_STARTER"
-            ? { starter: event.starter }
-            : {}),
-        })
-        .then((result) => {
-          if (generation.current !== requestGeneration) return;
-          setState((current) =>
-            result.status === "proposal"
-              ? reduceRitualBuilder(current, {
-                  type: "STEWARD_PROPOSED",
-                  proposal: result,
-                  occurredAt: new Date().toISOString(),
-                })
-              : reduceRitualBuilder(current, {
-                  type: "STEWARD_FAILED",
-                  message: providerFailureCopy(result.reason),
-                }),
-          );
-        })
-        .catch(() => {
-          if (generation.current !== requestGeneration) return;
-          setState((current) =>
-            reduceRitualBuilder(current, {
-              type: "STEWARD_FAILED",
-              message: "The Steward could not shape the draft. Try again.",
-            }),
-          );
-        });
+      requestDraft(next);
+      return;
+    }
+    if (event.type === "ANSWER_CLARIFICATION") {
+      if (draftInFlight.current) return;
+      const next = reduceRitualBuilder(state, event);
+      setState(next);
+      if (next.phase !== "DRAFTING") return;
+      requestDraft(next);
       return;
     }
     if (event.type === "APPROVE") {
