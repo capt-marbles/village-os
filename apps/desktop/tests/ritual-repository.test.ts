@@ -230,6 +230,22 @@ describe("RitualRepository", () => {
       run: null,
       runReceipt: null,
       learningReview: null,
+      auditTimeline: [
+        {
+          kind: "TEST_RECORDED",
+          sourceId: receipt.receiptId,
+          ritualRevision: 1,
+          outcome: "NEEDS_REVIEW",
+          occurredAt: receipt.recordedAt,
+        },
+        {
+          kind: "REVISION_APPROVED",
+          sourceId: approved.ritualId,
+          ritualRevision: 1,
+          source: "INITIAL",
+          occurredAt: approved.approvedAt,
+        },
+      ],
     });
     const stored = await readFile(path, "utf8");
     expect(JSON.parse(stored)).toEqual({
@@ -290,6 +306,22 @@ describe("RitualRepository", () => {
       run: null,
       runReceipt: null,
       learningReview: null,
+      auditTimeline: [
+        {
+          kind: "TEST_RECORDED",
+          sourceId: receipt.receiptId,
+          ritualRevision: 1,
+          outcome: "NEEDS_REVIEW",
+          occurredAt: receipt.recordedAt,
+        },
+        {
+          kind: "REVISION_APPROVED",
+          sourceId: approved.ritualId,
+          ritualRevision: 1,
+          source: "INITIAL",
+          occurredAt: approved.approvedAt,
+        },
+      ],
     });
 
     await expect(
@@ -325,6 +357,29 @@ describe("RitualRepository", () => {
       run: null,
       runReceipt: null,
       learningReview: null,
+      auditTimeline: [
+        {
+          kind: "REVISION_APPROVED",
+          sourceId: revision.ritualId,
+          ritualRevision: 2,
+          source: "LEARNING",
+          occurredAt: revision.approvedAt,
+        },
+        {
+          kind: "TEST_RECORDED",
+          sourceId: receipt.receiptId,
+          ritualRevision: 1,
+          outcome: "NEEDS_REVIEW",
+          occurredAt: receipt.recordedAt,
+        },
+        {
+          kind: "REVISION_APPROVED",
+          sourceId: approved.ritualId,
+          ritualRevision: 1,
+          source: "INITIAL",
+          occurredAt: approved.approvedAt,
+        },
+      ],
     });
   });
 
@@ -406,6 +461,155 @@ describe("RitualRepository", () => {
       ).resolves.toMatchObject({
         learningReview: null,
       });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("projects a newest-first metadata-only audit timeline after restart", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
+    try {
+      const path = join(directory, "rituals.json");
+      const repository = new RitualRepository(path, {
+        now: () => "2026-08-17T14:00:00.000Z",
+      });
+      await repository.save(approved);
+      await repository.saveReceipt(receipt);
+      await repository.saveLearningProposal(learningProposal);
+      await repository.decideLearning({
+        schemaVersion: 1,
+        proposalId: learningProposal.proposalId,
+        ritualId: approved.ritualId,
+        expectedFromRevision: approved.ritualRevision,
+        decision: "REVISION_REQUESTED",
+      });
+      let run = runFor("rrn_01J00000000000000000000009");
+      await repository.saveRun(run);
+      run = reduceRitualRun(run, approved, {
+        type: "START",
+        occurredAt: "2026-08-16T12:00:01.000Z",
+      });
+      await repository.saveRun(run);
+      run = reduceRitualRun(run, approved, {
+        type: "APPROVE_STEP",
+        stepKey: approved.steps[0]!.stepKey,
+        occurredAt: "2026-08-16T12:00:02.000Z",
+      });
+      await repository.saveRun(run);
+      run = reduceRitualRun(run, approved, {
+        type: "COMPLETE_STEP",
+        stepKey: approved.steps[0]!.stepKey,
+        research: largeResearchEvidence,
+        occurredAt: "2026-08-16T12:00:03.000Z",
+      });
+      await repository.saveRun(run);
+      const terminal = reduceRitualRun(run, approved, {
+        type: "COMPLETE_RUN",
+        outcome: "NEEDS_REVIEW",
+        occurredAt: "2026-08-16T12:00:04.000Z",
+      });
+      await repository.completeRun(
+        terminal,
+        runReceiptFor(terminal, "rcp_01J00000000000000000000009"),
+      );
+
+      const timeline = (await new RitualRepository(path).latestSnapshot())
+        .auditTimeline;
+      expect(timeline).toEqual([
+        {
+          kind: "LEARNING_DECIDED",
+          sourceId: learningProposal.proposalId,
+          ritualRevision: 1,
+          decision: "REVISION_REQUESTED",
+          occurredAt: "2026-08-17T14:00:00.000Z",
+        },
+        {
+          kind: "RUN_RECORDED",
+          sourceId: "rcp_01J00000000000000000000009",
+          ritualRevision: 1,
+          outcome: "NEEDS_REVIEW",
+          occurredAt: "2026-08-16T12:00:04.000Z",
+        },
+        {
+          kind: "TEST_RECORDED",
+          sourceId: receipt.receiptId,
+          ritualRevision: 1,
+          outcome: "NEEDS_REVIEW",
+          occurredAt: "2026-08-15T18:03:00.000Z",
+        },
+        {
+          kind: "REVISION_APPROVED",
+          sourceId: approved.ritualId,
+          ritualRevision: 1,
+          source: "INITIAL",
+          occurredAt: "2026-08-15T16:03:00.000Z",
+        },
+      ]);
+      expect(JSON.stringify(timeline)).not.toContain(receipt.summary);
+      expect(JSON.stringify(timeline)).not.toContain(receipt.evidence[0]);
+      expect(JSON.stringify(timeline)).not.toContain(
+        largeResearchEvidence.requestId,
+      );
+      expect(JSON.stringify(timeline)).not.toContain(
+        largeResearchEvidence.sources[0]!.url,
+      );
+      expect(JSON.stringify(timeline)).not.toContain(
+        largeResearchEvidence.sources[0]!.highlights[0],
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("caps recent audit history, orders offset instants, and isolates Rituals", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
+    try {
+      const path = join(directory, "rituals.json");
+      const repository = new RitualRepository(path);
+      await repository.save(approved);
+      for (let index = 1; index <= 21; index += 1) {
+        await repository.saveReceipt({
+          ...receipt,
+          receiptId: receiptId(index),
+          recordedAt: `2026-08-17T10:00:${String(index).padStart(2, "0")}.000-05:00`,
+        });
+      }
+      const second = {
+        ...approved,
+        ritualId: "rtl_01J00000000000000000000001" as const,
+        approvedDraftId: "rtd_01J00000000000000000000001" as const,
+        approvedAt: "2026-08-17T16:00:00.000Z",
+      };
+      await repository.save(second);
+
+      expect((await repository.latestSnapshot()).auditTimeline).toEqual([
+        {
+          kind: "REVISION_APPROVED",
+          sourceId: second.ritualId,
+          ritualRevision: 1,
+          source: "INITIAL",
+          occurredAt: second.approvedAt,
+        },
+      ]);
+
+      const firstTimeline = await repository
+        .find(approved.ritualId)
+        .then(async () => {
+          const store = JSON.parse(await readFile(path, "utf8"));
+          store.rituals = [approved];
+          await writeFile(path, JSON.stringify(store), { mode: 0o600 });
+          return (await new RitualRepository(path).latestSnapshot())
+            .auditTimeline;
+        });
+      expect(firstTimeline).toHaveLength(20);
+      expect(firstTimeline[0]?.sourceId).toBe(receiptId(21));
+      expect(firstTimeline.at(-1)?.sourceId).toBe(receiptId(2));
+      expect(
+        firstTimeline.some((entry) => entry.sourceId === receiptId(1)),
+      ).toBe(false);
+      expect(
+        firstTimeline.every((entry) => entry.sourceId !== second.ritualId),
+      ).toBe(true);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -592,27 +796,56 @@ describe("RitualRepository", () => {
 
   it("preserves earlier Rituals and restores the most recently approved one", async () => {
     const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
-    const repository = new RitualRepository(join(directory, "rituals.json"));
-    const second = {
-      ...approved,
-      ritualId: "rtl_01J00000000000000000000001",
-      approvedDraftId: "rtd_01J00000000000000000000001",
-      name: "Inbox priorities",
-      purpose: "Review my inbox and identify the replies that matter most.",
-      approvedAt: "2026-08-15T17:03:00.000Z",
-    };
+    try {
+      const repository = new RitualRepository(join(directory, "rituals.json"), {
+        now: () => "2026-08-16T14:00:00.000Z",
+      });
+      const second = {
+        ...approved,
+        ritualId: "rtl_01J00000000000000000000001",
+        approvedDraftId: "rtd_01J00000000000000000000001",
+        name: "Inbox priorities",
+        purpose: "Review my inbox and identify the replies that matter most.",
+        approvedAt: "2026-08-17T17:03:00.000Z",
+      };
 
-    await repository.save(approved);
-    await repository.save(second);
+      await repository.save(approved);
+      await repository.saveReceipt(receipt);
+      await repository.saveLearningProposal(learningProposal);
+      await repository.decideLearning({
+        schemaVersion: 1,
+        proposalId: learningProposal.proposalId,
+        ritualId: approved.ritualId,
+        expectedFromRevision: approved.ritualRevision,
+        decision: "REJECTED",
+      });
+      await persistLargeTerminalRun(
+        repository,
+        "rrn_01J00000000000000000000008",
+        "rcp_01J00000000000000000000008",
+      );
+      await repository.save(second);
 
-    expect(await repository.list()).toEqual([approved, second]);
-    expect(await repository.latestSnapshot()).toEqual({
-      approved: second,
-      receipt: null,
-      run: null,
-      runReceipt: null,
-      learningReview: null,
-    });
+      expect(await repository.list()).toEqual([approved, second]);
+      expect(await repository.latestSnapshot()).toEqual({
+        approved: second,
+        receipt: null,
+        run: null,
+        runReceipt: null,
+        learningReview: null,
+        auditTimeline: [
+          {
+            kind: "REVISION_APPROVED",
+            sourceId: second.ritualId,
+            ritualRevision: 1,
+            source: "INITIAL",
+            occurredAt: second.approvedAt,
+          },
+        ],
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("persists an active Run before effects and restores its terminal Receipt after restart", async () => {

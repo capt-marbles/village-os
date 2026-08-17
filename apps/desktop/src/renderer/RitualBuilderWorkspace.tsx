@@ -6,20 +6,18 @@ import type {
   RitualLearningFeedbackRequest,
   RitualLearningResult,
   RitualLearningDecisionRequest,
-  RitualPendingLearningReview,
-  RitualRun,
   RitualRunCancelRequest,
   RitualRunControllerResult,
-  RitualRunReceipt,
   RitualRunRequest,
   RitualRunStepApprovalRequest,
   RitualSchedule,
   RitualSchedulePauseRequest,
   RitualScheduleUpdateRequest,
   RitualInboxItem,
-  RitualTestReceipt,
   RitualTestRunControllerResult,
   RitualTestRunRequest,
+  RitualAuditTimeline,
+  RitualLatestSnapshot,
 } from "@village/contracts";
 import {
   RitualBuilder,
@@ -41,20 +39,18 @@ import { ExaApiKeyCard, type ExaCredentialBridge } from "./ExaApiKeyCard.js";
 import { RitualAutomationPanel } from "./RitualAutomationPanel.js";
 
 export interface RitualBuilderBridge extends ExaCredentialBridge {
-  initialize(): Promise<{
-    identity: RitualBuilderIdentity;
-    approved: ApprovedRitualRevision | null;
-    receipt: RitualTestReceipt | null;
-    run: RitualRun | null;
-    runReceipt: RitualRunReceipt | null;
-    learningReview: RitualPendingLearningReview | null;
-    schedule: RitualSchedule | null;
-    inbox: readonly RitualInboxItem[];
-  }>;
+  initialize(): Promise<
+    RitualLatestSnapshot & {
+      identity: RitualBuilderIdentity;
+      schedule: RitualSchedule | null;
+      inbox: readonly RitualInboxItem[];
+    }
+  >;
   getAutomationState(): Promise<{
     schedule: RitualSchedule | null;
     inbox: readonly RitualInboxItem[];
   }>;
+  getAuditTimeline(): Promise<RitualAuditTimeline>;
   configureSchedule(
     request: RitualScheduleUpdateRequest,
   ): Promise<RitualSchedule>;
@@ -99,6 +95,10 @@ export function RitualBuilderWorkspace({
   const [startupError, setStartupError] = useState<string | null>(null);
   const [schedule, setSchedule] = useState<RitualSchedule | null>(null);
   const [inbox, setInbox] = useState<readonly RitualInboxItem[]>([]);
+  const [auditTimeline, setAuditTimeline] = useState<RitualAuditTimeline>([]);
+  const [auditTimelineError, setAuditTimelineError] = useState<string | null>(
+    null,
+  );
   const [automationPending, setAutomationPending] = useState(false);
   const [automationError, setAutomationError] = useState<string | null>(null);
   const generation = useRef(0);
@@ -108,6 +108,7 @@ export function RitualBuilderWorkspace({
   const runInFlight = useRef(false);
   const cancelRunInFlight = useRef(false);
   const automationMutation = useRef(0);
+  const auditTimelineMutation = useRef(0);
   const automationInFlight = useRef(false);
   const mounted = useRef(true);
   const refreshAutomation = useCallback(async () => {
@@ -124,12 +125,32 @@ export function RitualBuilderWorkspace({
       sameInboxRevision(current, automation.inbox) ? current : automation.inbox,
     );
   }, [bridge]);
+  const refreshAuditTimeline = useCallback(async () => {
+    if (!bridge) return;
+    const mutation = ++auditTimelineMutation.current;
+    try {
+      const timeline = await bridge.getAuditTimeline();
+      if (!mounted.current || mutation !== auditTimelineMutation.current)
+        return;
+      setAuditTimeline((current) =>
+        sameAuditTimeline(current, timeline) ? current : timeline,
+      );
+      setAuditTimelineError(null);
+    } catch {
+      if (!mounted.current || mutation !== auditTimelineMutation.current)
+        return;
+      setAuditTimelineError(
+        "Ritual history may be out of date. Refresh it before relying on the audit trail.",
+      );
+    }
+  }, [bridge]);
 
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
       automationMutation.current += 1;
+      auditTimelineMutation.current += 1;
     };
   }, []);
 
@@ -146,6 +167,8 @@ export function RitualBuilderWorkspace({
         setIdentity(initialized.identity);
         setSchedule(initialized.schedule ?? null);
         setInbox(initialized.inbox ?? []);
+        setAuditTimeline(initialized.auditTimeline ?? []);
+        setAuditTimelineError(null);
         if (initialized.approved) {
           setState((current) => {
             const restored = reduceRitualBuilder(current, {
@@ -199,7 +222,9 @@ export function RitualBuilderWorkspace({
     let timer: ReturnType<typeof setTimeout> | undefined;
     const refresh = async () => {
       try {
-        if (active) await refreshAutomation();
+        if (active) {
+          await Promise.all([refreshAutomation(), refreshAuditTimeline()]);
+        }
       } catch {
         // The durable Run view remains usable; the next due-time refresh retries.
       } finally {
@@ -212,7 +237,7 @@ export function RitualBuilderWorkspace({
       active = false;
       if (timer) clearTimeout(timer);
     };
-  }, [bridge, refreshAutomation, schedule]);
+  }, [bridge, refreshAuditTimeline, refreshAutomation, schedule]);
 
   const configureSchedule = (request: RitualScheduleUpdateRequest) => {
     if (!bridge || automationPending || automationInFlight.current) return;
@@ -332,6 +357,9 @@ export function RitualBuilderWorkspace({
         .createDraftIdentity()
         .then((nextIdentity) => {
           if (generation.current !== requestGeneration) return;
+          auditTimelineMutation.current += 1;
+          setAuditTimeline([]);
+          setAuditTimelineError(null);
           setIdentity(nextIdentity);
           setState((current) =>
             reduceRitualBuilder(current, { type: "NEW_RITUAL_READY" }),
@@ -371,6 +399,7 @@ export function RitualBuilderWorkspace({
             setState((latest) =>
               reduceRitualBuilder(latest, { type: "APPROVAL_SAVED" }),
             );
+            void refreshAuditTimeline();
           })
           .catch(() => {
             setState((latest) =>
@@ -407,6 +436,9 @@ export function RitualBuilderWorkspace({
                   message: testRunFailureCopy(result.reason),
                 }),
           );
+          if (result.status === "receipt") {
+            void refreshAuditTimeline();
+          }
         })
         .catch(() => {
           if (generation.current !== requestGeneration) return;
@@ -440,6 +472,9 @@ export function RitualBuilderWorkspace({
           if (generation.current !== requestGeneration) return;
           publishRunResult(setState, result);
           void refreshAutomation().catch(() => undefined);
+          if (result.status === "receipt") {
+            void refreshAuditTimeline();
+          }
         })
         .catch(() => {
           if (generation.current !== requestGeneration) return;
@@ -476,6 +511,9 @@ export function RitualBuilderWorkspace({
           if (generation.current !== requestGeneration) return;
           publishRunResult(setState, result);
           void refreshAutomation().catch(() => undefined);
+          if (result.status === "receipt") {
+            void refreshAuditTimeline();
+          }
         })
         .catch(() => {
           if (generation.current !== requestGeneration) return;
@@ -595,6 +633,7 @@ export function RitualBuilderWorkspace({
             reduceRitualBuilder(current, { type: "LEARNING_SAVED" }),
           );
           void refreshAutomation().catch(() => undefined);
+          void refreshAuditTimeline();
         })
         .catch(() => {
           setState((current) =>
@@ -628,6 +667,7 @@ export function RitualBuilderWorkspace({
               type: "LEARNING_DECISION_SAVED",
             }),
           );
+          void refreshAuditTimeline();
         })
         .catch(() => {
           if (generation.current !== requestGeneration) return;
@@ -664,6 +704,9 @@ export function RitualBuilderWorkspace({
       }
       state={state}
       onEvent={onEvent}
+      auditTimeline={auditTimeline}
+      auditTimelineError={auditTimelineError}
+      onRefreshAuditTimeline={() => void refreshAuditTimeline()}
       researchSetup={<ExaApiKeyCard bridge={bridge} />}
     />
   );
@@ -694,6 +737,13 @@ function sameInboxRevision(
         item.attention === right[index]?.attention,
     )
   );
+}
+
+function sameAuditTimeline(
+  left: RitualAuditTimeline,
+  right: RitualAuditTimeline,
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function automationRefreshDelay(schedule: RitualSchedule): number {

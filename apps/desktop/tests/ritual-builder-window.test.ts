@@ -85,7 +85,9 @@ describe("Ritual Builder window", () => {
       run: null,
       runReceipt: null,
       learningReview: null,
+      auditTimeline: [],
     })),
+    loadAuditTimeline: vi.fn(async () => []),
     loadAutomationState: vi.fn(async () => ({
       schedule: null,
       inbox: [],
@@ -204,6 +206,9 @@ describe("Ritual Builder window", () => {
     const automationState = electron.handlers.get(
       "village:ritual-builder:get-automation-state",
     )!;
+    const auditTimeline = electron.handlers.get(
+      "village:ritual-builder:get-audit-timeline",
+    )!;
     const configureSchedule = electron.handlers.get(
       "village:ritual-builder:configure-schedule",
     )!;
@@ -239,6 +244,7 @@ describe("Ritual Builder window", () => {
     await approveLearning(event, { ritualId: initialized.identity.ritualId });
     await decideLearning(event, { ritualId: initialized.identity.ritualId });
     await automationState(event);
+    await auditTimeline(event);
     await configureSchedule(event, { ritualId: initialized.identity.ritualId });
     await pauseSchedule(event, { ritualId: initialized.identity.ritualId });
     const apiKey = new TextEncoder().encode("exa-owner-secret");
@@ -288,6 +294,7 @@ describe("Ritual Builder window", () => {
       ritualId: initialized.identity.ritualId,
     });
     expect(controller.loadAutomationState).toHaveBeenCalled();
+    expect(controller.loadAuditTimeline).toHaveBeenCalled();
     expect(controller.configureSchedule).toHaveBeenCalledWith({
       ritualId: initialized.identity.ritualId,
     });
@@ -295,6 +302,9 @@ describe("Ritual Builder window", () => {
       ritualId: initialized.identity.ritualId,
     });
     await expect(automationState(event, "extra")).rejects.toThrow(
+      "MALFORMED_IPC_REQUEST",
+    );
+    await expect(auditTimeline(event, "extra")).rejects.toThrow(
       "MALFORMED_IPC_REQUEST",
     );
 

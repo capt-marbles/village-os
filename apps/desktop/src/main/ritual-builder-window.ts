@@ -60,6 +60,7 @@ export async function createRitualBuilderWindow(options: {
   const approveRunStepChannel = "village:ritual-builder:approve-run-step";
   const cancelRunChannel = "village:ritual-builder:cancel-run";
   const automationStateChannel = "village:ritual-builder:get-automation-state";
+  const auditTimelineChannel = "village:ritual-builder:get-audit-timeline";
   const configureScheduleChannel = "village:ritual-builder:configure-schedule";
   const pauseScheduleChannel = "village:ritual-builder:pause-schedule";
   const proposeLearningChannel = "village:ritual-builder:propose-learning";
@@ -124,6 +125,11 @@ export async function createRitualBuilderWindow(options: {
     assertSender(event);
     if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
     return options.controller.loadAutomationState();
+  });
+  ipcMain.handle(auditTimelineChannel, async (event, ...arguments_) => {
+    assertSender(event);
+    if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
+    return options.controller.loadAuditTimeline();
   });
   ipcMain.handle(configureScheduleChannel, async (event, candidate) => {
     assertSender(event);
@@ -199,6 +205,7 @@ export async function createRitualBuilderWindow(options: {
     ipcMain.removeHandler(approveRunStepChannel);
     ipcMain.removeHandler(cancelRunChannel);
     ipcMain.removeHandler(automationStateChannel);
+    ipcMain.removeHandler(auditTimelineChannel);
     ipcMain.removeHandler(configureScheduleChannel);
     ipcMain.removeHandler(pauseScheduleChannel);
     ipcMain.removeHandler(proposeLearningChannel);

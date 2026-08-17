@@ -545,6 +545,43 @@ export const ritualLearningDecisionSchema = z.strictObject({
   decidedAt: instantSchema,
 });
 
+export const RITUAL_AUDIT_TIMELINE_LIMIT = 20;
+
+export const ritualAuditEntrySchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("REVISION_APPROVED"),
+    sourceId: approvedRitualRevisionSchema.shape.ritualId,
+    ritualRevision: approvedRitualRevisionSchema.shape.ritualRevision,
+    source: z.enum(["INITIAL", "LEARNING"]),
+    occurredAt: instantSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("TEST_RECORDED"),
+    sourceId: ritualTestReceiptSchema.shape.receiptId,
+    ritualRevision: ritualTestReceiptSchema.shape.ritualRevision,
+    outcome: ritualTestReceiptSchema.shape.outcome,
+    occurredAt: instantSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("RUN_RECORDED"),
+    sourceId: ritualRunReceiptSchema.shape.receiptId,
+    ritualRevision: ritualRunReceiptSchema.shape.ritualRevision,
+    outcome: ritualRunReceiptSchema.shape.outcome,
+    occurredAt: instantSchema,
+  }),
+  z.strictObject({
+    kind: z.literal("LEARNING_DECIDED"),
+    sourceId: ritualLearningDecisionSchema.shape.proposalId,
+    ritualRevision: ritualLearningDecisionSchema.shape.fromRevision,
+    decision: ritualLearningDecisionSchema.shape.decision,
+    occurredAt: instantSchema,
+  }),
+]);
+
+export const ritualAuditTimelineSchema = z
+  .array(ritualAuditEntrySchema)
+  .max(RITUAL_AUDIT_TIMELINE_LIMIT);
+
 export const ritualPendingLearningReviewSchema = z
   .discriminatedUnion("kind", [
     z.strictObject({
@@ -577,6 +614,15 @@ export const ritualPendingLearningReviewSchema = z
       });
     }
   });
+
+export const ritualLatestSnapshotSchema = z.strictObject({
+  approved: approvedRitualRevisionSchema.nullable(),
+  receipt: ritualTestReceiptSchema.nullable(),
+  run: ritualRunSchema.nullable(),
+  runReceipt: ritualRunReceiptSchema.nullable(),
+  learningReview: ritualPendingLearningReviewSchema.nullable(),
+  auditTimeline: ritualAuditTimelineSchema,
+});
 
 const ritualLocalTimeSchema = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
 
@@ -862,6 +908,8 @@ export type RitualLearningDecisionRequest = z.infer<
 export type RitualLearningDecision = z.infer<
   typeof ritualLearningDecisionSchema
 >;
+export type RitualAuditTimeline = z.infer<typeof ritualAuditTimelineSchema>;
+export type RitualLatestSnapshot = z.infer<typeof ritualLatestSnapshotSchema>;
 export type RitualPendingLearningReview = z.infer<
   typeof ritualPendingLearningReviewSchema
 >;

@@ -14,6 +14,8 @@ import {
   ritualLearningProposalSchema,
   ritualLearningDecisionSchema,
   ritualLearningDecisionRequestSchema,
+  ritualAuditTimelineSchema,
+  RITUAL_AUDIT_TIMELINE_LIMIT,
   ritualPendingLearningReviewSchema,
   ritualRunReceiptSchema,
   ritualRunSchema,
@@ -36,6 +38,8 @@ import {
   type RitualRunReceipt,
   type RitualSchedule,
   type RitualTestReceipt,
+  type RitualAuditTimeline,
+  type RitualLatestSnapshot,
 } from "@village/contracts";
 
 const MAX_PERSISTED_STORE_BYTES = 768 * 1_024;
@@ -55,13 +59,7 @@ export class RitualRepository {
     return this.enqueue(async () => (await this.read()).rituals);
   }
 
-  latestSnapshot(): Promise<{
-    approved: ApprovedRitualRevision | null;
-    receipt: RitualTestReceipt | null;
-    run: RitualRun | null;
-    runReceipt: RitualRunReceipt | null;
-    learningReview: RitualPendingLearningReview | null;
-  }> {
+  latestSnapshot(): Promise<RitualLatestSnapshot> {
     return this.enqueue(async () => {
       const store = await this.read();
       const approved = store.rituals.at(-1) ?? null;
@@ -86,7 +84,17 @@ export class RitualRepository {
       const learningReview = approved
         ? pendingLearningReview(store, approved)
         : null;
-      return { approved, receipt, run, runReceipt, learningReview };
+      const auditTimeline = approved
+        ? projectAuditTimeline(store, approved.ritualId)
+        : [];
+      return {
+        approved,
+        receipt,
+        run,
+        runReceipt,
+        learningReview,
+        auditTimeline,
+      };
     });
   }
 
@@ -731,6 +739,58 @@ function findLearningReceipt(
   );
   if (testReceipt && runReceipt) throw new Error("RITUAL_RECEIPT_CONFLICT");
   return testReceipt ?? runReceipt ?? null;
+}
+
+function projectAuditTimeline(
+  store: RitualStore,
+  ritualId: string,
+): RitualAuditTimeline {
+  const entries = [
+    ...store.rituals
+      .filter((ritual) => ritual.ritualId === ritualId)
+      .map((ritual) => ({
+        kind: "REVISION_APPROVED" as const,
+        sourceId: ritual.ritualId,
+        ritualRevision: ritual.ritualRevision,
+        source: ritual.learningProposalId
+          ? ("LEARNING" as const)
+          : ("INITIAL" as const),
+        occurredAt: ritual.approvedAt,
+      })),
+    ...store.receipts
+      .filter((receipt) => receipt.ritualId === ritualId)
+      .map((receipt) => ({
+        kind: "TEST_RECORDED" as const,
+        sourceId: receipt.receiptId,
+        ritualRevision: receipt.ritualRevision,
+        outcome: receipt.outcome,
+        occurredAt: receipt.recordedAt,
+      })),
+    ...store.runReceipts
+      .filter((receipt) => receipt.ritualId === ritualId)
+      .map((receipt) => ({
+        kind: "RUN_RECORDED" as const,
+        sourceId: receipt.receiptId,
+        ritualRevision: receipt.ritualRevision,
+        outcome: receipt.outcome,
+        occurredAt: receipt.recordedAt,
+      })),
+    ...store.learningDecisions
+      .filter((decision) => decision.ritualId === ritualId)
+      .map((decision) => ({
+        kind: "LEARNING_DECIDED" as const,
+        sourceId: decision.proposalId,
+        ritualRevision: decision.fromRevision,
+        decision: decision.decision,
+        occurredAt: decision.decidedAt,
+      })),
+  ]
+    .sort((left, right) => {
+      const byTime = Date.parse(right.occurredAt) - Date.parse(left.occurredAt);
+      return byTime || left.kind.localeCompare(right.kind);
+    })
+    .slice(0, RITUAL_AUDIT_TIMELINE_LIMIT);
+  return ritualAuditTimelineSchema.parse(entries);
 }
 
 function pendingLearningReview(

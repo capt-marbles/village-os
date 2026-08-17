@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   approveRitualDraft,
   approveRitualLearningProposal,
+  RITUAL_AUDIT_TIMELINE_LIMIT,
   RitualApprovalError,
   ritualApprovalRequestSchema,
+  ritualAuditTimelineSchema,
   ritualDraftSchema,
   ritualLearningApprovalRequestSchema,
   ritualLearningContextSchema,
@@ -74,6 +76,54 @@ const draft = {
 };
 
 describe("Ritual contracts", () => {
+  it("accepts only bounded metadata in the Ritual audit timeline", () => {
+    const timeline = ritualAuditTimelineSchema.parse([
+      {
+        kind: "LEARNING_DECIDED",
+        sourceId: "rlp_01J00000000000000000000000",
+        ritualRevision: 1,
+        decision: "REVISION_REQUESTED",
+        occurredAt: "2026-08-17T14:00:00.000Z",
+      },
+      {
+        kind: "RUN_RECORDED",
+        sourceId: "rcp_01J00000000000000000000001",
+        ritualRevision: 1,
+        outcome: "NEEDS_REVIEW",
+        occurredAt: "2026-08-16T12:00:04.000Z",
+      },
+      {
+        kind: "TEST_RECORDED",
+        sourceId: "rcp_01J00000000000000000000000",
+        ritualRevision: 1,
+        outcome: "NEEDS_REVIEW",
+        occurredAt: "2026-08-15T18:03:00.000Z",
+      },
+      {
+        kind: "REVISION_APPROVED",
+        sourceId: "rtl_01J00000000000000000000000",
+        ritualRevision: 1,
+        source: "INITIAL",
+        occurredAt: "2026-08-15T16:03:00.000Z",
+      },
+    ]);
+
+    expect(timeline).toHaveLength(4);
+    expect(
+      ritualAuditTimelineSchema.safeParse([
+        {
+          ...timeline[1],
+          summary: "Raw Receipt narrative must not cross this boundary.",
+        },
+      ]).success,
+    ).toBe(false);
+    expect(
+      ritualAuditTimelineSchema.safeParse(
+        Array(RITUAL_AUDIT_TIMELINE_LIMIT + 1).fill(timeline[0]),
+      ).success,
+    ).toBe(false);
+  });
+
   it("binds one bounded clarification question and rejects repeated question ids", () => {
     const question = ritualStewardQuestionContentSchema.parse({
       stewardMessage: "One choice will make this Ritual more useful.",

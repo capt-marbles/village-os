@@ -31,6 +31,7 @@ describe("Ritual Builder preload", () => {
       "createDraftIdentity",
       "decideLearning",
       "draft",
+      "getAuditTimeline",
       "getAutomationState",
       "getExaCredentialStatus",
       "initialize",
@@ -60,6 +61,7 @@ describe("Ritual Builder preload", () => {
     await bridge.configureSchedule!({ ritualId: "bounded" });
     await bridge.pauseSchedule!({ ritualId: "bounded" });
     await bridge.decideLearning!({ ritualId: "bounded" });
+    await bridge.getAuditTimeline!();
     expect(invoke).toHaveBeenNthCalledWith(
       1,
       "village:ritual-builder:initialize",
@@ -141,6 +143,10 @@ describe("Ritual Builder preload", () => {
       18,
       "village:ritual-builder:decide-learning",
       { ritualId: "bounded" },
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      19,
+      "village:ritual-builder:get-audit-timeline",
     );
   });
 });
