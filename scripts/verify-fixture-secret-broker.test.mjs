@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assertFixtureSecretBrokerEvidence,
+  runBoundedProcess,
   scanFixtureSecretSinks,
 } from "./verify-fixture-secret-broker.mjs";
 
@@ -16,11 +17,38 @@ const passingReport = {
   secretBufferCleared: true,
   clipboardUnchanged: true,
   devToolsOpened: false,
+  browserStorageSeeded: true,
+  permissionPolicyEnforced: true,
+  bindingMatrixRejected: true,
+  absentTokenRejected: true,
+  expiredTokenRejected: true,
+  replayRejected: true,
+  mainProcessRequestPathUsed: true,
+  cancelPreservedProfile: true,
+  partialFailureObserved: true,
+  erasureStaged: true,
+  automationFenced: true,
+  credentialReferenceRevoked: true,
+  credentialAbsent: true,
+  targetPresentUntilRestart: true,
+};
+const passingRestartReport = {
+  targetAbsentAfterRestart: true,
+  targetLockAbsentAfterRestart: true,
+  siblingCookiePreserved: true,
+  siblingJournalPreserved: true,
+  siblingVaultReferencePreserved: true,
+  credentialReferenceAbsentAfterRestart: true,
+  pendingErasureConsumed: true,
 };
 
 test("accepts exact destination-only packaged evidence", () => {
   assert.deepEqual(
-    assertFixtureSecretBrokerEvidence(passingReport, { matches: [] }),
+    assertFixtureSecretBrokerEvidence(
+      passingReport,
+      { matches: [] },
+      passingRestartReport,
+    ),
     passingReport,
   );
 });
@@ -61,12 +89,30 @@ test("detects every declared packaged sink encoding", async () => {
   }
 });
 
+test("hard-kills a packaged process that ignores the bounded timeout", async () => {
+  await assert.rejects(
+    runBoundedProcess(
+      process.execPath,
+      [
+        "-e",
+        'process.on("SIGTERM", () => undefined); setInterval(() => undefined, 1000)',
+      ],
+      { timeoutMs: 25 },
+    ),
+    /PACKAGED_FIXTURE_SECRET_TIMEOUT/,
+  );
+});
+
 test("rejects leaked or broadened packaged evidence", () => {
   assert.throws(
     () =>
-      assertFixtureSecretBrokerEvidence(passingReport, {
-        matches: [{ sink: "stderr", variant: "plaintext" }],
-      }),
+      assertFixtureSecretBrokerEvidence(
+        passingReport,
+        {
+          matches: [{ sink: "stderr", variant: "plaintext" }],
+        },
+        passingRestartReport,
+      ),
     /PACKAGED_FIXTURE_SECRET_LEAKED/,
   );
   assert.throws(
@@ -74,7 +120,17 @@ test("rejects leaked or broadened packaged evidence", () => {
       assertFixtureSecretBrokerEvidence(
         { ...passingReport, nonDestinationRequests: 1 },
         { matches: [] },
+        passingRestartReport,
       ),
     /PACKAGED_FIXTURE_SECRET_DESTINATION_NOT_EXCLUSIVE/,
+  );
+  assert.throws(
+    () =>
+      assertFixtureSecretBrokerEvidence(
+        passingReport,
+        { matches: [] },
+        { ...passingRestartReport, siblingCookiePreserved: false },
+      ),
+    /PACKAGED_FIXTURE_SESSION_ERASURE_INCOMPLETE/,
   );
 });

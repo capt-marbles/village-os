@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  SessionErasureCoordinator,
+  RestartStagedSessionErasureCoordinator,
+  type RestartStagedSessionErasureOperations,
   type SessionErasureBinding,
-  type SessionErasureOperations,
 } from "../src/main/session-erasure.js";
 import {
   StepUpAuthorizer,
@@ -18,7 +18,9 @@ const binding: SessionErasureBinding = {
   currentState: "PRESENT",
 };
 
-function operations(): SessionErasureOperations & { calls: string[] } {
+function operations(): RestartStagedSessionErasureOperations & {
+  calls: string[];
+} {
   const calls: string[] = [];
   const record = (name: string) => async () => void calls.push(name);
   return {
@@ -27,15 +29,8 @@ function operations(): SessionErasureOperations & { calls: string[] } {
     closeTarget: record("closeTarget"),
     clearBrowserStorage: record("clearBrowserStorage"),
     clearPermissions: record("clearPermissions"),
-    clearActionJournal: record("clearActionJournal"),
-    clearTemporaryData: record("clearTemporaryData"),
-    clearDownloads: record("clearDownloads"),
     revokeCredentialReferences: record("revokeCredentialReferences"),
-    removeProfile: record("removeProfile"),
-    verifyAbsent: async () => {
-      calls.push("verifyAbsent");
-      return true;
-    },
+    stageProfileRemoval: record("stageProfileRemoval"),
   };
 }
 
@@ -88,127 +83,86 @@ describe("step-up authenticated session erasure", () => {
     ).toEqual({ ok: false, code: "STEP_UP_BINDING_MISMATCH" });
   });
 
-  it("requires a short-lived, single-use exact binding before any destructive call", async () => {
+  it("rejects missing, expired, replayed, and concurrent authorization", async () => {
     let now = 1_000;
     const authorizer = new StepUpAuthorizer(() => now);
     const cleanup = operations();
-    const erasure = new SessionErasureCoordinator(authorizer, cleanup);
-
-    await expect(erasure.erase("missing", binding)).resolves.toEqual({
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => (release = resolve));
+    cleanup.clearBrowserStorage = async () => {
+      cleanup.calls.push("clearBrowserStorage");
+      await blocked;
+    };
+    const coordinator = new RestartStagedSessionErasureCoordinator(
+      authorizer,
+      cleanup,
+    );
+    await expect(coordinator.erase("missing", binding)).resolves.toEqual({
       status: "REJECTED",
       code: "STEP_UP_UNKNOWN",
     });
-    expect(cleanup.calls).toEqual([]);
-
-    const token = authorizer.mint(binding, 5_000).token;
-    await expect(
-      erasure.erase(token, { ...binding, site: "OWNED_FIXTURE" }),
-    ).resolves.toEqual({
-      status: "REJECTED",
-      code: "STEP_UP_BINDING_MISMATCH",
-    });
-    expect(cleanup.calls).toEqual([]);
-
-    const valid = authorizer.mint(binding, 5_000).token;
-    await expect(erasure.erase(valid, binding)).resolves.toEqual({
-      status: "COMPLETE",
-    });
-    expect(cleanup.calls).toEqual([
-      "revokeAutomation",
-      "closeTarget",
-      "clearBrowserStorage",
-      "clearPermissions",
-      "clearActionJournal",
-      "clearTemporaryData",
-      "clearDownloads",
-      "revokeCredentialReferences",
-      "removeProfile",
-      "verifyAbsent",
-    ]);
-    await expect(erasure.erase(valid, binding)).resolves.toEqual({
-      status: "REJECTED",
-      code: "STEP_UP_REPLAYED",
-    });
-
     const expired = authorizer.mint(binding, 1_000).token;
     now = 2_000;
-    await expect(erasure.erase(expired, binding)).resolves.toEqual({
+    await expect(coordinator.erase(expired, binding)).resolves.toEqual({
       status: "REJECTED",
       code: "STEP_UP_EXPIRED",
     });
+    const token = authorizer.mint(binding, 5_000).token;
+    const first = coordinator.erase(token, binding);
+    await vi.waitFor(() =>
+      expect(cleanup.calls).toContain("clearBrowserStorage"),
+    );
+    await expect(
+      coordinator.erase(authorizer.mint(binding, 5_000).token, binding),
+    ).resolves.toEqual({ status: "REJECTED", code: "ERASURE_ALREADY_RUNNING" });
+    release();
+    await expect(first).resolves.toEqual({ status: "RESTART_REQUIRED" });
+    await expect(coordinator.erase(token, binding)).resolves.toEqual({
+      status: "REJECTED",
+      code: "STEP_UP_REPLAYED",
+    });
   });
 
-  it("fences automation first and reports retriable partial failure without touching another profile", async () => {
+  it("fences, clears, revokes, and stages in order", async () => {
     const authorizer = new StepUpAuthorizer(() => 1_000);
     const cleanup = operations();
-    cleanup.clearTemporaryData = vi.fn(async () => {
-      cleanup.calls.push("clearTemporaryData");
-      throw new Error("disk busy");
-    });
-    const erasure = new SessionErasureCoordinator(authorizer, cleanup);
-
-    const result = await erasure.erase(
-      authorizer.mint(binding, 5_000).token,
-      binding,
+    const coordinator = new RestartStagedSessionErasureCoordinator(
+      authorizer,
+      cleanup,
     );
-    expect(result).toEqual({
-      status: "PARTIAL_FAILURE",
-      failedStep: "clearTemporaryData",
-      retriable: true,
-    });
+    await expect(
+      coordinator.erase(authorizer.mint(binding, 5_000).token, binding),
+    ).resolves.toEqual({ status: "RESTART_REQUIRED" });
     expect(cleanup.calls).toEqual([
       "revokeAutomation",
       "closeTarget",
       "clearBrowserStorage",
       "clearPermissions",
-      "clearActionJournal",
-      "clearTemporaryData",
+      "revokeCredentialReferences",
+      "stageProfileRemoval",
     ]);
   });
 
-  it("rejects a concurrent erasure while the first cleanup is still running", async () => {
+  it("reports a retriable partial failure and accepts a fresh retry", async () => {
     const authorizer = new StepUpAuthorizer(() => 1_000);
     const cleanup = operations();
-    let releaseCleanup!: () => void;
-    const cleanupBlocked = new Promise<void>((resolve) => {
-      releaseCleanup = resolve;
-    });
-    cleanup.clearBrowserStorage = async () => {
-      cleanup.calls.push("clearBrowserStorage");
-      await cleanupBlocked;
-    };
-    const erasure = new SessionErasureCoordinator(authorizer, cleanup);
-    const first = erasure.erase(authorizer.mint(binding, 5_000).token, binding);
-    await vi.waitFor(() =>
-      expect(cleanup.calls).toContain("clearBrowserStorage"),
+    cleanup.stageProfileRemoval = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("disk full"))
+      .mockResolvedValue(undefined);
+    const coordinator = new RestartStagedSessionErasureCoordinator(
+      authorizer,
+      cleanup,
     );
-
     await expect(
-      erasure.erase(authorizer.mint(binding, 5_000).token, binding),
+      coordinator.erase(authorizer.mint(binding, 5_000).token, binding),
     ).resolves.toEqual({
-      status: "REJECTED",
-      code: "ERASURE_ALREADY_RUNNING",
-    });
-    releaseCleanup();
-    await expect(first).resolves.toEqual({ status: "COMPLETE" });
-  });
-
-  it("fails if absence cannot be verified after cleanup and permits a fresh retry", async () => {
-    const authorizer = new StepUpAuthorizer(() => 1_000);
-    const cleanup = operations();
-    cleanup.verifyAbsent = async () => false;
-    const erasure = new SessionErasureCoordinator(authorizer, cleanup);
-    const first = authorizer.mint(binding, 5_000).token;
-    const second = authorizer.mint(binding, 5_000).token;
-
-    await expect(erasure.erase(first, binding)).resolves.toEqual({
       status: "PARTIAL_FAILURE",
-      failedStep: "verifyAbsent",
+      failedStep: "stageProfileRemoval",
       retriable: true,
     });
-    cleanup.verifyAbsent = async () => true;
-    await expect(erasure.erase(second, binding)).resolves.toEqual({
-      status: "COMPLETE",
-    });
+    await expect(
+      coordinator.erase(authorizer.mint(binding, 5_000).token, binding),
+    ).resolves.toEqual({ status: "RESTART_REQUIRED" });
   });
 });

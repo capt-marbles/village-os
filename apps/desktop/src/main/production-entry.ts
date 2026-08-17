@@ -10,6 +10,10 @@ import {
 } from "./runtime.js";
 import { createProductionActivationCoordinator } from "./production-activation.js";
 import { claimVillageInstance } from "./single-instance.js";
+import {
+  isPendingSessionErasureFailure,
+  pendingSessionErasureFailureCopy,
+} from "./pending-session-erasure.js";
 
 function reportActivationFailure(error: unknown) {
   console.error("Village browser workspace activation blocked:", error);
@@ -43,6 +47,11 @@ void launch.catch((error: unknown) => {
     dialog.showErrorBox(
       profileProtectionFailureCopy.title,
       profileProtectionFailureCopy.message,
+    );
+  } else if (isPendingSessionErasureFailure(error)) {
+    dialog.showErrorBox(
+      pendingSessionErasureFailureCopy.title,
+      pendingSessionErasureFailureCopy.message,
     );
   }
   console.error("Village startup blocked:", code);

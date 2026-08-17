@@ -20,10 +20,11 @@ import {
 } from "./browser-viewport-coordinator.js";
 import { SensitiveActionAuthorizer } from "./sensitive-action-authorizer.js";
 import {
-  SessionErasureCoordinator,
+  RestartStagedSessionErasureCoordinator,
   type SessionErasureBinding,
 } from "./session-erasure.js";
 import { StepUpAuthorizer } from "./step-up-auth.js";
+import { SessionErasureRequestController } from "./session-erasure-request.js";
 import { DeviceRevocationRegistry } from "./device-revocation.js";
 import { DesktopBrowserUiState } from "./desktop-browser-ui-state.js";
 import { ControlTransferGate } from "./control-transfer-gate.js";
@@ -73,6 +74,10 @@ export interface VillageAppWindowOptions {
   verifyStepUp?: (binding: SessionErasureBinding) => Promise<boolean>;
   /** Site-scoped credential reference cleanup registered by the vault owner. */
   revokeCredentialReferences: (binding: SessionErasureBinding) => Promise<void>;
+  /** Persists an exact deletion continuation outside the live Chromium profile. */
+  stageSessionErasure: (binding: SessionErasureBinding) => Promise<void>;
+  /** Releases Chromium's Session object by restarting the desktop process. */
+  restartAfterSessionErasure: () => void;
   modelProviderAccount: ModelProviderAccountOperations;
   personalAgentTask: PersonalAgentTaskOperations;
   /** Signed paired-device synchronization used by production workflow controllers. */
@@ -297,22 +302,63 @@ export async function createVillageAppWindow(
         ? "ERASURE_FAILED"
         : "PRESENT",
   });
-  const sessionErasure = new SessionErasureCoordinator(stepUpAuthorizer, {
-    revokeAutomation: async () => {
-      executor.markOfflineTakeover();
-      uiState.cancelFutureAutomation();
+  const sessionErasure = new RestartStagedSessionErasureCoordinator(
+    stepUpAuthorizer,
+    {
+      revokeAutomation: async () => {
+        executor.markOfflineTakeover();
+        uiState.cancelFutureAutomation();
+      },
+      closeTarget: async () => browserHost.closeTargetForErasure(),
+      clearBrowserStorage: async () => browserHost.clearSiteStorage(),
+      clearPermissions: async () => browserHost.clearSitePermissions(),
+      revokeCredentialReferences: options.revokeCredentialReferences,
+      stageProfileRemoval: options.stageSessionErasure,
     },
-    closeTarget: async () => browserHost.closeTargetForErasure(),
-    clearBrowserStorage: async () => browserHost.clearSiteStorage(),
-    clearPermissions: async () => browserHost.clearSitePermissions(),
-    // Journals, temporary browser files, and download metadata live under the
-    // same exact profile and are removed by removeScopedProfile below.
-    clearActionJournal: async () => undefined,
-    clearTemporaryData: async () => undefined,
-    clearDownloads: async () => undefined,
-    revokeCredentialReferences: options.revokeCredentialReferences,
-    removeProfile: async () => browserHost.removeScopedProfile(),
-    verifyAbsent: async () => browserHost.scopedProfileAbsent(),
+  );
+  const sessionErasureRequest = new SessionErasureRequestController({
+    binding: erasureBinding,
+    verifyOwner: async (binding) => {
+      if (await options.verifyStepUp?.(binding)) return true;
+      await dialog.showMessageBox({
+        type: "info",
+        title: "Step-up authentication required",
+        message:
+          "Forgetting a session is separate from canceling work. Village needs a main-process step-up authentication provider before it can remove this local profile.",
+        buttons: ["OK"],
+        noLink: true,
+      });
+      return false;
+    },
+    confirm: async () => {
+      const confirmation = await dialog.showMessageBox({
+        type: "warning",
+        title: "Forget this local session?",
+        message:
+          "Village will close the browser, clear this site's data, and restart to finish removing the local profile.",
+        buttons: ["Forget session", "Cancel"],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+      });
+      return confirmation.response === 0;
+    },
+    authorizer: stepUpAuthorizer,
+    coordinator: sessionErasure,
+    onStepUpRequired: () => uiState.requireStepUpForErasure(),
+    onErasureStarted: () => uiState.beginErasure(),
+    onErasureStaged: () => uiState.completeErasure(),
+    onErasureFailed: (failedStep) => {
+      uiState.failErasure();
+      if (failedStep) {
+        reportLocalDiagnostic({
+          component: "SESSION_ERASURE",
+          code: `FAILED_${failedStep.toUpperCase()}`,
+          retriable: true,
+        });
+      }
+    },
+    restart: options.restartAfterSessionErasure,
   });
   const revokeDevice = () => {
     deviceRevocations.revoke(options.deviceId);
@@ -619,50 +665,7 @@ export async function createVillageAppWindow(
     "village:request-forget-session",
     async (event, ...arguments_) => {
       assertTrustedRequest(event, arguments_);
-      return erasureGate.run(async () => {
-        uiState.requireStepUpForErasure();
-        const binding = erasureBinding();
-        if (!(await options.verifyStepUp?.(binding))) {
-          await dialog.showMessageBox({
-            type: "info",
-            title: "Step-up authentication required",
-            message:
-              "Forgetting a session is separate from canceling work. Village needs a main-process step-up authentication provider before it can remove this local profile.",
-            buttons: ["OK"],
-            noLink: true,
-          });
-          return "STEP_UP_REQUIRED" as const;
-        }
-        const confirmation = await dialog.showMessageBox({
-          type: "warning",
-          title: "Forget this local session?",
-          message:
-            "This closes the browser and permanently clears this site's local profile on this Mac.",
-          buttons: ["Forget session", "Cancel"],
-          defaultId: 1,
-          cancelId: 1,
-          noLink: true,
-        });
-        if (confirmation.response !== 0) return "DECLINED" as const;
-        const token = stepUpAuthorizer.mint(binding, 15_000);
-        uiState.beginErasure();
-        const result = await sessionErasure.erase(token.token, binding);
-        if (result.status === "COMPLETE") {
-          uiState.completeErasure();
-          return "COMPLETE" as const;
-        }
-        uiState.failErasure();
-        if (result.status === "PARTIAL_FAILURE") {
-          reportLocalDiagnostic({
-            component: "SESSION_ERASURE",
-            code: `FAILED_${result.failedStep.toUpperCase()}`,
-            retriable: true,
-          });
-        }
-        return result.status === "PARTIAL_FAILURE"
-          ? ("PARTIAL_FAILURE" as const)
-          : ("STEP_UP_REQUIRED" as const);
-      });
+      return erasureGate.run(() => sessionErasureRequest.request());
     },
   );
   ipcMain.handle(
