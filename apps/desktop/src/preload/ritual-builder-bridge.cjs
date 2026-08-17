@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld(
       ipcRenderer.invoke("village:ritual-builder:draft", context),
     approve: (ritual) =>
       ipcRenderer.invoke("village:ritual-builder:approve", ritual),
+    restoreRevision: (request) =>
+      ipcRenderer.invoke("village:ritual-builder:restore-revision", request),
     testRun: (request) =>
       ipcRenderer.invoke("village:ritual-builder:test-run", request),
     startRun: (request) =>

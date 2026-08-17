@@ -25,6 +25,7 @@ export function RitualBuilder({
   auditTimeline = [],
   auditTimelineError,
   onRefreshAuditTimeline,
+  revisionRestore,
 }: {
   state: RitualBuilderState;
   onEvent(event: RitualBuilderEvent): void;
@@ -34,6 +35,11 @@ export function RitualBuilder({
   auditTimeline?: RitualAuditTimeline;
   auditTimelineError?: string | null;
   onRefreshAuditTimeline?(): void;
+  revisionRestore?: {
+    pending: boolean;
+    error: string | null;
+    submit(ritualRevision: number): Promise<boolean>;
+  };
 }) {
   const [starterMode, setStarterMode] = useState<
     "CUSTOM" | RitualStarter["kind"]
@@ -444,9 +450,11 @@ export function RitualBuilder({
         {auditTimeline.length > 0 || auditTimelineError ? (
           <RitualAuditHistory
             timeline={auditTimeline}
+            currentRevision={state.approved?.ritualRevision ?? null}
             {...(auditTimelineError !== undefined
               ? { error: auditTimelineError }
               : {})}
+            {...(revisionRestore ? { revisionRestore } : {})}
             {...(onRefreshAuditTimeline ? { onRefreshAuditTimeline } : {})}
           />
         ) : null}
@@ -1071,12 +1079,21 @@ function ResearchEvidence({ receipt }: { receipt: RitualRunReceipt }) {
 function RitualAuditHistory({
   timeline,
   error,
+  currentRevision,
+  revisionRestore,
   onRefreshAuditTimeline,
 }: {
   timeline: RitualAuditTimeline;
   error?: string | null;
+  currentRevision: number | null;
+  revisionRestore?: {
+    pending: boolean;
+    error: string | null;
+    submit(ritualRevision: number): Promise<boolean>;
+  };
   onRefreshAuditTimeline?(): void;
 }) {
+  const [restoreCandidate, setRestoreCandidate] = useState<number | null>(null);
   return (
     <details className="ritual-history">
       <summary>
@@ -1096,22 +1113,80 @@ function RitualAuditHistory({
           ) : null}
         </div>
       ) : null}
+      {revisionRestore?.error ? (
+        <p role="alert">{revisionRestore.error}</p>
+      ) : null}
       <ol>
-        {timeline.map((entry) => (
-          <li key={`${entry.kind}-${entry.sourceId}-${entry.ritualRevision}`}>
-            <span aria-hidden="true" />
-            <div>
-              <strong>{auditEntryLabel(entry)}</strong>
-              <small>
-                Revision {entry.ritualRevision} ·{" "}
-                <time dateTime={entry.occurredAt}>
-                  {formatAuditDate(entry.occurredAt)}
-                </time>
-              </small>
-            </div>
-          </li>
-        ))}
+        {timeline.map((entry) => {
+          const canRestore =
+            entry.kind === "REVISION_APPROVED" &&
+            currentRevision !== null &&
+            entry.ritualRevision < currentRevision &&
+            Boolean(revisionRestore);
+          return (
+            <li key={`${entry.kind}-${entry.sourceId}-${entry.ritualRevision}`}>
+              <span aria-hidden="true" />
+              <div>
+                <strong>{auditEntryLabel(entry)}</strong>
+                <small>
+                  Revision {entry.ritualRevision} ·{" "}
+                  <time dateTime={entry.occurredAt}>
+                    {formatAuditDate(entry.occurredAt)}
+                  </time>
+                </small>
+                {canRestore ? (
+                  <button
+                    type="button"
+                    disabled={revisionRestore?.pending}
+                    onClick={() => setRestoreCandidate(entry.ritualRevision)}
+                  >
+                    Restore revision {entry.ritualRevision}
+                  </button>
+                ) : null}
+              </div>
+            </li>
+          );
+        })}
       </ol>
+      {restoreCandidate !== null && currentRevision !== null ? (
+        <section
+          className="ritual-history__restore"
+          aria-label={`Confirm restore of revision ${restoreCandidate}`}
+        >
+          <strong>
+            Restore revision {restoreCandidate} as revision{" "}
+            {currentRevision + 1}?
+          </strong>
+          <p>
+            Village will keep every earlier revision and Receipt, pause the
+            current schedule, and create a new approved revision. No Run will
+            start.
+          </p>
+          <div>
+            <button
+              type="button"
+              disabled={revisionRestore?.pending}
+              onClick={() => {
+                if (!revisionRestore) return;
+                void revisionRestore
+                  .submit(restoreCandidate)
+                  .then((restored) => {
+                    if (restored) setRestoreCandidate(null);
+                  });
+              }}
+            >
+              {revisionRestore?.pending ? "Restoring…" : "Confirm restore"}
+            </button>
+            <button
+              type="button"
+              disabled={revisionRestore?.pending}
+              onClick={() => setRestoreCandidate(null)}
+            >
+              Keep current revision
+            </button>
+          </div>
+        </section>
+      ) : null}
     </details>
   );
 }
@@ -1125,9 +1200,9 @@ function formatAuditDate(occurredAt: string): string {
 function auditEntryLabel(entry: RitualAuditTimeline[number]): string {
   switch (entry.kind) {
     case "REVISION_APPROVED":
-      return entry.source === "INITIAL"
-        ? "Ritual approved"
-        : "Learned revision approved";
+      if (entry.source === "INITIAL") return "Ritual approved";
+      if (entry.source === "LEARNING") return "Learned revision approved";
+      return `Restored from revision ${entry.restoredFromRevision}`;
     case "TEST_RECORDED":
       return `Test Receipt · ${auditOutcomeLabel(entry.outcome)}`;
     case "RUN_RECORDED":

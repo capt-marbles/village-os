@@ -192,7 +192,8 @@ export type RitualBuilderEvent =
         { kind: "OPTION"; optionId: string } | { kind: "TEXT"; text: string };
     }
   | { type: "STEWARD_FAILED"; message: string }
-  | { type: "RESTORE_APPROVED"; approved: ApprovedRitualRevision }
+  | { type: "HYDRATE_APPROVED_REVISION"; approved: ApprovedRitualRevision }
+  | { type: "REVISION_RESTORE_SAVED"; approved: ApprovedRitualRevision }
   | { type: "RESTORE_RECEIPT"; receipt: RitualTestReceipt }
   | { type: "RESTORE_RUN"; run: RitualRun }
   | { type: "RESTORE_RUN_RECEIPT"; receipt: RitualRunReceipt }
@@ -316,6 +317,16 @@ export function createRitualBuilderState(): RitualBuilderState {
     error: null,
     requestRevision: 0,
   };
+}
+
+export function canRestoreRitualRevision(state: RitualBuilderState): boolean {
+  return [
+    "APPROVED",
+    "REVIEW_TEST",
+    "REVIEW_RUN",
+    "RUN_FAILED",
+    "RUN_CANCELED",
+  ].includes(state.phase);
 }
 
 export function reduceRitualBuilder(
@@ -546,23 +557,21 @@ export function reduceRitualBuilder(
         requestRevision: state.requestRevision,
       };
     }
-    case "RESTORE_APPROVED": {
+    case "HYDRATE_APPROVED_REVISION": {
       if (state.phase !== "DESCRIBE_PURPOSE") return state;
-      const approved = event.approved;
-      const draft = draftFromApproved(approved);
-      return {
-        phase: "APPROVED",
-        draft,
-        approved,
-        receipt: null,
-        messages: message(
-          state.messages,
-          "SYSTEM",
-          `Restored the approved ${approved.name} Ritual. No Run has started.`,
-        ),
-        error: null,
-        requestRevision: state.requestRevision,
-      };
+      return approvedState(
+        state,
+        event.approved,
+        `Restored the approved ${event.approved.name} Ritual. No Run has started.`,
+      );
+    }
+    case "REVISION_RESTORE_SAVED": {
+      if (!canRestoreRitualRevision(state)) return state;
+      return approvedState(
+        state,
+        event.approved,
+        `Restored revision ${event.approved.restoredFromRevision} as revision ${event.approved.ritualRevision}. No Run has started.`,
+      );
     }
     case "RESTORE_RECEIPT": {
       if (state.phase !== "APPROVED") return state;
@@ -1416,6 +1425,22 @@ function draftFromApproved(approved: ApprovedRitualRevision): RitualDraft {
     ...(approved.research ? { research: approved.research } : {}),
     updatedAt: approved.approvedAt,
   });
+}
+
+function approvedState(
+  state: RitualBuilderState,
+  approved: ApprovedRitualRevision,
+  systemMessage: string,
+): RitualBuilderState {
+  return {
+    phase: "APPROVED",
+    draft: draftFromApproved(approved),
+    approved,
+    receipt: null,
+    messages: message(state.messages, "SYSTEM", systemMessage),
+    error: null,
+    requestRevision: state.requestRevision,
+  };
 }
 
 function phaseForRun(

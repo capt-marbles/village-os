@@ -93,6 +93,144 @@ function createRunningRun(
 }
 
 describe("RitualBuilderController", () => {
+  it("restores an exact prior revision through repository-owned history", async () => {
+    const learned = {
+      ...approved,
+      ritualRevision: 2,
+      learningProposalId: "rlp_01J00000000000000000000000",
+      basedOnReceiptId: "rcp_01J00000000000000000000000",
+      completion: "Three concise bullets are ready for review.",
+      approvedAt: "2026-08-16T16:03:00.000Z",
+    };
+    const snapshot = {
+      approved: learned,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [],
+    };
+    const repository = {
+      latestSnapshot: vi.fn(async () => snapshot),
+      find: vi.fn(async () => learned),
+      findRevision: vi.fn(async () => approved),
+      save: vi.fn(async () => undefined),
+      saveReceipt: vi.fn(async () => undefined),
+      ...unusedRunPersistence(),
+    };
+    const controller = new RitualBuilderController(
+      unavailableProvider(),
+      repository,
+      { now: () => "2026-08-17T16:03:00.000Z" },
+    );
+
+    await expect(
+      controller.restoreRevision({
+        schemaVersion: 1,
+        ritualId: approved.ritualId,
+        expectedCurrentRevision: 2,
+        restoreFromRevision: 1,
+        restoredAt: "2026-08-17T15:00:00.000Z",
+      }),
+    ).resolves.toMatchObject({
+      ritualRevision: 3,
+      restoredFromRevision: 1,
+      completion: approved.completion,
+      approvedAt: "2026-08-17T16:03:00.000Z",
+    });
+    expect(repository.save).toHaveBeenCalledOnce();
+  });
+
+  it("refuses restore while a Run or learning Review still needs attention", async () => {
+    const learned = {
+      ...approved,
+      ritualRevision: 2,
+      learningProposalId: "rlp_01J00000000000000000000000",
+      basedOnReceiptId: "rcp_01J00000000000000000000000",
+      approvedAt: "2026-08-16T16:03:00.000Z",
+    };
+    const baseSnapshot = {
+      approved: learned,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [],
+    };
+    const repository = {
+      latestSnapshot: vi.fn(async () => baseSnapshot),
+      find: vi.fn(async () => learned),
+      findRevision: vi.fn(async () => approved),
+      save: vi.fn(async () => undefined),
+      saveReceipt: vi.fn(async () => undefined),
+      ...unusedRunPersistence(),
+    };
+    repository.findNonterminalRun.mockResolvedValueOnce(
+      createQueuedRun(learned),
+    );
+    const controller = new RitualBuilderController(
+      unavailableProvider(),
+      repository,
+    );
+    const request = {
+      schemaVersion: 1 as const,
+      ritualId: approved.ritualId,
+      expectedCurrentRevision: 2,
+      restoreFromRevision: 1,
+      restoredAt: "2026-08-17T16:03:00.000Z",
+    };
+
+    await expect(controller.restoreRevision(request)).rejects.toThrow(
+      "RITUAL_RESTORE_RUN_ACTIVE",
+    );
+    repository.findNonterminalRun.mockResolvedValueOnce(null);
+    repository.latestSnapshot.mockResolvedValueOnce({
+      ...baseSnapshot,
+      learningReview: {
+        kind: "TEST" as const,
+        proposal: {
+          status: "proposal" as const,
+          proposalId: "rlp_01J00000000000000000000001",
+          ritualId: learned.ritualId,
+          fromRevision: 2,
+          receiptId: "rcp_01J00000000000000000000001",
+          ownerFeedback: "Return to the previous scope.",
+          stewardMessage: "Review this change first.",
+          rationale: "Owner feedback requested it.",
+          proposedDefinition: {
+            name: learned.name,
+            purpose: learned.purpose,
+            trigger: learned.trigger,
+            steps: learned.steps,
+            permissions: learned.permissions,
+            completion: learned.completion,
+            reviewPolicy: learned.reviewPolicy,
+          },
+        },
+        receipt: {
+          schemaVersion: 1 as const,
+          receiptId: "rcp_01J00000000000000000000001",
+          runId: "rrn_01J00000000000000000000001",
+          ritualId: learned.ritualId,
+          ritualRevision: 2,
+          mode: "TEST" as const,
+          outcome: "NEEDS_REVIEW" as const,
+          summary: "Reviewable result.",
+          evidence: ["One bounded fact."],
+          uncertainties: [],
+          sampleDigest: "a".repeat(64),
+          sampleCharacterCount: 32,
+          externalEffects: [] as const,
+          recordedAt: "2026-08-17T15:00:00.000Z",
+        },
+      },
+    });
+    await expect(controller.restoreRevision(request)).rejects.toThrow(
+      "RITUAL_RESTORE_LEARNING_PENDING",
+    );
+    expect(repository.save).not.toHaveBeenCalled();
+  });
+
   it("passes a strict drafting request to the Steward and persists only approved Rituals", async () => {
     const provider = {
       draft: vi.fn(async (context) => ({

@@ -127,6 +127,14 @@ export const ritualApprovalRequestSchema = z.strictObject({
   approvedAt: instantSchema,
 });
 
+export const ritualRevisionRestoreRequestSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  ritualId: ritualIdSchema,
+  expectedCurrentRevision: z.number().int().positive(),
+  restoreFromRevision: z.number().int().positive(),
+  restoredAt: instantSchema,
+});
+
 export const approvedRitualRevisionSchema = z
   .strictObject({
     schemaVersion: z.literal(1),
@@ -137,23 +145,44 @@ export const approvedRitualRevisionSchema = z
     approvedDraftRevision: z.number().int().positive(),
     learningProposalId: ritualLearningProposalIdSchema.optional(),
     basedOnReceiptId: receiptIdSchema.optional(),
+    restoredFromRevision: z.number().int().positive().optional(),
     ...ritualDefinition,
     approvedAt: instantSchema,
   })
   .superRefine((revision, context) => {
-    const learned = revision.ritualRevision > 1;
-    if (learned !== Boolean(revision.learningProposalId)) {
+    const hasLearningProposal = Boolean(revision.learningProposalId);
+    const hasLearningReceipt = Boolean(revision.basedOnReceiptId);
+    const isLearned = hasLearningProposal && hasLearningReceipt;
+    const isRestored = revision.restoredFromRevision !== undefined;
+    if (hasLearningProposal !== hasLearningReceipt) {
       context.addIssue({
         code: "custom",
         path: ["learningProposalId"],
-        message: "learned revisions require proposal lineage",
+        message:
+          "learned revisions require complete proposal and Receipt lineage",
       });
     }
-    if (learned !== Boolean(revision.basedOnReceiptId)) {
+    if (revision.ritualRevision === 1 && (isLearned || isRestored)) {
       context.addIssue({
         code: "custom",
-        path: ["basedOnReceiptId"],
-        message: "learned revisions require Receipt lineage",
+        message: "initial revisions cannot have revision lineage",
+      });
+    }
+    if (revision.ritualRevision > 1 && isLearned === isRestored) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "later revisions require exactly one learning or restore lineage",
+      });
+    }
+    if (
+      revision.restoredFromRevision !== undefined &&
+      revision.restoredFromRevision >= revision.ritualRevision
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["restoredFromRevision"],
+        message: "restored revision must precede the new revision",
       });
     }
   });
@@ -545,16 +574,30 @@ export const ritualLearningDecisionSchema = z.strictObject({
   decidedAt: instantSchema,
 });
 
-export const RITUAL_AUDIT_TIMELINE_LIMIT = 20;
+export const RITUAL_AUDIT_TIMELINE_LIMIT = 100;
 
 export const ritualAuditEntrySchema = z.discriminatedUnion("kind", [
-  z.strictObject({
-    kind: z.literal("REVISION_APPROVED"),
-    sourceId: approvedRitualRevisionSchema.shape.ritualId,
-    ritualRevision: approvedRitualRevisionSchema.shape.ritualRevision,
-    source: z.enum(["INITIAL", "LEARNING"]),
-    occurredAt: instantSchema,
-  }),
+  z
+    .strictObject({
+      kind: z.literal("REVISION_APPROVED"),
+      sourceId: approvedRitualRevisionSchema.shape.ritualId,
+      ritualRevision: approvedRitualRevisionSchema.shape.ritualRevision,
+      source: z.enum(["INITIAL", "LEARNING", "RESTORE"]),
+      restoredFromRevision: z.number().int().positive().optional(),
+      occurredAt: instantSchema,
+    })
+    .superRefine((entry, context) => {
+      if (
+        (entry.source === "RESTORE") !==
+        (entry.restoredFromRevision !== undefined)
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["restoredFromRevision"],
+          message: "restore audit entries require source revision metadata",
+        });
+      }
+    }),
   z.strictObject({
     kind: z.literal("TEST_RECORDED"),
     sourceId: ritualTestReceiptSchema.shape.receiptId,
@@ -840,6 +883,9 @@ export const ritualStewardResultSchema = z.discriminatedUnion("status", [
 
 export type RitualDraft = z.infer<typeof ritualDraftSchema>;
 export type RitualApprovalRequest = z.infer<typeof ritualApprovalRequestSchema>;
+export type RitualRevisionRestoreRequest = z.infer<
+  typeof ritualRevisionRestoreRequestSchema
+>;
 export type ApprovedRitualRevision = z.infer<
   typeof approvedRitualRevisionSchema
 >;
@@ -1577,6 +1623,61 @@ export function approveRitualLearningProposal(
     ...proposal.proposedDefinition,
     approvedAt: request.approvedAt,
   });
+}
+
+export function restoreRitualRevision(
+  currentCandidate: unknown,
+  sourceCandidate: unknown,
+  requestCandidate: unknown,
+): ApprovedRitualRevision {
+  const current = approvedRitualRevisionSchema.parse(currentCandidate);
+  const source = approvedRitualRevisionSchema.parse(sourceCandidate);
+  const request = ritualRevisionRestoreRequestSchema.parse(requestCandidate);
+  if (
+    request.ritualId !== current.ritualId ||
+    source.ritualId !== current.ritualId
+  ) {
+    throw new Error("RITUAL_RESTORE_ID_MISMATCH");
+  }
+  if (request.expectedCurrentRevision !== current.ritualRevision) {
+    throw new Error("STALE_RITUAL_RESTORE");
+  }
+  if (
+    request.restoreFromRevision !== source.ritualRevision ||
+    source.ritualRevision >= current.ritualRevision
+  ) {
+    throw new Error("RITUAL_RESTORE_SOURCE_MISMATCH");
+  }
+  if (
+    JSON.stringify(ritualDefinitionOf(source)) ===
+    JSON.stringify(ritualDefinitionOf(current))
+  ) {
+    throw new Error("RITUAL_RESTORE_NO_CHANGE");
+  }
+  return approvedRitualRevisionSchema.parse({
+    schemaVersion: 1,
+    ritualId: current.ritualId,
+    ritualRevision: current.ritualRevision + 1,
+    status: "APPROVED",
+    approvedDraftId: current.approvedDraftId,
+    approvedDraftRevision: current.approvedDraftRevision,
+    ...ritualDefinitionOf(source),
+    restoredFromRevision: source.ritualRevision,
+    approvedAt: request.restoredAt,
+  });
+}
+
+export function ritualDefinitionOf(ritual: ApprovedRitualRevision) {
+  return {
+    name: ritual.name,
+    purpose: ritual.purpose,
+    trigger: ritual.trigger,
+    steps: ritual.steps,
+    permissions: ritual.permissions,
+    completion: ritual.completion,
+    reviewPolicy: ritual.reviewPolicy,
+    ...(ritual.research ? { research: ritual.research } : {}),
+  };
 }
 
 function learningWaiting(

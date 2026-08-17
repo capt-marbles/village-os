@@ -25,6 +25,7 @@ export {
 } from "./browser/delegated-workflow-state-matrix.js";
 export { RitualBuilder } from "./ritual/RitualBuilder.js";
 export {
+  canRestoreRitualRevision,
   createRitualBuilderState,
   reduceRitualBuilder,
 } from "./ritual/ritual-builder-state.js";

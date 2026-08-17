@@ -39,6 +39,7 @@ describe("Ritual Builder preload", () => {
       "pauseSchedule",
       "proposeLearning",
       "removeExaApiKey",
+      "restoreRevision",
       "startRun",
       "testRun",
     ]);
@@ -46,6 +47,10 @@ describe("Ritual Builder preload", () => {
     await bridge.createDraftIdentity!();
     await bridge.draft!({ purpose: "bounded" });
     await bridge.approve!({ ritualId: "bounded" });
+    await bridge.restoreRevision!({
+      ritualId: "bounded",
+      restoreFromRevision: 1,
+    });
     await bridge.testRun!({ ritualId: "bounded", sample: "bounded" });
     await bridge.startRun!({ ritualId: "bounded" });
     await bridge.approveRunStep!({ runId: "bounded" });
@@ -80,72 +85,77 @@ describe("Ritual Builder preload", () => {
     );
     expect(invoke).toHaveBeenNthCalledWith(
       5,
+      "village:ritual-builder:restore-revision",
+      { ritualId: "bounded", restoreFromRevision: 1 },
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      6,
       "village:ritual-builder:test-run",
       { ritualId: "bounded", sample: "bounded" },
     );
     expect(invoke).toHaveBeenNthCalledWith(
-      6,
+      7,
       "village:ritual-builder:start-run",
       { ritualId: "bounded" },
     );
     expect(invoke).toHaveBeenNthCalledWith(
-      7,
+      8,
       "village:ritual-builder:approve-run-step",
       { runId: "bounded" },
     );
     expect(invoke).toHaveBeenNthCalledWith(
-      8,
+      9,
       "village:ritual-builder:cancel-run",
       { runId: "bounded" },
     );
     expect(invoke).toHaveBeenNthCalledWith(
-      9,
+      10,
       "village:ritual-builder:propose-learning",
       { ritualId: "bounded", feedback: "bounded" },
     );
     expect(invoke).toHaveBeenNthCalledWith(
-      10,
+      11,
       "village:ritual-builder:approve-learning",
       { ritualId: "bounded" },
     );
     expect(invoke).toHaveBeenNthCalledWith(
-      11,
+      12,
       "village:ritual-builder:get-exa-credential-status",
     );
     expect(invoke).toHaveBeenNthCalledWith(
-      12,
+      13,
       "village:ritual-builder:configure-exa-api-key",
       key,
     );
     expect(invoke).toHaveBeenNthCalledWith(
-      13,
+      14,
       "village:ritual-builder:remove-exa-api-key",
     );
     expect(invoke).toHaveBeenNthCalledWith(
-      14,
+      15,
       "village:ritual-builder:open-exa-dashboard",
     );
     expect(invoke).toHaveBeenNthCalledWith(
-      15,
+      16,
       "village:ritual-builder:get-automation-state",
     );
     expect(invoke).toHaveBeenNthCalledWith(
-      16,
+      17,
       "village:ritual-builder:configure-schedule",
       { ritualId: "bounded" },
     );
     expect(invoke).toHaveBeenNthCalledWith(
-      17,
+      18,
       "village:ritual-builder:pause-schedule",
       { ritualId: "bounded" },
     );
     expect(invoke).toHaveBeenNthCalledWith(
-      18,
+      19,
       "village:ritual-builder:decide-learning",
       { ritualId: "bounded" },
     );
     expect(invoke).toHaveBeenNthCalledWith(
-      19,
+      20,
       "village:ritual-builder:get-audit-timeline",
     );
   });
