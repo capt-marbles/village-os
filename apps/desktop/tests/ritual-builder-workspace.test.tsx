@@ -236,6 +236,7 @@ function bridge() {
       receipt: null,
       run: null,
       runReceipt: null,
+      learningReview: null,
       schedule: null,
       inbox: [],
     })),
@@ -302,6 +303,7 @@ function bridge() {
       purpose: learningProposal.proposedDefinition.purpose,
       completion: learningProposal.proposedDefinition.completion,
     })),
+    decideLearning: vi.fn(async () => undefined),
   };
 }
 
@@ -870,6 +872,72 @@ describe("RitualBuilderWorkspace", () => {
       expect(activeBridge.getAutomationState).toHaveBeenCalledOnce(),
     );
     expect(screen.getByText("Approved · Revision 2")).toBeTruthy();
+  });
+
+  it("restores and durably rejects a pending learning proposal", async () => {
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved,
+      receipt,
+      run: canceledRun,
+      runReceipt: null,
+      learningReview: {
+        kind: "TEST",
+        proposal: learningProposal,
+        receipt,
+      },
+      schedule: null,
+      inbox: [],
+    });
+    activeBridge.decideLearning.mockRejectedValueOnce(new Error("disk busy"));
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+
+    await screen.findByText("Review revision 2");
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+    await screen.findByText(/could not save that decision/u);
+    expect(screen.getByText("Review revision 2")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+    await screen.findByText("Test Receipt");
+    expect(activeBridge.decideLearning).toHaveBeenCalledTimes(2);
+    expect(activeBridge.decideLearning).toHaveBeenLastCalledWith({
+      schemaVersion: 1,
+      proposalId: learningProposal.proposalId,
+      ritualId: approved.ritualId,
+      expectedFromRevision: approved.ritualRevision,
+      decision: "REJECTED",
+    });
+  });
+
+  it("records a revision request before reopening feedback", async () => {
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved,
+      receipt,
+      run: null,
+      runReceipt: null,
+      learningReview: {
+        kind: "TEST",
+        proposal: learningProposal,
+        receipt,
+      },
+      schedule: null,
+      inbox: [],
+    });
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+
+    await screen.findByText("Review revision 2");
+    fireEvent.click(screen.getByRole("button", { name: "Ask for changes" }));
+    await screen.findByLabelText("What should the Steward keep or change?");
+    expect(activeBridge.decideLearning).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      proposalId: learningProposal.proposalId,
+      ritualId: approved.ritualId,
+      expectedFromRevision: approved.ritualRevision,
+      decision: "REVISION_REQUESTED",
+    });
   });
 
   it("does not call the Steward when local purpose validation fails", async () => {

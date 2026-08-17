@@ -84,6 +84,7 @@ describe("Ritual Builder window", () => {
       receipt: null,
       run: null,
       runReceipt: null,
+      learningReview: null,
     })),
     loadAutomationState: vi.fn(async () => ({
       schedule: null,
@@ -99,6 +100,7 @@ describe("Ritual Builder window", () => {
     cancelRun: vi.fn(async () => ({ status: "run" })),
     proposeLearning: vi.fn(async () => ({ status: "waiting" })),
     approveLearning: vi.fn(async (ritual) => ritual),
+    decideLearning: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
   };
   const exaCredentials = {
@@ -196,6 +198,9 @@ describe("Ritual Builder window", () => {
     const approveLearning = electron.handlers.get(
       "village:ritual-builder:approve-learning",
     )!;
+    const decideLearning = electron.handlers.get(
+      "village:ritual-builder:decide-learning",
+    )!;
     const automationState = electron.handlers.get(
       "village:ritual-builder:get-automation-state",
     )!;
@@ -232,6 +237,7 @@ describe("Ritual Builder window", () => {
     await cancelRun(event, { runId: "bounded" });
     await proposeLearning(event, { ritualId: initialized.identity.ritualId });
     await approveLearning(event, { ritualId: initialized.identity.ritualId });
+    await decideLearning(event, { ritualId: initialized.identity.ritualId });
     await automationState(event);
     await configureSchedule(event, { ritualId: initialized.identity.ritualId });
     await pauseSchedule(event, { ritualId: initialized.identity.ritualId });
@@ -276,6 +282,9 @@ describe("Ritual Builder window", () => {
       ritualId: initialized.identity.ritualId,
     });
     expect(controller.approveLearning).toHaveBeenCalledWith({
+      ritualId: initialized.identity.ritualId,
+    });
+    expect(controller.decideLearning).toHaveBeenCalledWith({
       ritualId: initialized.identity.ritualId,
     });
     expect(controller.loadAutomationState).toHaveBeenCalled();

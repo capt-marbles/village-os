@@ -12,6 +12,9 @@ import {
   approvedRitualRevisionSchema,
   approvedRitualStoreSchema,
   ritualLearningProposalSchema,
+  ritualLearningDecisionSchema,
+  ritualLearningDecisionRequestSchema,
+  ritualPendingLearningReviewSchema,
   ritualRunReceiptSchema,
   ritualRunSchema,
   ritualScheduleSchema,
@@ -19,11 +22,14 @@ import {
   ritualStoreV2Schema,
   ritualStoreV3Schema,
   ritualStoreV4Schema,
+  ritualStoreV5Schema,
   ritualTestReceiptSchema,
   validateRitualRunReceipt,
   type ApprovedRitualRevision,
   type RitualStore,
   type RitualLearningProposal,
+  type RitualLearningDecisionRequest,
+  type RitualPendingLearningReview,
   type RitualLearningReceipt,
   type RitualInboxItem,
   type RitualRun,
@@ -41,6 +47,7 @@ export class RitualRepository {
     private readonly path: string,
     private readonly dependencies: {
       write?(store: RitualStore): Promise<void>;
+      now?(): string;
     } = {},
   ) {}
 
@@ -53,6 +60,7 @@ export class RitualRepository {
     receipt: RitualTestReceipt | null;
     run: RitualRun | null;
     runReceipt: RitualRunReceipt | null;
+    learningReview: RitualPendingLearningReview | null;
   }> {
     return this.enqueue(async () => {
       const store = await this.read();
@@ -75,7 +83,10 @@ export class RitualRepository {
         ? (store.runReceipts.findLast((entry) => entry.runId === run.runId) ??
           null)
         : null;
-      return { approved, receipt, run, runReceipt };
+      const learningReview = approved
+        ? pendingLearningReview(store, approved)
+        : null;
+      return { approved, receipt, run, runReceipt, learningReview };
     });
   }
 
@@ -339,6 +350,60 @@ export class RitualRepository {
     });
   }
 
+  decideLearning(candidate: RitualLearningDecisionRequest): Promise<void> {
+    return this.enqueue(async () => {
+      const request = ritualLearningDecisionRequestSchema.parse(candidate);
+      const current = await this.read();
+      const proposal = current.learningProposals.find(
+        (entry) => entry.proposalId === request.proposalId,
+      );
+      const latest = current.rituals.findLast(
+        (entry) => entry.ritualId === request.ritualId,
+      );
+      const latestProposal = current.learningProposals.findLast(
+        (entry) =>
+          entry.ritualId === request.ritualId &&
+          entry.fromRevision === request.expectedFromRevision,
+      );
+      if (
+        !proposal ||
+        latestProposal?.proposalId !== proposal.proposalId ||
+        proposal.ritualId !== request.ritualId ||
+        proposal.fromRevision !== request.expectedFromRevision ||
+        latest?.ritualRevision !== request.expectedFromRevision
+      ) {
+        throw new Error("STALE_RITUAL_LEARNING_DECISION");
+      }
+      const decision = ritualLearningDecisionSchema.parse({
+        schemaVersion: 1,
+        proposalId: proposal.proposalId,
+        ritualId: proposal.ritualId,
+        fromRevision: proposal.fromRevision,
+        decision: request.decision,
+        decidedAt: this.dependencies.now?.() ?? new Date().toISOString(),
+      });
+      const stored = current.learningDecisions.find(
+        (entry) => entry.proposalId === decision.proposalId,
+      );
+      if (
+        stored &&
+        stored.ritualId === decision.ritualId &&
+        stored.fromRevision === decision.fromRevision &&
+        stored.decision === decision.decision
+      ) {
+        return;
+      }
+      if (stored) throw new Error("RITUAL_LEARNING_DECISION_CONFLICT");
+      if (current.learningDecisions.length >= 100) {
+        throw new Error("RITUAL_LEARNING_DECISION_STORE_FULL");
+      }
+      await this.write({
+        ...current,
+        learningDecisions: [...current.learningDecisions, decision],
+      });
+    });
+  }
+
   findRunWithApprovedRevision(runId: string): Promise<{
     run: RitualRun;
     approved: ApprovedRitualRevision;
@@ -480,46 +545,58 @@ export class RitualRepository {
       const raw = JSON.parse(await readFile(this.path, "utf8"));
       const current = ritualStoreSchema.safeParse(raw);
       if (current.success) return current.data;
+      const versionFive = ritualStoreV5Schema.safeParse(raw);
+      if (versionFive.success) {
+        return {
+          ...versionFive.data,
+          schemaVersion: 6,
+          learningDecisions: [],
+        };
+      }
       const versionFour = ritualStoreV4Schema.safeParse(raw);
       if (versionFour.success) {
         return {
           ...versionFour.data,
-          schemaVersion: 5,
+          schemaVersion: 6,
           schedules: [],
+          learningDecisions: [],
         };
       }
       const versionThree = ritualStoreV3Schema.safeParse(raw);
       if (versionThree.success) {
         return {
           ...versionThree.data,
-          schemaVersion: 5,
+          schemaVersion: 6,
           runs: [],
           runReceipts: [],
           schedules: [],
+          learningDecisions: [],
         };
       }
       const versionTwo = ritualStoreV2Schema.safeParse(raw);
       if (versionTwo.success) {
         return {
-          schemaVersion: 5,
+          schemaVersion: 6,
           rituals: versionTwo.data.rituals,
           receipts: versionTwo.data.receipts,
           learningProposals: [],
           runs: [],
           runReceipts: [],
           schedules: [],
+          learningDecisions: [],
         };
       }
       const legacy = approvedRitualStoreSchema.safeParse(raw);
       if (!legacy.success) throw new Error("RITUAL_STORE_CORRUPT");
       return {
-        schemaVersion: 5,
+        schemaVersion: 6,
         rituals: legacy.data.rituals,
         receipts: [],
         learningProposals: [],
         runs: [],
         runReceipts: [],
         schedules: [],
+        learningDecisions: [],
       };
     } catch (error) {
       if (error instanceof Error && error.message === "RITUAL_STORE_CORRUPT") {
@@ -531,13 +608,14 @@ export class RitualRepository {
         error.code === "ENOENT"
       ) {
         return {
-          schemaVersion: 5,
+          schemaVersion: 6,
           rituals: [],
           receipts: [],
           learningProposals: [],
           runs: [],
           runReceipts: [],
           schedules: [],
+          learningDecisions: [],
         };
       }
       throw new Error("RITUAL_STORE_CORRUPT", { cause: error });
@@ -655,6 +733,42 @@ function findLearningReceipt(
   return testReceipt ?? runReceipt ?? null;
 }
 
+function pendingLearningReview(
+  store: RitualStore,
+  approved: ApprovedRitualRevision,
+): RitualPendingLearningReview | null {
+  const proposal = store.learningProposals.findLast(
+    (entry) =>
+      entry.ritualId === approved.ritualId &&
+      entry.fromRevision === approved.ritualRevision,
+  );
+  if (!proposal) return null;
+  if (
+    store.learningDecisions.some(
+      (decision) => decision.proposalId === proposal.proposalId,
+    )
+  ) {
+    return null;
+  }
+  const receipt = findLearningReceipt(store, proposal.receiptId);
+  if (!receipt) throw new Error("RITUAL_LEARNING_LINEAGE_CORRUPT");
+  if (receipt.mode === "TEST") {
+    return ritualPendingLearningReviewSchema.parse({
+      kind: "TEST",
+      proposal,
+      receipt,
+    });
+  }
+  const run = store.runs.find((entry) => entry.runId === receipt.runId);
+  if (!run) throw new Error("RITUAL_LEARNING_LINEAGE_CORRUPT");
+  return ritualPendingLearningReviewSchema.parse({
+    kind: "RUN",
+    proposal,
+    receipt,
+    run,
+  });
+}
+
 function isTerminalRun(run: RitualRun): boolean {
   return ["COMPLETED", "NEEDS_REVIEW", "FAILED", "CANCELED"].includes(
     run.status,
@@ -753,6 +867,9 @@ function assertLearningLineage(
   if (
     !prior ||
     !proposal ||
+    store.learningDecisions.some(
+      (decision) => decision.proposalId === ritual.learningProposalId,
+    ) ||
     proposal.receiptId !== ritual.basedOnReceiptId ||
     proposal.ritualId !== prior.ritualId ||
     proposal.fromRevision !== prior.ritualRevision ||

@@ -8,6 +8,9 @@ import {
   ritualLearningApprovalRequestSchema,
   ritualLearningContextSchema,
   ritualLearningProposalSchema,
+  ritualLearningDecisionSchema,
+  ritualLearningDecisionRequestSchema,
+  ritualPendingLearningReviewSchema,
   ritualStewardContextSchema,
   ritualStewardQuestionContentSchema,
   ritualStewardProposalSchema,
@@ -784,6 +787,52 @@ describe("Ritual contracts", () => {
     });
 
     expect(validateRitualLearningResult(context, proposal)).toEqual(proposal);
+    expect(
+      ritualPendingLearningReviewSchema.parse({
+        kind: "TEST",
+        proposal,
+        receipt,
+      }),
+    ).toMatchObject({ kind: "TEST", proposal, receipt });
+    expect(
+      ritualPendingLearningReviewSchema.safeParse({
+        kind: "TEST",
+        proposal: {
+          ...proposal,
+          receiptId: "rcp_01J00000000000000000000001",
+        },
+        receipt,
+      }).success,
+    ).toBe(false);
+    expect(
+      ritualLearningDecisionRequestSchema.parse({
+        schemaVersion: 1,
+        proposalId: proposal.proposalId,
+        ritualId: approved.ritualId,
+        expectedFromRevision: approved.ritualRevision,
+        decision: "REVISION_REQUESTED",
+      }),
+    ).toMatchObject({ proposalId: proposal.proposalId });
+    expect(
+      ritualLearningDecisionRequestSchema.safeParse({
+        schemaVersion: 1,
+        proposalId: proposal.proposalId,
+        ritualId: approved.ritualId,
+        expectedFromRevision: approved.ritualRevision,
+        decision: "REVISION_REQUESTED",
+        decidedAt: "2026-08-15T15:02:30.000Z",
+      }).success,
+    ).toBe(false);
+    expect(
+      ritualLearningDecisionSchema.safeParse({
+        schemaVersion: 1,
+        proposalId: proposal.proposalId,
+        ritualId: approved.ritualId,
+        fromRevision: approved.ritualRevision,
+        decision: "APPROVED",
+        decidedAt: "2026-08-15T15:02:30.000Z",
+      }).success,
+    ).toBe(false);
     const removedResearch = {
       ...proposal,
       proposedDefinition: {

@@ -47,6 +47,7 @@ function unusedRunPersistence() {
     findNonterminalRun: vi.fn(async () => null),
     saveRun: vi.fn(async () => undefined),
     completeRun: vi.fn(async () => undefined),
+    decideLearning: vi.fn(async () => undefined),
   };
 }
 
@@ -1324,6 +1325,64 @@ describe("RitualBuilderController", () => {
         approvedAt: "2026-08-15T18:04:00.000Z",
       }),
     ).rejects.toThrow("STALE_RITUAL_LEARNING_PROPOSAL");
+  });
+
+  it("binds a learning rejection to the exact current proposal", async () => {
+    const proposal = {
+      status: "proposal" as const,
+      proposalId: "rlp_01J00000000000000000000000",
+      ritualId: approved.ritualId,
+      fromRevision: approved.ritualRevision,
+      receiptId: "rcp_01J00000000000000000000000",
+      ownerFeedback: "Keep future results to three concise bullets.",
+      stewardMessage: "I propose a more concise result.",
+      rationale: "The owner asked for a shorter review.",
+      proposedDefinition: {
+        name: approved.name,
+        purpose: approved.purpose,
+        trigger: approved.trigger,
+        steps: approved.steps,
+        permissions: approved.permissions,
+        completion: "Three concise bullets are ready for review.",
+        reviewPolicy: approved.reviewPolicy,
+      },
+    };
+    const repository = {
+      ...unusedRunPersistence(),
+      latestSnapshot: vi.fn(),
+      decideLearning: vi.fn(async () => undefined),
+    };
+    const controller = new RitualBuilderController(
+      unavailableProvider(),
+      repository,
+    );
+
+    await controller.decideLearning({
+      schemaVersion: 1,
+      proposalId: proposal.proposalId,
+      ritualId: approved.ritualId,
+      expectedFromRevision: approved.ritualRevision,
+      decision: "REJECTED",
+    });
+    expect(repository.decideLearning).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      proposalId: proposal.proposalId,
+      ritualId: approved.ritualId,
+      expectedFromRevision: approved.ritualRevision,
+      decision: "REJECTED",
+    });
+
+    await expect(
+      controller.decideLearning({
+        schemaVersion: 1,
+        proposalId: proposal.proposalId,
+        ritualId: approved.ritualId,
+        expectedFromRevision: 1,
+        decision: "REJECTED",
+        extra: true,
+      }),
+    ).rejects.toThrow();
+    expect(repository.decideLearning).toHaveBeenCalledOnce();
   });
 
   it("locates and validates exact Run Receipt evidence before learning", async () => {

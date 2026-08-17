@@ -5,6 +5,7 @@ import {
   ritualDraftSchema,
   ritualLearningFeedbackRequestSchema,
   ritualLearningProposalSchema,
+  ritualPendingLearningReviewSchema,
   ritualRunReceiptSchema,
   ritualRunSchema,
   ritualStarterSchema,
@@ -18,6 +19,8 @@ import {
   type RitualStewardProposal,
   type RitualStewardQuestion,
   type RitualLearningProposal,
+  type RitualLearningDecision,
+  type RitualPendingLearningReview,
   type RitualRun,
   type RitualRunReceipt,
   type RitualTestReceipt,
@@ -148,6 +151,14 @@ export type RitualBuilderState =
       proposal: RitualLearningProposal;
     })
   | (RitualBuilderStateBase & {
+      phase: "SAVING_LEARNING_DECISION";
+      draft: RitualDraft;
+      approved: ApprovedRitualRevision;
+      source: RitualLearningSource;
+      proposal: RitualLearningProposal;
+      pendingDecision: RitualLearningDecision["decision"];
+    })
+  | (RitualBuilderStateBase & {
       phase: "SAVING_LEARNING";
       draft: RitualDraft;
       approved: ApprovedRitualRevision;
@@ -185,6 +196,7 @@ export type RitualBuilderEvent =
   | { type: "RESTORE_RECEIPT"; receipt: RitualTestReceipt }
   | { type: "RESTORE_RUN"; run: RitualRun }
   | { type: "RESTORE_RUN_RECEIPT"; receipt: RitualRunReceipt }
+  | { type: "RESTORE_LEARNING_REVIEW"; review: RitualPendingLearningReview }
   | { type: "APPROVAL_SAVED" }
   | { type: "APPROVAL_SAVE_FAILED" }
   | { type: "START_NEW_RITUAL" }
@@ -209,6 +221,8 @@ export type RitualBuilderEvent =
   | { type: "LEARNING_SAVE_FAILED" }
   | { type: "REVISE_LEARNING" }
   | { type: "REJECT_LEARNING" }
+  | { type: "LEARNING_DECISION_SAVED" }
+  | { type: "LEARNING_DECISION_FAILED" }
   | {
       type: "SELECT_TRIGGER";
       trigger: "ON_DEMAND" | "WEEKDAYS" | "EVENT";
@@ -637,6 +651,47 @@ export function reduceRitualBuilder(
           "Restored the latest Run Receipt for Review.",
         ),
         error: null,
+      };
+    }
+    case "RESTORE_LEARNING_REVIEW": {
+      if (
+        state.phase !== "APPROVED" &&
+        state.phase !== "REVIEW_TEST" &&
+        state.phase !== "REVIEW_RUN"
+      ) {
+        return state;
+      }
+      const review = ritualPendingLearningReviewSchema.safeParse(event.review);
+      if (
+        !review.success ||
+        review.data.proposal.ritualId !== state.approved.ritualId ||
+        review.data.proposal.fromRevision !== state.approved.ritualRevision
+      ) {
+        return {
+          ...state,
+          error: "The saved learning proposal did not match this Ritual.",
+        };
+      }
+      return {
+        phase: "REVIEW_LEARNING",
+        draft: state.draft,
+        approved: state.approved,
+        source:
+          review.data.kind === "RUN"
+            ? {
+                kind: "RUN",
+                receipt: review.data.receipt,
+                run: review.data.run,
+              }
+            : { kind: "TEST", receipt: review.data.receipt },
+        proposal: review.data.proposal,
+        messages: message(
+          state.messages,
+          "SYSTEM",
+          "Restored the pending learning proposal for Review. Nothing has changed yet.",
+        ),
+        error: null,
+        requestRevision: state.requestRevision,
       };
     }
     case "APPROVAL_SAVE_FAILED": {
@@ -1129,17 +1184,50 @@ export function reduceRitualBuilder(
       if (state.phase !== "REVIEW_LEARNING") return state;
       return {
         ...state,
-        phase: "GIVE_FEEDBACK",
-        messages: message(
-          state.messages,
-          "STEWARD",
-          "Tell me what to adjust. I’ll replace this proposal with a new one for Review.",
-        ),
+        phase: "SAVING_LEARNING_DECISION",
+        pendingDecision: "REVISION_REQUESTED",
         error: null,
       };
     }
     case "REJECT_LEARNING": {
       if (state.phase !== "REVIEW_LEARNING") return state;
+      return {
+        ...state,
+        phase: "SAVING_LEARNING_DECISION",
+        pendingDecision: "REJECTED",
+        error: null,
+      };
+    }
+    case "LEARNING_DECISION_FAILED": {
+      if (state.phase !== "SAVING_LEARNING_DECISION") return state;
+      return {
+        ...state,
+        phase: "REVIEW_LEARNING",
+        messages: message(
+          state.messages,
+          "SYSTEM",
+          "Village could not save that decision. The proposal remains pending; try again.",
+        ),
+        error: null,
+      };
+    }
+    case "LEARNING_DECISION_SAVED": {
+      if (state.phase !== "SAVING_LEARNING_DECISION") return state;
+      if (state.pendingDecision === "REVISION_REQUESTED") {
+        return {
+          phase: "GIVE_FEEDBACK",
+          draft: state.draft,
+          approved: state.approved,
+          source: state.source,
+          messages: message(
+            state.messages,
+            "STEWARD",
+            "Tell me what to adjust. I’ll replace this proposal with a new one for Review.",
+          ),
+          error: null,
+          requestRevision: state.requestRevision,
+        };
+      }
       if (state.source.kind === "RUN") {
         return {
           phase: "REVIEW_RUN",

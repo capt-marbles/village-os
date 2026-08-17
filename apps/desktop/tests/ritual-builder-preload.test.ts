@@ -29,6 +29,7 @@ describe("Ritual Builder preload", () => {
       "configureExaApiKey",
       "configureSchedule",
       "createDraftIdentity",
+      "decideLearning",
       "draft",
       "getAutomationState",
       "getExaCredentialStatus",
@@ -58,6 +59,7 @@ describe("Ritual Builder preload", () => {
     await bridge.getAutomationState!();
     await bridge.configureSchedule!({ ritualId: "bounded" });
     await bridge.pauseSchedule!({ ritualId: "bounded" });
+    await bridge.decideLearning!({ ritualId: "bounded" });
     expect(invoke).toHaveBeenNthCalledWith(
       1,
       "village:ritual-builder:initialize",
@@ -133,6 +135,11 @@ describe("Ritual Builder preload", () => {
     expect(invoke).toHaveBeenNthCalledWith(
       17,
       "village:ritual-builder:pause-schedule",
+      { ritualId: "bounded" },
+    );
+    expect(invoke).toHaveBeenNthCalledWith(
+      18,
+      "village:ritual-builder:decide-learning",
       { ritualId: "bounded" },
     );
   });

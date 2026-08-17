@@ -18,6 +18,7 @@ import {
   ritualTestRunRequestSchema,
   ritualLearningApprovalRequestSchema,
   ritualLearningFeedbackRequestSchema,
+  ritualLearningDecisionRequestSchema,
   validateRitualTestRunResult,
   validateRitualLearningResult,
   ritualStewardContextSchema,
@@ -26,6 +27,8 @@ import {
   type RitualTestReceipt,
   type RitualTestRunControllerResult,
   type RitualLearningProposal,
+  type RitualLearningDecisionRequest,
+  type RitualPendingLearningReview,
   type RitualLearningReceipt,
   type RitualLearningResult,
   type RitualRun,
@@ -50,6 +53,7 @@ export interface RitualPersistence {
     receipt: RitualTestReceipt | null;
     run: RitualRun | null;
     runReceipt: RitualRunReceipt | null;
+    learningReview: RitualPendingLearningReview | null;
   }>;
   find(ritualId: string): Promise<ApprovedRitualRevision | null>;
   findReceipt(receiptId: string): Promise<RitualLearningReceipt | null>;
@@ -59,6 +63,7 @@ export interface RitualPersistence {
   save(ritual: ApprovedRitualRevision): Promise<void>;
   saveReceipt(receipt: RitualTestReceipt): Promise<void>;
   saveLearningProposal(proposal: RitualLearningProposal): Promise<void>;
+  decideLearning(request: RitualLearningDecisionRequest): Promise<void>;
   findRunWithApprovedRevision(runId: string): Promise<{
     run: RitualRun;
     approved: ApprovedRitualRevision;
@@ -146,6 +151,7 @@ export class RitualBuilderController {
     receipt: RitualTestReceipt | null;
     run: RitualRun | null;
     runReceipt: RitualRunReceipt | null;
+    learningReview: RitualPendingLearningReview | null;
   }> {
     return this.enqueueRun(async () => {
       const snapshot = await this.repository.latestSnapshot();
@@ -543,6 +549,11 @@ export class RitualBuilderController {
     const revision = approveRitualLearningProposal(ritual, proposal, request);
     await this.repository.save(revision);
     return revision;
+  }
+
+  async decideLearning(candidate: unknown): Promise<void> {
+    const request = ritualLearningDecisionRequestSchema.parse(candidate);
+    return this.enqueueRun(() => this.repository.decideLearning(request));
   }
 
   close(): Promise<void> {

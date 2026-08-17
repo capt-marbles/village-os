@@ -5,6 +5,8 @@ import type {
   RitualLearningApprovalRequest,
   RitualLearningFeedbackRequest,
   RitualLearningResult,
+  RitualLearningDecisionRequest,
+  RitualPendingLearningReview,
   RitualRun,
   RitualRunCancelRequest,
   RitualRunControllerResult,
@@ -45,6 +47,7 @@ export interface RitualBuilderBridge extends ExaCredentialBridge {
     receipt: RitualTestReceipt | null;
     run: RitualRun | null;
     runReceipt: RitualRunReceipt | null;
+    learningReview: RitualPendingLearningReview | null;
     schedule: RitualSchedule | null;
     inbox: readonly RitualInboxItem[];
   }>;
@@ -75,6 +78,7 @@ export interface RitualBuilderBridge extends ExaCredentialBridge {
   approveLearning(
     request: RitualLearningApprovalRequest,
   ): Promise<ApprovedRitualRevision>;
+  decideLearning(request: RitualLearningDecisionRequest): Promise<void>;
 }
 
 declare global {
@@ -148,6 +152,12 @@ export function RitualBuilderWorkspace({
               type: "RESTORE_APPROVED",
               approved: initialized.approved!,
             });
+            if (initialized.learningReview) {
+              return reduceRitualBuilder(restored, {
+                type: "RESTORE_LEARNING_REVIEW",
+                review: initialized.learningReview,
+              });
+            }
             const withTestReceipt = initialized.receipt
               ? reduceRitualBuilder(restored, {
                   type: "RESTORE_RECEIPT",
@@ -160,12 +170,13 @@ export function RitualBuilderWorkspace({
                   run: initialized.run,
                 })
               : withTestReceipt;
-            return initialized.runReceipt
+            const withRunReceipt = initialized.runReceipt
               ? reduceRitualBuilder(withRun, {
                   type: "RESTORE_RUN_RECEIPT",
                   receipt: initialized.runReceipt,
                 })
               : withRun;
+            return withRunReceipt;
           });
         }
       })
@@ -588,6 +599,42 @@ export function RitualBuilderWorkspace({
         .catch(() => {
           setState((current) =>
             reduceRitualBuilder(current, { type: "LEARNING_SAVE_FAILED" }),
+          );
+        })
+        .finally(() => {
+          learningInFlight.current = false;
+        });
+      return;
+    }
+    if (event.type === "REJECT_LEARNING" || event.type === "REVISE_LEARNING") {
+      if (learningInFlight.current || state.phase !== "REVIEW_LEARNING") return;
+      const next = reduceRitualBuilder(state, event);
+      setState(next);
+      if (next.phase !== "SAVING_LEARNING_DECISION") return;
+      learningInFlight.current = true;
+      const requestGeneration = ++generation.current;
+      void bridge
+        .decideLearning({
+          schemaVersion: 1,
+          proposalId: next.proposal.proposalId,
+          ritualId: next.approved.ritualId,
+          expectedFromRevision: next.approved.ritualRevision,
+          decision: next.pendingDecision,
+        })
+        .then(() => {
+          if (generation.current !== requestGeneration) return;
+          setState((current) =>
+            reduceRitualBuilder(current, {
+              type: "LEARNING_DECISION_SAVED",
+            }),
+          );
+        })
+        .catch(() => {
+          if (generation.current !== requestGeneration) return;
+          setState((current) =>
+            reduceRitualBuilder(current, {
+              type: "LEARNING_DECISION_FAILED",
+            }),
           );
         })
         .finally(() => {
