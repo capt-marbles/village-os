@@ -170,3 +170,19 @@ test("the fixture secret smoke package uses its isolated proof entry and verifie
     assert.ok(credentialPackageConfig.files.includes(excludedOutput));
   }
 });
+
+test("only the internal credential proof may replace the macOS Keychain", async () => {
+  const internalEntry = await readFile(
+    new URL(
+      "../apps/desktop/src/main/internal-credential-proof-entry.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const productionEntry = await readFile(
+    new URL("../apps/desktop/src/main/production-entry.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(internalEntry, /appendSwitch\("use-mock-keychain"\)/u);
+  assert.doesNotMatch(productionEntry, /use-mock-keychain/u);
+});

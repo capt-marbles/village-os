@@ -1,10 +1,8 @@
 import { join } from "node:path";
 import { session, type Session, WebContentsView } from "electron";
 import {
-  eraseProfileHoldingLock,
   ensureProtectedProfile,
   ProfileLock,
-  scopedProfileAbsent,
   type MacProfileProtection,
   type ProfileScope,
 } from "./profile-protection.js";
@@ -28,11 +26,11 @@ export interface LocalBrowserHostOptions extends ProfileScope {
 
 export class LocalBrowserHost {
   readonly view: WebContentsView;
+  private preparedSessionClose: Promise<void> | undefined;
 
   private constructor(
     view: WebContentsView,
     private readonly profileLock: ProfileLock,
-    private readonly profilePath: string,
     private readonly browserSession: ReturnType<typeof session.fromPath>,
     private readonly closePreparedSession?: () => Promise<void>,
   ) {
@@ -69,7 +67,6 @@ export class LocalBrowserHost {
       return new LocalBrowserHost(
         view,
         profileLock,
-        profile.path,
         browserSession,
         closePreparedSession,
       );
@@ -82,13 +79,14 @@ export class LocalBrowserHost {
   }
 
   async close(): Promise<void> {
-    if (!this.view.webContents.isDestroyed()) this.view.webContents.close();
-    await this.closePreparedSession?.();
+    this.closeViewContents();
+    await this.closePreparedSessionOnce();
     await this.profileLock.release();
   }
 
   async closeTargetForErasure(): Promise<void> {
-    if (!this.view.webContents.isDestroyed()) this.view.webContents.close();
+    this.closeViewContents();
+    await this.closePreparedSessionOnce();
   }
 
   /** Destructive lifecycle helpers, called only after main-process step-up. */
@@ -96,19 +94,13 @@ export class LocalBrowserHost {
     await this.browserSession.clearStorageData();
     await this.browserSession.clearCache();
     await this.browserSession.clearAuthCache();
+    await this.browserSession.closeAllConnections();
+    await this.browserSession.flushStorageData();
   }
 
   async clearSitePermissions(): Promise<void> {
     // Permission prompts are deny-by-default and process-local; persisted
     // Chromium permission state is erased with the scoped profile below.
-  }
-
-  async removeScopedProfile(): Promise<void> {
-    await eraseProfileHoldingLock(this.profilePath, this.profileLock);
-  }
-
-  async scopedProfileAbsent(): Promise<boolean> {
-    return scopedProfileAbsent(this.profilePath);
   }
 
   async reloadAfterUncertainAction(timeoutMs = 10_000): Promise<void> {
@@ -135,6 +127,30 @@ export class LocalBrowserHost {
 
   static profileRoot(userDataPath: string): string {
     return join(userDataPath, "browser-profiles");
+  }
+
+  private async closePreparedSessionOnce(): Promise<void> {
+    if (!this.closePreparedSession) return;
+    const closing =
+      this.preparedSessionClose ?? Promise.resolve(this.closePreparedSession());
+    this.preparedSessionClose = closing;
+    try {
+      await closing;
+    } catch (error) {
+      if (this.preparedSessionClose === closing) {
+        this.preparedSessionClose = undefined;
+      }
+      throw error;
+    }
+  }
+
+  private closeViewContents(): void {
+    const contents = (
+      this.view as WebContentsView & {
+        webContents?: WebContentsView["webContents"];
+      }
+    ).webContents;
+    if (contents && !contents.isDestroyed()) contents.close();
   }
 }
 

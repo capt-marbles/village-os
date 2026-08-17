@@ -61,6 +61,10 @@ function scopeHash(scope: ProfileScope): string {
     .slice(0, 32);
 }
 
+export function scopedProfilePath(root: string, scope: ProfileScope): string {
+  return join(root, scopeHash(scope));
+}
+
 export function profilePartition(scope: ProfileScope): string {
   return `persist:village-${scopeHash(scope)}`;
 }
@@ -87,7 +91,7 @@ export async function ensureProtectedProfile(
   if (!/^\[Excluded\]\s+/m.test(exclusion.stdout)) {
     throw new Error("PROFILE_BACKUP_EXCLUSION_UNVERIFIED");
   }
-  const path = join(root, scopeHash(scope));
+  const path = scopedProfilePath(root, scope);
   await ensurePrivateDirectory(path);
   return { path, partition: profilePartition(scope) };
 }

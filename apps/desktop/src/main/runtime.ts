@@ -39,6 +39,10 @@ import {
   installGlobalSecurityPolicy,
 } from "./security.js";
 import { verifyMacOsOwnerPresence } from "./step-up-auth.js";
+import {
+  completePendingSessionErasure,
+  PendingSessionErasureStore,
+} from "./pending-session-erasure.js";
 import type { InternalDelegatedWorkflowOperations } from "./app-window.js";
 import {
   createRuntimeModelProviderComposition,
@@ -139,6 +143,13 @@ export async function startVillageRuntime(
   );
   const preloadPath = defaultPreloadPath(app.getAppPath());
   const userDataPath = app.getPath("userData");
+  const pendingSessionErasure = new PendingSessionErasureStore(
+    join(userDataPath, "session-erasure"),
+  );
+  await completePendingSessionErasure(
+    pendingSessionErasure,
+    LocalBrowserHost.profileRoot(userDataPath),
+  );
   const identityDirectory = join(userDataPath, "identity");
   const packagedProtector = app.isPackaged
     ? new ElectronSafeStorageProtector()
@@ -291,6 +302,11 @@ export async function startVillageRuntime(
       ? { profileProtection: internalComposition.profileProtection }
       : {}),
     verifyStepUp: () => verifyMacOsOwnerPresence(),
+    stageSessionErasure: (binding) => pendingSessionErasure.stage(binding),
+    restartAfterSessionErasure: () => {
+      app.relaunch();
+      setImmediate(() => app.quit());
+    },
     // LinkedIn authentication is human-only: Village never persists a
     // LinkedIn credential reference. Keeping this required callback in the
     // production composition prevents future credential-capable sites from

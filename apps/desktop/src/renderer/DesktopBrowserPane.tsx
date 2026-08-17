@@ -47,7 +47,7 @@ export interface VillageDesktopBridge
   }): Promise<void>;
   recordVerificationDecision(decision: "CONFIRM" | "REJECT"): Promise<void>;
   requestForgetSession(): Promise<
-    "STEP_UP_REQUIRED" | "DECLINED" | "COMPLETE" | "PARTIAL_FAILURE"
+    "STEP_UP_REQUIRED" | "DECLINED" | "RESTART_REQUIRED" | "PARTIAL_FAILURE"
   >;
   requestObserverIntent(intent: "CANCEL_FUTURE_AUTOMATION"): Promise<void>;
   getDelegatedWorkflowState?(): Promise<DelegatedWorkflowSnapshot>;

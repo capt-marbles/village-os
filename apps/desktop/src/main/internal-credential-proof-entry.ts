@@ -1,5 +1,5 @@
 import { OWNED_FIXTURE_ORIGIN } from "@village/contracts";
-import { app, BaseWindow, clipboard, type Session } from "electron";
+import { app, BaseWindow, clipboard, session, type Session } from "electron";
 import {
   createCipheriv,
   createDecipheriv,
@@ -7,7 +7,7 @@ import {
   randomBytes,
   timingSafeEqual,
 } from "node:crypto";
-import { readFile, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { LocalBrowserHost } from "../browser/local-browser-host.js";
@@ -19,6 +19,42 @@ import {
 import { installFixtureSessionHandler } from "./fixture-session-handler.js";
 import { OwnedFixtureCredentialFill } from "./owned-fixture-credential-fill.js";
 import { installGlobalSecurityPolicy } from "./security.js";
+import {
+  ensureProtectedProfile,
+  ProfileLock,
+  scopedProfileAbsent,
+  scopedProfilePath,
+  type ProfileScope,
+} from "../browser/profile-protection.js";
+import { RestartStagedSessionErasureCoordinator } from "./session-erasure.js";
+import { SessionErasureRequestController } from "./session-erasure-request.js";
+import { StepUpAuthorizer } from "./step-up-auth.js";
+import {
+  completePendingSessionErasure,
+  PendingSessionErasureStore,
+} from "./pending-session-erasure.js";
+
+const targetProfileScope: ProfileScope = {
+  principalId: "prn_01J00000000000000000000000",
+  deviceId: "dev_01J00000000000000000000000",
+  site: "OWNED_FIXTURE",
+};
+const siblingProfileScope: ProfileScope = {
+  ...targetProfileScope,
+  deviceId: "dev_01J00000000000000000000001",
+};
+const targetCookieName = "__Host-village_erasure_target";
+const siblingCookieName = "__Host-village_erasure_sibling";
+const siblingCookieValue = "sibling-session-preserved";
+
+// This internal-only package proves broker and erasure behavior, not OS-crypt.
+// The release package excludes this entry; the dedicated profile proof owns
+// the real macOS Keychain gate.
+app.commandLine.appendSwitch("use-mock-keychain");
+
+function reportProofStage(stage: string): void {
+  process.stderr.write(`VILLAGE_PROOF_STAGE:${stage}\n`);
+}
 
 function requiredPath(name: string): string {
   const index = process.argv.indexOf(name);
@@ -27,6 +63,82 @@ function requiredPath(name: string): string {
     throw new Error("PACKAGED_FIXTURE_SECRET_PATH_UNSAFE");
   }
   return value;
+}
+
+function optionalPath(name: string): string | undefined {
+  const index = process.argv.indexOf(name);
+  if (index === -1) return undefined;
+  const value = process.argv[index + 1];
+  if (!value || !isAbsolute(value)) {
+    throw new Error("PACKAGED_FIXTURE_SECRET_PATH_UNSAFE");
+  }
+  return value;
+}
+
+async function pathAbsent(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return false;
+  } catch (error) {
+    return error instanceof Error && "code" in error && error.code === "ENOENT";
+  }
+}
+
+async function runRestartErasureVerification(
+  profilePath: string,
+  reportPath: string,
+): Promise<void> {
+  const profileRoot = LocalBrowserHost.profileRoot(profilePath);
+  const targetPath = scopedProfilePath(profileRoot, targetProfileScope);
+  const pendingStore = new PendingSessionErasureStore(
+    join(profilePath, "session-erasure"),
+  );
+  const completed = await completePendingSessionErasure(
+    pendingStore,
+    profileRoot,
+  );
+  const siblingProfile = await ensureProtectedProfile(
+    profileRoot,
+    siblingProfileScope,
+    process.platform,
+    internalProofProfileProtection,
+  );
+  const siblingLock = await ProfileLock.acquire(siblingProfile.path);
+  const siblingCookies = await (async () => {
+    try {
+      return await session
+        .fromPath(siblingProfile.path, { cache: true })
+        .cookies.get({
+          url: OWNED_FIXTURE_ORIGIN,
+          name: siblingCookieName,
+        });
+    } finally {
+      await siblingLock.release();
+    }
+  })();
+  await writeFile(
+    reportPath,
+    JSON.stringify({
+      targetAbsentAfterRestart: await scopedProfileAbsent(targetPath),
+      targetLockAbsentAfterRestart: await pathAbsent(`${targetPath}.lock`),
+      siblingCookiePreserved:
+        siblingCookies.length === 1 &&
+        siblingCookies[0]?.value === siblingCookieValue,
+      siblingJournalPreserved: !(await pathAbsent(
+        join(siblingProfile.path, "action-journal.json"),
+      )),
+      siblingVaultReferencePreserved: !(await pathAbsent(
+        join(siblingProfile.path, "credential-reference.marker"),
+      )),
+      credentialReferenceAbsentAfterRestart: await pathAbsent(
+        join(targetPath, "fixture-secret-vault.json"),
+      ),
+      pendingErasureConsumed:
+        completed?.binding.principalId === targetProfileScope.principalId &&
+        (await pendingStore.load()) === null,
+    }),
+    { mode: 0o600, flag: "wx" },
+  );
 }
 
 function digest(value: Uint8Array | string): Buffer {
@@ -105,12 +217,22 @@ async function waitForDestination(
 }
 
 async function run(): Promise<void> {
-  const seedPath = requiredPath("--village-fixture-secret-seed");
-  const reportPath = requiredPath("--village-fixture-secret-report");
   const profilePath = requiredPath("--village-fixture-secret-profile");
+  const restartErasureReport = optionalPath(
+    "--village-fixture-erasure-restart-report",
+  );
   app.setPath("userData", profilePath);
   installGlobalSecurityPolicy(app);
   await app.whenReady();
+  reportProofStage("APP_READY");
+  if (restartErasureReport) {
+    await runRestartErasureVerification(profilePath, restartErasureReport);
+    reportProofStage("RESTART_VERIFIED");
+    app.quit();
+    return;
+  }
+  const seedPath = requiredPath("--village-fixture-secret-seed");
+  const reportPath = requiredPath("--village-fixture-secret-report");
   const window = new BaseWindow({
     show: true,
     width: 800,
@@ -125,12 +247,92 @@ async function run(): Promise<void> {
   await unlink(seedPath);
   const expectedDigest = digest(secret);
   const protector = new EphemeralProofEncryptionProvider();
+  const profileRoot = LocalBrowserHost.profileRoot(profilePath);
+  const [targetProfile, siblingProfile] = await Promise.all([
+    ensureProtectedProfile(
+      profileRoot,
+      targetProfileScope,
+      process.platform,
+      internalProofProfileProtection,
+    ),
+    ensureProtectedProfile(
+      profileRoot,
+      siblingProfileScope,
+      process.platform,
+      internalProofProfileProtection,
+    ),
+  ]);
+  reportProofStage("PROFILES_READY");
   const vault = new SecretVault(
-    join(profilePath, "fixture-secret-vault.json"),
+    join(targetProfile.path, "fixture-secret-vault.json"),
     protector,
   );
   await vault.store("sec_fixture_primary", secret);
   const secretBufferCleared = secret.every((byte) => byte === 0);
+  const siblingLock = await ProfileLock.acquire(siblingProfile.path);
+  try {
+    const [targetSession, siblingSession] = [
+      session.fromPath(targetProfile.path, { cache: true }),
+      session.fromPath(siblingProfile.path, { cache: true }),
+    ];
+    await Promise.all([
+      targetSession.cookies.set({
+        url: OWNED_FIXTURE_ORIGIN,
+        name: targetCookieName,
+        value: "target-session-to-delete",
+        secure: true,
+        httpOnly: true,
+        sameSite: "strict",
+        path: "/",
+        expirationDate: Date.now() / 1_000 + 3_600,
+      }),
+      siblingSession.cookies.set({
+        url: OWNED_FIXTURE_ORIGIN,
+        name: siblingCookieName,
+        value: siblingCookieValue,
+        secure: true,
+        httpOnly: true,
+        sameSite: "strict",
+        path: "/",
+        expirationDate: Date.now() / 1_000 + 3_600,
+      }),
+    ]);
+    reportProofStage("COOKIES_SEEDED");
+    await Promise.all([
+      targetSession.flushStorageData(),
+      siblingSession.flushStorageData(),
+    ]);
+  } finally {
+    await siblingLock.release();
+  }
+  await Promise.all([
+    writeFile(join(targetProfile.path, "action-journal.json"), "[]", {
+      mode: 0o600,
+      flag: "wx",
+    }),
+    mkdir(join(targetProfile.path, "temporary"), { mode: 0o700 }),
+    mkdir(join(targetProfile.path, "Downloads"), { mode: 0o700 }),
+    writeFile(join(siblingProfile.path, "action-journal.json"), "[]", {
+      mode: 0o600,
+      flag: "wx",
+    }),
+    writeFile(
+      join(siblingProfile.path, "credential-reference.marker"),
+      "preserved",
+      { mode: 0o600, flag: "wx" },
+    ),
+  ]);
+  await Promise.all([
+    writeFile(join(targetProfile.path, "temporary", "pending.tmp"), "temp", {
+      mode: 0o600,
+      flag: "wx",
+    }),
+    writeFile(
+      join(targetProfile.path, "Downloads", "download.part"),
+      "partial",
+      { mode: 0o600, flag: "wx" },
+    ),
+  ]);
 
   const fixtureRoot = join(
     process.resourcesPath,
@@ -165,9 +367,7 @@ async function run(): Promise<void> {
   const clipboardBefore = clipboard.readText();
   try {
     host = await LocalBrowserHost.create({
-      principalId: "prn_01J00000000000000000000000",
-      deviceId: "dev_01J00000000000000000000000",
-      site: "OWNED_FIXTURE",
+      ...targetProfileScope,
       profileRoot: LocalBrowserHost.profileRoot(profilePath),
       initialUrl: `${OWNED_FIXTURE_ORIGIN}/login`,
       profileProtection: internalProofProfileProtection,
@@ -187,8 +387,41 @@ async function run(): Promise<void> {
           },
         ),
     });
+    reportProofStage("BROWSER_READY");
     host.view.setBounds({ x: 0, y: 0, width: 800, height: 600 });
     window.contentView.addChildView(host.view);
+    const browserStorageSeeded = await host.view.webContents.executeJavaScript(
+      `(async () => {
+        localStorage.setItem("village-erasure-local", "present");
+        await new Promise((resolve, reject) => {
+          const request = indexedDB.open("village-erasure-indexeddb", 1);
+          request.onupgradeneeded = () => request.result.createObjectStore("records");
+          request.onerror = () => reject(request.error);
+          request.onsuccess = () => {
+            const transaction = request.result.transaction("records", "readwrite");
+            transaction.objectStore("records").put("present", "status");
+            transaction.oncomplete = () => resolve(true);
+            transaction.onerror = () => reject(transaction.error);
+          };
+        });
+        const cache = await caches.open("village-erasure-cache");
+        await cache.put("/cached-proof", new Response("present"));
+        return localStorage.getItem("village-erasure-local") === "present";
+      })()`,
+      true,
+    );
+    const permissionPolicyEnforced =
+      await host.view.webContents.executeJavaScript(
+        `new Promise((resolve) => {
+          navigator.geolocation.getCurrentPosition(
+            () => resolve(false),
+            (error) => resolve(error.code === 1),
+            { timeout: 1000 }
+          );
+        })`,
+        true,
+      );
+    reportProofStage("STORAGE_AND_PERMISSIONS_VERIFIED");
     const operation = new OwnedFixtureCredentialFill(vault, {
       confirmCredentialUse: async () => true,
     });
@@ -221,6 +454,7 @@ async function run(): Promise<void> {
       true,
     );
     await waitForDestination(destination);
+    reportProofStage("CREDENTIAL_FILL_VERIFIED");
     await host.view.webContents.executeJavaScript(
       `(() => {
         const field = document.querySelector('input[autocomplete="current-password"]');
@@ -228,6 +462,118 @@ async function run(): Promise<void> {
       })()`,
       true,
     );
+    const devToolsOpened = host.view.webContents.isDevToolsOpened();
+
+    const erasureBinding = {
+      principalId: targetProfileScope.principalId,
+      deviceId: targetProfileScope.deviceId,
+      browserSessionId: "brs_01J00000000000000000000000",
+      site: "OWNED_FIXTURE" as const,
+      operation: "FORGET_SESSION" as const,
+      currentState: "PRESENT" as const,
+    };
+    let matrixNow = 1_000;
+    const matrixAuthorizer = new StepUpAuthorizer(() => matrixNow);
+    const bindingCases = [
+      { ...erasureBinding, principalId: "prn_01J00000000000000000000001" },
+      { ...erasureBinding, deviceId: siblingProfileScope.deviceId },
+      { ...erasureBinding, browserSessionId: "brs_01J00000000000000000000001" },
+      { ...erasureBinding, site: "LINKEDIN" as const },
+      { ...erasureBinding, operation: "NOT_FORGET_SESSION" as never },
+      { ...erasureBinding, currentState: "ERASURE_FAILED" as const },
+    ];
+    const bindingMatrixRejected = bindingCases.every((candidate) => {
+      const token = matrixAuthorizer.mint(erasureBinding, 5_000).token;
+      const result = matrixAuthorizer.consume(token, candidate);
+      return !result.ok && result.code === "STEP_UP_BINDING_MISMATCH";
+    });
+    const absentTokenRejected = !matrixAuthorizer.consume(
+      "absent-token",
+      erasureBinding,
+    ).ok;
+    const expiredToken = matrixAuthorizer.mint(erasureBinding, 1_000).token;
+    matrixNow = 2_000;
+    const expiredResult = matrixAuthorizer.consume(
+      expiredToken,
+      erasureBinding,
+    );
+    const replayToken = matrixAuthorizer.mint(erasureBinding, 5_000).token;
+    const firstConsumption = matrixAuthorizer.consume(
+      replayToken,
+      erasureBinding,
+    );
+    const replayConsumption = matrixAuthorizer.consume(
+      replayToken,
+      erasureBinding,
+    );
+
+    const authorizer = new StepUpAuthorizer();
+    let automationFenced = false;
+    let credentialReferenceRevoked = false;
+    let stageAttempts = 0;
+    let failedStep: string | undefined;
+    let ownerPresenceRequests = 0;
+    let confirmationRequests = 0;
+    const pendingStore = new PendingSessionErasureStore(
+      join(profilePath, "session-erasure"),
+    );
+    const erasure = new RestartStagedSessionErasureCoordinator(authorizer, {
+      revokeAutomation: async () => {
+        automationFenced = true;
+      },
+      closeTarget: async () => host!.closeTargetForErasure(),
+      clearBrowserStorage: async () => host!.clearSiteStorage(),
+      clearPermissions: async () => host!.clearSitePermissions(),
+      revokeCredentialReferences: async () => {
+        if (!credentialReferenceRevoked) {
+          await vault.revoke("sec_fixture_primary");
+        }
+        credentialReferenceRevoked = true;
+      },
+      stageProfileRemoval: async (binding) => {
+        stageAttempts += 1;
+        if (stageAttempts === 1) throw new Error("injected staging failure");
+        await pendingStore.stage(binding);
+      },
+    });
+    let allowConfirmation = false;
+    const request = new SessionErasureRequestController({
+      binding: () => erasureBinding,
+      verifyOwner: async () => {
+        ownerPresenceRequests += 1;
+        return true;
+      },
+      confirm: async () => {
+        confirmationRequests += 1;
+        return allowConfirmation;
+      },
+      authorizer,
+      coordinator: erasure,
+      onStepUpRequired: () => undefined,
+      onErasureStarted: () => undefined,
+      onErasureStaged: () => undefined,
+      onErasureFailed: (step) => {
+        failedStep = step;
+      },
+      restart: () => undefined,
+    });
+    const declinedResult = await request.request();
+    const profilePreservedAfterCancel = !(await scopedProfileAbsent(
+      targetProfile.path,
+    ));
+    allowConfirmation = true;
+    const partialResult = await request.request();
+    const retryResult = await request.request();
+    reportProofStage("ERASURE_STAGED");
+    const targetPresentUntilRestart = !(await scopedProfileAbsent(
+      targetProfile.path,
+    ));
+    const credentialAbsent = await vault
+      .withSecret("sec_fixture_primary", async () => false)
+      .catch(
+        (error: unknown) =>
+          error instanceof Error && error.message === "SECRET_REVOKED",
+      );
 
     await writeFile(
       reportPath,
@@ -242,10 +588,34 @@ async function run(): Promise<void> {
         nonDestinationRequests,
         secretBufferCleared,
         clipboardUnchanged: clipboard.readText() === clipboardBefore,
-        devToolsOpened: host.view.webContents.isDevToolsOpened(),
+        devToolsOpened,
+        browserStorageSeeded,
+        permissionPolicyEnforced,
+        bindingMatrixRejected,
+        absentTokenRejected,
+        expiredTokenRejected:
+          !expiredResult.ok && expiredResult.code === "STEP_UP_EXPIRED",
+        replayRejected:
+          firstConsumption.ok &&
+          !replayConsumption.ok &&
+          replayConsumption.code === "STEP_UP_REPLAYED",
+        mainProcessRequestPathUsed:
+          ownerPresenceRequests === 3 && confirmationRequests === 3,
+        cancelPreservedProfile:
+          declinedResult === "DECLINED" && profilePreservedAfterCancel,
+        partialFailureObserved:
+          partialResult === "PARTIAL_FAILURE" &&
+          failedStep === "stageProfileRemoval" &&
+          stageAttempts === 2,
+        erasureStaged: retryResult === "RESTART_REQUIRED",
+        automationFenced,
+        credentialReferenceRevoked,
+        credentialAbsent,
+        targetPresentUntilRestart,
       }),
       { mode: 0o600, flag: "wx" },
     );
+    reportProofStage("REPORT_WRITTEN");
   } finally {
     clearTimeout(watchdog);
     await host?.close();

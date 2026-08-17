@@ -2,24 +2,18 @@ import type { StepUpAuthorizer, StepUpBinding } from "./step-up-auth.js";
 
 export type SessionErasureBinding = StepUpBinding;
 
-export interface SessionErasureOperations {
+export interface RestartStagedSessionErasureOperations {
   /** Fence any future automated mutation before the browser is touched. */
   revokeAutomation(binding: SessionErasureBinding): Promise<void>;
-  /** Close the target view and release its partition before file removal. */
   closeTarget(binding: SessionErasureBinding): Promise<void>;
   clearBrowserStorage(binding: SessionErasureBinding): Promise<void>;
   clearPermissions(binding: SessionErasureBinding): Promise<void>;
-  clearActionJournal(binding: SessionErasureBinding): Promise<void>;
-  clearTemporaryData(binding: SessionErasureBinding): Promise<void>;
-  clearDownloads(binding: SessionErasureBinding): Promise<void>;
   revokeCredentialReferences(binding: SessionErasureBinding): Promise<void>;
-  removeProfile(binding: SessionErasureBinding): Promise<void>;
-  /** Must re-open the local storage view and prove this scope is absent. */
-  verifyAbsent(binding: SessionErasureBinding): Promise<boolean>;
+  stageProfileRemoval(binding: SessionErasureBinding): Promise<void>;
 }
 
 export type SessionErasureResult =
-  | { status: "COMPLETE" }
+  | { status: "RESTART_REQUIRED" }
   | {
       status: "REJECTED";
       code:
@@ -36,16 +30,17 @@ export type SessionErasureResult =
     };
 
 /**
- * Serializes destructive work per desktop process. A retry requires a fresh
- * step-up token, but completed individual cleanup steps are allowed to be
- * idempotent so partial failures can be safely replayed.
+ * Performs every cleanup operation that is safe while Electron is running,
+ * then records the exact profile for deletion by the next process. Chromium
+ * Session objects have no destroy API, so physical profile removal must not
+ * occur until process restart has released the partition.
  */
-export class SessionErasureCoordinator {
+export class RestartStagedSessionErasureCoordinator {
   private running = false;
 
   constructor(
     private readonly authorizer: StepUpAuthorizer,
-    private readonly operations: SessionErasureOperations,
+    private readonly operations: RestartStagedSessionErasureOperations,
   ) {}
 
   async erase(
@@ -68,19 +63,13 @@ export class SessionErasureCoordinator {
         ],
         ["clearPermissions", () => this.operations.clearPermissions(binding)],
         [
-          "clearActionJournal",
-          () => this.operations.clearActionJournal(binding),
-        ],
-        [
-          "clearTemporaryData",
-          () => this.operations.clearTemporaryData(binding),
-        ],
-        ["clearDownloads", () => this.operations.clearDownloads(binding)],
-        [
           "revokeCredentialReferences",
           () => this.operations.revokeCredentialReferences(binding),
         ],
-        ["removeProfile", () => this.operations.removeProfile(binding)],
+        [
+          "stageProfileRemoval",
+          () => this.operations.stageProfileRemoval(binding),
+        ],
       ];
       for (const [name, step] of steps) {
         try {
@@ -93,14 +82,7 @@ export class SessionErasureCoordinator {
           };
         }
       }
-      if (!(await this.operations.verifyAbsent(binding))) {
-        return {
-          status: "PARTIAL_FAILURE",
-          failedStep: "verifyAbsent",
-          retriable: true,
-        };
-      }
-      return { status: "COMPLETE" };
+      return { status: "RESTART_REQUIRED" };
     } finally {
       this.running = false;
     }
