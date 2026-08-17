@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import {
   browserControlStateSchema,
+  browserActionSchema,
   actionPhaseSchema,
   browserSessionIdSchema,
   deviceIdSchema,
@@ -527,6 +528,20 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
       row.holder_connection_id !== null
     ) {
       return { ok: false, code: "LEASE_CONFLICT" };
+    }
+    if (state.automationBlocked && state.takeover === "RECONCILING") {
+      const retainedActions = this.retainedActions();
+      if (!retainedActions) {
+        return { ok: false, code: "RECOVERY_STATE_CORRUPT" };
+      }
+      const recovery = reconcileBrowserRecovery({
+        state,
+        actions: retainedActions,
+        now: claim.now,
+      });
+      if (recovery.continuation.status === "WAITING_FOR_USER") {
+        return { ok: false, code: "RECOVERY_REQUIRES_USER" };
+      }
     }
     if (
       claim.commandSequence !== undefined &&
@@ -1379,10 +1394,10 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
       automationBlocked: true,
       leaseExpiresAt: null,
     });
-    const retainedActions = this.ctx.storage.sql
-      .exec<ActionRow>("SELECT action_json FROM accepted_actions")
-      .toArray()
-      .map((action) => JSON.parse(action.action_json) as BrowserAction);
+    const retainedActions = this.retainedActions();
+    if (!retainedActions) {
+      return { ok: false, code: "RECOVERY_STATE_CORRUPT" };
+    }
     const recovery = reconcileBrowserRecovery({
       state: online,
       actions: retainedActions,
@@ -2088,6 +2103,28 @@ export class BrowserSessionCoordinator extends DurableObject<Environment> {
         payload: JSON.parse(event.payload_json) as unknown,
         occurredAt: event.occurred_at,
       }));
+  }
+
+  private retainedActions(): BrowserAction[] | null {
+    try {
+      return this.ctx.storage.sql
+        .exec<ActionRow>("SELECT action_json FROM accepted_actions")
+        .toArray()
+        .map((row) => {
+          const action = browserActionSchema.parse(JSON.parse(row.action_json));
+          if (
+            (action.phase === "ACCEPTED" &&
+              action.postcondition !== "UNOBSERVED") ||
+            (action.phase === "EFFECT_OBSERVED" &&
+              action.postcondition === "UNOBSERVED")
+          ) {
+            throw new Error("RECOVERY_ACTION_PHASE_CONFLICT");
+          }
+          return action;
+        });
+    } catch {
+      return null;
+    }
   }
 }
 
