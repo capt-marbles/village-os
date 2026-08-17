@@ -388,6 +388,26 @@ describe("RitualBuilderWorkspace", () => {
     ).toBeTruthy();
   });
 
+  it("explains exhausted Exa credits without blaming the approved query", async () => {
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      approved: researchApproved,
+      receipt: null,
+      run: {
+        ...researchWaitingRun,
+        waitingReason: "CREDITS_EXHAUSTED",
+      } as typeof researchWaitingRun,
+      runReceipt: null,
+    });
+
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+
+    await screen.findByText("Exa research is waiting");
+    expect(screen.getByText(/credits are exhausted/u)).toBeTruthy();
+    expect(screen.queryByText(/rejected the approved query/u)).toBeNull();
+  });
+
   it("keeps cancellation available during a deferred research retry and ignores its late result", async () => {
     let resolveRetry!: (value: {
       status: "receipt";

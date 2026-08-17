@@ -111,6 +111,20 @@ describe("web research contracts", () => {
     ).toBe(false);
   });
 
+  it("keeps exhausted provider credits as a typed retryable wait", () => {
+    expect(
+      webResearchResultSchema.parse({
+        status: "waiting",
+        provider: "EXA",
+        reason: "CREDITS_EXHAUSTED",
+      }),
+    ).toEqual({
+      status: "waiting",
+      provider: "EXA",
+      reason: "CREDITS_EXHAUSTED",
+    });
+  });
+
   it("keeps the local Exa credential boundary status-only", () => {
     expect(
       exaCredentialSnapshotSchema.parse({
