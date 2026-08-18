@@ -10,6 +10,7 @@ import { isTrustedVillageSender, trustedWebPreferences } from "./security.js";
 import type { RitualBuilderController } from "./ritual-builder-controller.js";
 import { createVillageId } from "./local-village-id.js";
 import type { ExaCredentialOperations } from "../research/exa-credential-controller.js";
+import { ritualIdSchema } from "@village/contracts";
 
 export interface RitualBuilderWindow {
   window: BaseWindow;
@@ -50,10 +51,14 @@ export async function createRitualBuilderWindow(options: {
   window.on("resize", layout);
   layout();
   let identity = createRitualBuilderIdentity();
+  let selectedRitualId: string | null | undefined;
+  let selectionEpoch = 0;
   const initializeChannel = "village:ritual-builder:initialize";
   const createDraftIdentityChannel =
     "village:ritual-builder:create-draft-identity";
   const draftChannel = "village:ritual-builder:draft";
+  const selectRitualChannel = "village:ritual-builder:select-ritual";
+  const ritualCatalogChannel = "village:ritual-builder:get-rituals";
   const approveChannel = "village:ritual-builder:approve";
   const restoreRevisionChannel = "village:ritual-builder:restore-revision";
   const testRunChannel = "village:ritual-builder:test-run";
@@ -81,14 +86,34 @@ export async function createRitualBuilderWindow(options: {
   };
   ipcMain.handle(initializeChannel, async (event) => {
     assertSender(event);
-    const [latest, automation] = await Promise.all([
-      options.controller.loadLatestState(),
-      options.controller.loadAutomationState(),
-    ]);
-    return { identity, ...latest, ...automation };
+    const epoch = ++selectionEpoch;
+    const workspace = await options.controller.loadInitialWorkspaceState();
+    if (epoch === selectionEpoch)
+      selectedRitualId = workspace.approved?.ritualId ?? null;
+    return { identity, ...workspace };
   });
+  ipcMain.handle(ritualCatalogChannel, async (event, ...arguments_) => {
+    assertSender(event);
+    if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
+    return options.controller.listRituals();
+  });
+  ipcMain.handle(
+    selectRitualChannel,
+    async (event, candidate, ...arguments_) => {
+      assertSender(event);
+      if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
+      const ritualId = ritualIdSchema.parse(candidate);
+      const epoch = ++selectionEpoch;
+      const workspace =
+        await options.controller.loadRitualWorkspaceState(ritualId);
+      if (epoch === selectionEpoch) selectedRitualId = ritualId;
+      return workspace;
+    },
+  );
   ipcMain.handle(createDraftIdentityChannel, async (event) => {
     assertSender(event);
+    selectionEpoch += 1;
+    selectedRitualId = null;
     identity = createRitualBuilderIdentity();
     return identity;
   });
@@ -104,14 +129,20 @@ export async function createRitualBuilderWindow(options: {
     if (!hasExactIdentity(candidate, identity, "approval")) {
       throw new Error("STALE_RITUAL_BUILDER_IDENTITY");
     }
-    return options.controller.approve(candidate);
+    const epoch = selectionEpoch;
+    const approved = await options.controller.approve(candidate);
+    if (epoch === selectionEpoch) selectedRitualId = approved.ritualId;
+    return approved;
   });
   ipcMain.handle(
     restoreRevisionChannel,
     async (event, candidate, ...arguments_) => {
       assertSender(event);
       if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
-      return options.controller.restoreRevision(candidate);
+      const epoch = selectionEpoch;
+      const restored = await options.controller.restoreRevision(candidate);
+      if (epoch === selectionEpoch) selectedRitualId = restored.ritualId;
+      return restored;
     },
   );
   ipcMain.handle(testRunChannel, async (event, candidate) => {
@@ -133,12 +164,16 @@ export async function createRitualBuilderWindow(options: {
   ipcMain.handle(automationStateChannel, async (event, ...arguments_) => {
     assertSender(event);
     if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
-    return options.controller.loadAutomationState();
+    return selectedRitualId === null
+      ? { schedule: null, inbox: [] }
+      : options.controller.loadAutomationState(selectedRitualId);
   });
   ipcMain.handle(auditTimelineChannel, async (event, ...arguments_) => {
     assertSender(event);
     if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
-    return options.controller.loadAuditTimeline();
+    return selectedRitualId === null
+      ? []
+      : options.controller.loadAuditTimeline(selectedRitualId);
   });
   ipcMain.handle(configureScheduleChannel, async (event, candidate) => {
     assertSender(event);
@@ -154,7 +189,10 @@ export async function createRitualBuilderWindow(options: {
   });
   ipcMain.handle(approveLearningChannel, async (event, candidate) => {
     assertSender(event);
-    return options.controller.approveLearning(candidate);
+    const epoch = selectionEpoch;
+    const approved = await options.controller.approveLearning(candidate);
+    if (epoch === selectionEpoch) selectedRitualId = approved.ritualId;
+    return approved;
   });
   ipcMain.handle(decideLearningChannel, async (event, candidate) => {
     assertSender(event);
@@ -207,6 +245,8 @@ export async function createRitualBuilderWindow(options: {
     closed = true;
     ipcMain.removeHandler(initializeChannel);
     ipcMain.removeHandler(createDraftIdentityChannel);
+    ipcMain.removeHandler(selectRitualChannel);
+    ipcMain.removeHandler(ritualCatalogChannel);
     ipcMain.removeHandler(draftChannel);
     ipcMain.removeHandler(approveChannel);
     ipcMain.removeHandler(restoreRevisionChannel);

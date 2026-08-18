@@ -244,6 +244,7 @@ function bridge() {
     openExaDashboard: vi.fn(async () => undefined),
     initialize: vi.fn(async () => ({
       identity,
+      rituals: [],
       approved: null,
       receipt: null,
       run: null,
@@ -253,6 +254,17 @@ function bridge() {
       schedule: null,
       inbox: [],
     })),
+    selectRitual: vi.fn(async () => ({
+      approved: null,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [],
+      schedule: null,
+      inbox: [],
+    })),
+    getRituals: vi.fn(async () => []),
     getAutomationState: vi.fn(async () => ({ schedule: null, inbox: [] })),
     getAuditTimeline: vi.fn(async () => []),
     configureSchedule: vi.fn(async (request) => ({
@@ -323,6 +335,250 @@ function bridge() {
 }
 
 describe("RitualBuilderWorkspace", () => {
+  it("switches the Steward desk to one selected Ritual", async () => {
+    const earlier = {
+      ...approved,
+      ritualId: "rtl_01J00000000000000000000002",
+      name: "Weekly customer review",
+      approvedAt: "2026-08-14T16:03:00.000Z",
+    };
+    const ritualBridge = bridge();
+    let resolvePriorSchedule!: (
+      value: Awaited<ReturnType<typeof ritualBridge.configureSchedule>>,
+    ) => void;
+    ritualBridge.configureSchedule.mockImplementationOnce(
+      async () =>
+        new Promise((resolve) => {
+          resolvePriorSchedule = resolve;
+        }),
+    );
+    ritualBridge.initialize.mockResolvedValueOnce({
+      identity,
+      rituals: [
+        {
+          ritualId: approved.ritualId,
+          ritualRevision: approved.ritualRevision,
+          name: approved.name,
+          approvedAt: approved.approvedAt,
+        },
+        {
+          ritualId: earlier.ritualId,
+          ritualRevision: earlier.ritualRevision,
+          name: earlier.name,
+          approvedAt: earlier.approvedAt,
+        },
+      ],
+      approved,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [],
+      schedule: null,
+      inbox: [],
+    });
+    ritualBridge.selectRitual.mockResolvedValueOnce({
+      approved: earlier,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [],
+      schedule: {
+        schemaVersion: 1,
+        ritualId: earlier.ritualId,
+        ritualRevision: earlier.ritualRevision,
+        state: "ENABLED",
+        cadence: "DAILY",
+        localTime: "06:15",
+        timeZone: "America/Chicago",
+        nextRunAt: "2026-08-18T11:15:00.000Z",
+        pendingOccurrence: null,
+        lastTriggeredAt: null,
+        updatedAt: "2026-08-17T18:00:00.000Z",
+      },
+      inbox: [],
+    });
+
+    render(<RitualBuilderWorkspace bridge={ritualBridge} />);
+    const select = await screen.findByRole("combobox", {
+      name: "Current Ritual",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Enable schedule" }));
+    await waitFor(() =>
+      expect(ritualBridge.configureSchedule).toHaveBeenCalledOnce(),
+    );
+    fireEvent.change(select, { target: { value: earlier.ritualId } });
+
+    await waitFor(() =>
+      expect(ritualBridge.selectRitual).toHaveBeenCalledWith(earlier.ritualId),
+    );
+    expect(await screen.findByText(earlier.name)).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        (screen.getByLabelText("Ritual local time") as HTMLInputElement).value,
+      ).toBe("06:15"),
+    );
+    resolvePriorSchedule({
+      schemaVersion: 1,
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      state: "ENABLED",
+      cadence: "WEEKDAYS",
+      localTime: "08:30",
+      timeZone: "America/Chicago",
+      nextRunAt: "2026-08-18T13:30:00.000Z",
+      pendingOccurrence: null,
+      lastTriggeredAt: null,
+      updatedAt: "2026-08-17T18:01:00.000Z",
+    });
+    await act(async () => Promise.resolve());
+    expect(screen.getByLabelText("Ritual local time")).not.toHaveProperty(
+      "disabled",
+      true,
+    );
+    expect(
+      (screen.getByLabelText("Ritual local time") as HTMLInputElement).value,
+    ).toBe("06:15");
+  });
+
+  it("rejects prior-Ritual refreshes that settle after switching", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-08-17T18:00:00.000Z");
+    const earlier = {
+      ...approved,
+      ritualId: "rtl_01J00000000000000000000002",
+      name: "Weekly customer review",
+      approvedAt: "2026-08-14T16:03:00.000Z",
+    };
+    const currentSchedule = {
+      schemaVersion: 1 as const,
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      state: "ENABLED" as const,
+      cadence: "WEEKDAYS" as const,
+      localTime: "05:00",
+      timeZone: "America/Chicago",
+      nextRunAt: "2026-08-17T18:00:01.000Z",
+      pendingOccurrence: null,
+      lastTriggeredAt: null,
+      updatedAt: "2026-08-17T17:59:00.000Z",
+    };
+    const selectedSchedule = {
+      ...currentSchedule,
+      ritualId: earlier.ritualId,
+      localTime: "06:15",
+      nextRunAt: "2026-08-18T11:15:00.000Z",
+      updatedAt: "2026-08-17T18:00:00.000Z",
+    };
+    const activeBridge = bridge();
+    let resolveAutomation!: (value: {
+      schedule: typeof currentSchedule;
+      inbox: readonly [];
+    }) => void;
+    let resolveAudit!: (
+      value: Awaited<ReturnType<typeof activeBridge.getAuditTimeline>>,
+    ) => void;
+    const staleAutomation = new Promise<{
+      schedule: typeof currentSchedule;
+      inbox: readonly [];
+    }>((resolve) => {
+      resolveAutomation = resolve;
+    });
+    const staleAudit = new Promise<
+      Awaited<ReturnType<typeof activeBridge.getAuditTimeline>>
+    >((resolve) => {
+      resolveAudit = resolve;
+    });
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      rituals: [
+        {
+          ritualId: approved.ritualId,
+          ritualRevision: approved.ritualRevision,
+          name: approved.name,
+          approvedAt: approved.approvedAt,
+        },
+        {
+          ritualId: earlier.ritualId,
+          ritualRevision: earlier.ritualRevision,
+          name: earlier.name,
+          approvedAt: earlier.approvedAt,
+        },
+      ],
+      approved,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [],
+      schedule: currentSchedule,
+      inbox: [],
+    });
+    activeBridge.getAutomationState.mockImplementationOnce(
+      async () => staleAutomation,
+    );
+    activeBridge.getAuditTimeline.mockImplementationOnce(
+      async () => staleAudit,
+    );
+    activeBridge.selectRitual.mockResolvedValueOnce({
+      approved: earlier,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [
+        {
+          kind: "RUN_RECORDED",
+          sourceId: "rrr_01J00000000000000000000002",
+          ritualRevision: earlier.ritualRevision,
+          outcome: "COMPLETED",
+          occurredAt: "2026-08-17T18:00:00.000Z",
+        },
+      ],
+      schedule: selectedSchedule,
+      inbox: [],
+    });
+
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+    await act(async () => Promise.resolve());
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+      await Promise.resolve();
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "Current Ritual" }), {
+      target: { value: earlier.ritualId },
+    });
+    await act(async () => Promise.resolve());
+    expect(screen.getByText(earlier.name)).toBeTruthy();
+
+    resolveAutomation({
+      schedule: {
+        ...currentSchedule,
+        state: "PAUSED",
+        localTime: "04:00",
+      },
+      inbox: [],
+    });
+    resolveAudit([
+      {
+        kind: "TEST_RECORDED",
+        sourceId: receipt.receiptId,
+        ritualRevision: approved.ritualRevision,
+        outcome: "NEEDS_REVIEW",
+        occurredAt: "2026-08-17T17:59:00.000Z",
+      },
+    ]);
+    await act(async () => Promise.resolve());
+
+    expect(
+      (screen.getByLabelText("Ritual local time") as HTMLInputElement).value,
+    ).toBe("06:15");
+    fireEvent.click(screen.getByText("Ritual history"));
+    expect(screen.getByText("Run Receipt · Completed")).toBeTruthy();
+    expect(screen.queryByText("Test Receipt · Needs review")).toBeNull();
+  });
+
   it("selects the builder only from its exact local query mode", () => {
     expect(
       resolveDesktopRendererMode(new URL("village://app/?mode=ritual-builder")),
@@ -690,6 +946,7 @@ describe("RitualBuilderWorkspace", () => {
     );
 
     await screen.findByLabelText("What should become repeatable?");
+    expect(screen.getByText("No Runs yet.")).toBeTruthy();
     expect(screen.queryByText("Ritual history")).toBeNull();
   });
 
@@ -961,9 +1218,17 @@ describe("RitualBuilderWorkspace", () => {
       receipt: null,
       run: null,
       runReceipt: null,
+      inbox: [
+        {
+          run: waitingRun,
+          receipt: null,
+          attention: "OWNER_APPROVAL",
+        },
+      ],
     });
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
     await screen.findByText("Ritual approved");
+    expect(screen.getByText("Approve")).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Run Ritual" }));
     await screen.findByText("Owner approval required");
@@ -1490,6 +1755,7 @@ describe("RitualBuilderWorkspace", () => {
 
   it("completes the live Steward-to-local-approval chain without starting a Run", async () => {
     const activeBridge = bridge();
+    activeBridge.getRituals.mockRejectedValueOnce(new Error("offline"));
     let persistApproval!: (
       ritual: Awaited<ReturnType<typeof activeBridge.approve>>,
     ) => void;
@@ -1527,31 +1793,71 @@ describe("RitualBuilderWorkspace", () => {
     expect(screen.getByRole("status").textContent).toContain(
       "No Run has started",
     );
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "Ritual list may be out of date",
+    );
   });
 
   it("starts another Ritual with a fresh identity while preserving the approval", async () => {
     const activeBridge = bridge();
     activeBridge.initialize.mockResolvedValueOnce({
       identity,
+      rituals: [
+        {
+          ritualId: approved.ritualId,
+          ritualRevision: approved.ritualRevision,
+          name: approved.name,
+          approvedAt: approved.approvedAt,
+        },
+      ],
       approved,
       receipt: null,
       run: null,
       runReceipt: null,
+      inbox: [
+        {
+          run: waitingRun,
+          receipt: null,
+          attention: "OWNER_APPROVAL",
+        },
+      ],
     });
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
     await screen.findByText("Ritual approved");
+
+    expect(screen.getByText("Approve")).toBeTruthy();
 
     fireEvent.click(
       screen.getByRole("button", { name: "Shape another Ritual" }),
     );
     await screen.findByLabelText("What should become repeatable?");
+    expect(screen.getByText("No Runs yet.")).toBeTruthy();
+    expect(
+      screen.getByRole("combobox", { name: "Current Ritual" }),
+    ).toHaveProperty("disabled", false);
     expect(activeBridge.createDraftIdentity).toHaveBeenCalledOnce();
 
     fireEvent.change(screen.getByLabelText("What should become repeatable?"), {
       target: { value: "Review new support requests." },
     });
+    expect(
+      screen.getByRole("combobox", { name: "Current Ritual" }),
+    ).toHaveProperty("disabled", true);
+    fireEvent.change(screen.getByLabelText("What should become repeatable?"), {
+      target: { value: "   " },
+    });
+    expect(
+      screen.getByRole("combobox", { name: "Current Ritual" }),
+    ).toHaveProperty("disabled", false);
+    fireEvent.change(screen.getByLabelText("What should become repeatable?"), {
+      target: { value: "Review new support requests." },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Start the draft" }));
     await waitFor(() => expect(activeBridge.draft).toHaveBeenCalledOnce());
+    await screen.findByRole("button", { name: /On demand/u });
+    expect(
+      screen.getByRole("combobox", { name: "Current Ritual" }),
+    ).toHaveProperty("disabled", true);
     expect(activeBridge.draft).toHaveBeenCalledWith({
       schemaVersion: 1,
       draftId: nextIdentity.draftId,

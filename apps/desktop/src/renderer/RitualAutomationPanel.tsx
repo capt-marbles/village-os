@@ -3,11 +3,17 @@ import type {
   RitualInboxItem,
   RitualSchedule,
   RitualScheduleUpdateRequest,
+  RitualCatalog,
 } from "@village/contracts";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 export function RitualAutomationPanel({
   approved,
+  rituals,
+  selectedRitualId,
+  switchDisabled,
+  switchError,
+  onSelectRitual,
   schedule,
   inbox,
   pending,
@@ -16,6 +22,11 @@ export function RitualAutomationPanel({
   onPause,
 }: {
   approved: ApprovedRitualRevision | null;
+  rituals: RitualCatalog;
+  selectedRitualId: string | null;
+  switchDisabled: boolean;
+  switchError: string | null;
+  onSelectRitual(ritualId: string): void;
   schedule: RitualSchedule | null;
   inbox: readonly RitualInboxItem[];
   pending: boolean;
@@ -28,6 +39,11 @@ export function RitualAutomationPanel({
     schedule?.cadence ?? "WEEKDAYS",
   );
   const dirty = useRef(false);
+  useEffect(() => {
+    dirty.current = false;
+    setLocalTime(schedule?.localTime ?? "08:30");
+    setCadence(schedule?.cadence ?? "WEEKDAYS");
+  }, [approved?.ritualId]);
   useEffect(() => {
     if (!schedule) return;
     if (
@@ -68,6 +84,28 @@ export function RitualAutomationPanel({
           {attentionCount ? `${attentionCount} needs attention` : "Clear"}
         </span>
       </header>
+
+      {rituals.length > 1 || (rituals.length === 1 && !selectedRitualId) ? (
+        <label className="ritual-switcher">
+          Current Ritual
+          <select
+            aria-label="Current Ritual"
+            value={selectedRitualId ?? ""}
+            disabled={switchDisabled}
+            onChange={(event) => onSelectRitual(event.currentTarget.value)}
+          >
+            {selectedRitualId ? null : (
+              <option value="">New Ritual draft</option>
+            )}
+            {rituals.map((ritual) => (
+              <option key={ritual.ritualId} value={ritual.ritualId}>
+                {ritual.name} · r{ritual.ritualRevision}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+      {switchError ? <p role="alert">{switchError}</p> : null}
 
       {approved ? (
         <form className="ritual-schedule" onSubmit={submit}>

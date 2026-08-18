@@ -4,6 +4,9 @@ contextBridge.exposeInMainWorld(
   "villageRitualBuilder",
   Object.freeze({
     initialize: () => ipcRenderer.invoke("village:ritual-builder:initialize"),
+    selectRitual: (ritualId) =>
+      ipcRenderer.invoke("village:ritual-builder:select-ritual", ritualId),
+    getRituals: () => ipcRenderer.invoke("village:ritual-builder:get-rituals"),
     createDraftIdentity: () =>
       ipcRenderer.invoke("village:ritual-builder:create-draft-identity"),
     draft: (context) =>

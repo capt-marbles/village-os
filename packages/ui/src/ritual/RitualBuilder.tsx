@@ -26,6 +26,7 @@ export function RitualBuilder({
   auditTimelineError,
   onRefreshAuditTimeline,
   revisionRestore,
+  onDraftDirtyChange,
 }: {
   state: RitualBuilderState;
   onEvent(event: RitualBuilderEvent): void;
@@ -35,6 +36,7 @@ export function RitualBuilder({
   auditTimeline?: RitualAuditTimeline;
   auditTimelineError?: string | null;
   onRefreshAuditTimeline?(): void;
+  onDraftDirtyChange?(dirty: boolean): void;
   revisionRestore?: {
     pending: boolean;
     error: string | null;
@@ -160,7 +162,10 @@ export function RitualBuilder({
               <button
                 type="button"
                 aria-pressed={starterMode === "CUSTOM"}
-                onClick={() => setStarterMode("CUSTOM")}
+                onClick={() => {
+                  setStarterMode("CUSTOM");
+                  onDraftDirtyChange?.(false);
+                }}
               >
                 <span aria-hidden="true">O</span>
                 <strong>Describe an outcome</strong>
@@ -169,7 +174,10 @@ export function RitualBuilder({
               <button
                 type="button"
                 aria-pressed={starterMode === "LAST_30_DAYS"}
-                onClick={() => setStarterMode("LAST_30_DAYS")}
+                onClick={() => {
+                  setStarterMode("LAST_30_DAYS");
+                  onDraftDirtyChange?.(false);
+                }}
               >
                 <span aria-hidden="true">30</span>
                 <strong>30-day signal brief</strong>
@@ -190,6 +198,11 @@ export function RitualBuilder({
                     placeholder="For example: AI coding agents"
                     required
                     autoComplete="off"
+                    onChange={(event) =>
+                      onDraftDirtyChange?.(
+                        event.currentTarget.value.trim().length > 0,
+                      )
+                    }
                   />
                   <p>
                     This first version uses up to five Exa public-web results
@@ -211,6 +224,11 @@ export function RitualBuilder({
                     placeholder="For example: Review my pipeline each weekday and prepare the next follow-ups."
                     required
                     autoComplete="off"
+                    onChange={(event) =>
+                      onDraftDirtyChange?.(
+                        event.currentTarget.value.trim().length > 0,
+                      )
+                    }
                   />
                   <button type="submit">Start the draft</button>
                 </>

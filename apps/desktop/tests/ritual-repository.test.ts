@@ -294,6 +294,74 @@ describe("RitualRepository", () => {
     await expect(repository.list()).rejects.toThrow("RITUAL_STORE_CORRUPT");
   });
 
+  it("lists one current catalog entry per Ritual and opens either complete snapshot", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
+    const repository = new RitualRepository(join(directory, "rituals.json"));
+    const second = {
+      ...approved,
+      ritualId: "rtl_01J00000000000000000000001",
+      approvedDraftId: "rtd_01J00000000000000000000001",
+      name: "Morning inbox review",
+      approvedAt: "2026-08-16T16:03:00.000Z",
+    };
+    await repository.save(approved);
+    await repository.saveReceipt(receipt);
+    await repository.save(second);
+
+    await expect(repository.catalog()).resolves.toEqual([
+      {
+        ritualId: second.ritualId,
+        ritualRevision: 1,
+        name: second.name,
+        approvedAt: second.approvedAt,
+      },
+      {
+        ritualId: approved.ritualId,
+        ritualRevision: 1,
+        name: approved.name,
+        approvedAt: approved.approvedAt,
+      },
+    ]);
+    await expect(repository.initialWorkspaceSnapshot()).resolves.toMatchObject({
+      approved: second,
+      rituals: [
+        expect.objectContaining({ ritualId: second.ritualId }),
+        expect.objectContaining({ ritualId: approved.ritualId }),
+      ],
+      schedule: null,
+      inbox: [],
+    });
+    await expect(
+      repository.workspaceSnapshotFor(approved.ritualId),
+    ).resolves.toMatchObject({
+      approved,
+      receipt,
+      schedule: null,
+      inbox: [],
+    });
+    await expect(repository.snapshotFor(approved.ritualId)).resolves.toEqual({
+      approved,
+      receipt,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: expect.arrayContaining([
+        expect.objectContaining({ kind: "TEST_RECORDED" }),
+      ]),
+    });
+    await expect(repository.snapshotFor(second.ritualId)).resolves.toEqual({
+      approved: second,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [expect.objectContaining({ kind: "REVISION_APPROVED" })],
+    });
+    await expect(
+      repository.snapshotFor("rtl_01J00000000000000000000002"),
+    ).resolves.toBeNull();
+  });
+
   it("saves identical Receipts idempotently and rejects conflicting ids", async () => {
     const directory = await mkdtemp(join(tmpdir(), "village-rituals-"));
     const repository = new RitualRepository(join(directory, "rituals.json"));

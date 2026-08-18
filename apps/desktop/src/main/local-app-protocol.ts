@@ -63,6 +63,8 @@ body { margin: 0; min-width: 320px; min-height: 100vh; background: radial-gradie
 .ritual-automation h2 { margin: 0; font: 500 1.55rem "Iowan Old Style", serif; }
 .ritual-automation > header > span, .ritual-inbox-list > li > span { border-radius: 999px; padding: .32rem .5rem; color: #526055; background: #d3dbc9; font: 800 .58rem ui-monospace, monospace; letter-spacing: .06em; text-transform: uppercase; }
 .ritual-automation > header > span:not(:only-child) { flex: 0 0 auto; }
+.ritual-switcher { display: grid; gap: .3rem; margin-top: .8rem; color: #647167; font-size: .65rem; font-weight: 800; text-transform: uppercase; }
+.ritual-switcher select { min-height: 36px; width: 100%; border: 1px solid #9ba79a; border-radius: .65rem; padding: .45rem .6rem; color: #263129; background: #f5f5e9; color-scheme: light; text-transform: none; }
 .ritual-schedule { display: grid; grid-template-columns: minmax(0, 1fr) 8rem auto auto; gap: .55rem; align-items: end; margin-top: .9rem; }
 .ritual-schedule label { display: grid; gap: .3rem; color: #647167; font-size: .65rem; font-weight: 800; text-transform: uppercase; }
 .ritual-schedule select, .ritual-schedule input { min-height: 36px; border: 1px solid #9ba79a; border-radius: .65rem; padding: .45rem .6rem; color: #263129; background: #f5f5e9; color-scheme: light; }
