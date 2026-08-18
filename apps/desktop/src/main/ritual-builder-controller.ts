@@ -40,7 +40,10 @@ import {
   type RitualSchedule,
   type RitualStewardResult,
   type RitualAuditTimeline,
+  type RitualCatalog,
+  type RitualInitialWorkspaceSnapshot,
   type RitualLatestSnapshot,
+  type RitualWorkspaceSnapshot,
   type RitualRevisionRestoreRequest,
 } from "@village/contracts";
 import type { RitualStewardProvider } from "../model-provider/ritual-steward.js";
@@ -53,6 +56,12 @@ import { nextRitualOccurrence } from "./ritual-scheduler.js";
 
 export interface RitualPersistence {
   latestSnapshot(): Promise<RitualLatestSnapshot>;
+  snapshotFor(ritualId: string): Promise<RitualLatestSnapshot | null>;
+  catalog(): Promise<RitualCatalog>;
+  initialWorkspaceSnapshot(): Promise<RitualInitialWorkspaceSnapshot>;
+  workspaceSnapshotFor(
+    ritualId: string,
+  ): Promise<RitualWorkspaceSnapshot | null>;
   find(ritualId: string): Promise<ApprovedRitualRevision | null>;
   findRevision(
     ritualId: string,
@@ -87,6 +96,11 @@ export interface RitualPersistence {
   ): Promise<void>;
   listInbox(): Promise<readonly RitualInboxItem[]>;
   automationSnapshot(): Promise<{
+    approved: ApprovedRitualRevision | null;
+    schedule: RitualSchedule | null;
+    inbox: readonly RitualInboxItem[];
+  }>;
+  automationSnapshotFor(ritualId: string): Promise<{
     approved: ApprovedRitualRevision | null;
     schedule: RitualSchedule | null;
     inbox: readonly RitualInboxItem[];
@@ -151,62 +165,112 @@ export class RitualBuilderController {
   async loadLatestState(): Promise<RitualLatestSnapshot> {
     return this.enqueueRun(async () => {
       const snapshot = await this.repository.latestSnapshot();
-      if (
-        !snapshot.approved ||
-        !snapshot.run ||
-        (snapshot.run.status !== "QUEUED" && snapshot.run.status !== "RUNNING")
-      ) {
-        return snapshot;
-      }
-      const isPendingScheduleRun = (await this.repository.listSchedules()).some(
-        (schedule) => schedule.pendingOccurrence?.runId === snapshot.run?.runId,
-      );
-      if (this.activeRuns.has(snapshot.run.runId) || isPendingScheduleRun) {
-        return snapshot;
-      }
-      const checkpointedStep = snapshot.run.steps.find(
-        (step) =>
-          step.stepKey === snapshot.run?.currentStepKey &&
-          step.status === "RUNNING" &&
-          step.research != null &&
-          step.report == null,
-      );
-      if (checkpointedStep?.research) {
-        const waiting = reduceRitualRun(snapshot.run, snapshot.approved, {
-          type: "WAIT_FOR_RESOURCE",
-          reason: "PROVIDER_UNAVAILABLE",
-          source: "STEWARD",
-          research: checkpointedStep.research,
-          occurredAt: this.dependencies.now(),
-        });
-        await this.repository.saveRun(waiting);
-        return { ...snapshot, run: waiting };
-      }
-      const interrupted = reduceRitualRun(snapshot.run, snapshot.approved, {
-        type: "FAIL",
-        failureCode: "INTERRUPTED",
-        occurredAt: this.dependencies.now(),
-      });
-      await this.repository.saveRun(interrupted);
-      return { ...snapshot, run: interrupted };
+      return this.reconcileLoadedSnapshot(snapshot);
     });
   }
 
-  async loadAuditTimeline(): Promise<RitualAuditTimeline> {
+  async listRituals(): Promise<RitualCatalog> {
+    return this.enqueueRun(async () => this.repository.catalog());
+  }
+
+  async loadInitialWorkspaceState(): Promise<RitualInitialWorkspaceSnapshot> {
     return this.enqueueRun(async () => {
-      const snapshot = await this.repository.latestSnapshot();
+      const workspace = await this.repository.initialWorkspaceSnapshot();
+      const reconciled = await this.reconcileLoadedSnapshot(workspace);
+      if (reconciled.run === workspace.run) return workspace;
+      const automation = await this.repository.automationSnapshotFor(
+        reconciled.approved!.ritualId,
+      );
+      return {
+        ...workspace,
+        ...reconciled,
+        ...automation,
+        inbox: [...automation.inbox],
+      };
+    });
+  }
+
+  async loadRitualWorkspaceState(
+    ritualId: string,
+  ): Promise<RitualWorkspaceSnapshot> {
+    return this.enqueueRun(async () => {
+      const workspace = await this.repository.workspaceSnapshotFor(ritualId);
+      if (!workspace) throw new Error("RITUAL_NOT_FOUND");
+      const reconciled = await this.reconcileLoadedSnapshot(workspace);
+      if (reconciled.run === workspace.run) return workspace;
+      const automation = await this.repository.automationSnapshotFor(ritualId);
+      return {
+        ...workspace,
+        ...reconciled,
+        ...automation,
+        inbox: [...automation.inbox],
+      };
+    });
+  }
+
+  async loadAuditTimeline(ritualId?: string): Promise<RitualAuditTimeline> {
+    return this.enqueueRun(async () => {
+      const snapshot = ritualId
+        ? await this.repository.snapshotFor(ritualId)
+        : await this.repository.latestSnapshot();
+      if (!snapshot) throw new Error("RITUAL_NOT_FOUND");
       return snapshot.auditTimeline;
     });
   }
 
-  async loadAutomationState(): Promise<{
+  async loadAutomationState(ritualId?: string): Promise<{
     schedule: RitualSchedule | null;
     inbox: readonly RitualInboxItem[];
   }> {
     return this.enqueueRun(async () => {
-      const { schedule, inbox } = await this.repository.automationSnapshot();
+      const { schedule, inbox } = ritualId
+        ? await this.repository.automationSnapshotFor(ritualId)
+        : await this.repository.automationSnapshot();
       return { schedule, inbox };
     });
+  }
+
+  private async reconcileLoadedSnapshot(
+    snapshot: RitualLatestSnapshot,
+  ): Promise<RitualLatestSnapshot> {
+    if (
+      !snapshot.approved ||
+      !snapshot.run ||
+      (snapshot.run.status !== "QUEUED" && snapshot.run.status !== "RUNNING")
+    ) {
+      return snapshot;
+    }
+    const isPendingScheduleRun = (await this.repository.listSchedules()).some(
+      (schedule) => schedule.pendingOccurrence?.runId === snapshot.run?.runId,
+    );
+    if (this.activeRuns.has(snapshot.run.runId) || isPendingScheduleRun) {
+      return snapshot;
+    }
+    const checkpointedStep = snapshot.run.steps.find(
+      (step) =>
+        step.stepKey === snapshot.run?.currentStepKey &&
+        step.status === "RUNNING" &&
+        step.research != null &&
+        step.report == null,
+    );
+    if (checkpointedStep?.research) {
+      const waiting = reduceRitualRun(snapshot.run, snapshot.approved, {
+        type: "WAIT_FOR_RESOURCE",
+        reason: "PROVIDER_UNAVAILABLE",
+        source: "STEWARD",
+        research: checkpointedStep.research,
+        occurredAt: this.dependencies.now(),
+      });
+      await this.repository.saveRun(waiting);
+      return { ...snapshot, run: waiting };
+    }
+    const interrupted = reduceRitualRun(snapshot.run, snapshot.approved, {
+      type: "FAIL",
+      failureCode: "INTERRUPTED",
+      occurredAt: this.dependencies.now(),
+    });
+    await this.repository.saveRun(interrupted);
+    return { ...snapshot, run: interrupted };
   }
 
   async configureSchedule(candidate: unknown): Promise<RitualSchedule> {

@@ -7,6 +7,8 @@ import {
   RitualApprovalError,
   ritualApprovalRequestSchema,
   ritualAuditTimelineSchema,
+  ritualCatalogSchema,
+  ritualInitialWorkspaceSnapshotSchema,
   ritualDraftSchema,
   ritualLearningApprovalRequestSchema,
   ritualLearningContextSchema,
@@ -265,6 +267,60 @@ describe("Ritual contracts", () => {
       ritualAuditTimelineSchema.safeParse(
         Array(RITUAL_AUDIT_TIMELINE_LIMIT + 1).fill(timeline[0]),
       ).success,
+    ).toBe(false);
+  });
+
+  it("accepts only bounded metadata in the Ritual catalog", () => {
+    expect(
+      ritualCatalogSchema.parse([
+        {
+          ritualId: "rtl_01J00000000000000000000000",
+          ritualRevision: 2,
+          name: "Weekday pipeline review",
+          approvedAt: "2026-08-17T16:03:00.000Z",
+        },
+      ]),
+    ).toEqual([
+      {
+        ritualId: "rtl_01J00000000000000000000000",
+        ritualRevision: 2,
+        name: "Weekday pipeline review",
+        approvedAt: "2026-08-17T16:03:00.000Z",
+      },
+    ]);
+    expect(() =>
+      ritualCatalogSchema.parse([
+        {
+          ritualId: "rtl_01J00000000000000000000000",
+          ritualRevision: 2,
+          name: "Weekday pipeline review",
+          approvedAt: "2026-08-17T16:03:00.000Z",
+          prompt: "hidden",
+        },
+      ]),
+    ).toThrow();
+  });
+
+  it("binds the initial workspace to one strict Ritual snapshot", () => {
+    const workspace = {
+      approved: null,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [],
+      schedule: null,
+      inbox: [],
+      rituals: [],
+    };
+    expect(ritualInitialWorkspaceSnapshotSchema.parse(workspace)).toEqual(
+      workspace,
+    );
+    expect(
+      ritualInitialWorkspaceSnapshotSchema.safeParse({
+        ...workspace,
+        rawPrompt: "hidden",
+      }).success,
     ).toBe(false);
   });
 

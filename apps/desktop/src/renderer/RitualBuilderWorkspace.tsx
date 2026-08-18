@@ -18,6 +18,7 @@ import type {
   RitualTestRunRequest,
   RitualAuditTimeline,
   RitualLatestSnapshot,
+  RitualCatalog,
   RitualRevisionRestoreRequest,
 } from "@village/contracts";
 import {
@@ -44,10 +45,18 @@ export interface RitualBuilderBridge extends ExaCredentialBridge {
   initialize(): Promise<
     RitualLatestSnapshot & {
       identity: RitualBuilderIdentity;
+      rituals: RitualCatalog;
       schedule: RitualSchedule | null;
       inbox: readonly RitualInboxItem[];
     }
   >;
+  selectRitual(ritualId: string): Promise<
+    RitualLatestSnapshot & {
+      schedule: RitualSchedule | null;
+      inbox: readonly RitualInboxItem[];
+    }
+  >;
+  getRituals(): Promise<RitualCatalog>;
   getAutomationState(): Promise<{
     schedule: RitualSchedule | null;
     inbox: readonly RitualInboxItem[];
@@ -99,6 +108,11 @@ export function RitualBuilderWorkspace({
   );
   const [startupError, setStartupError] = useState<string | null>(null);
   const [schedule, setSchedule] = useState<RitualSchedule | null>(null);
+  const [rituals, setRituals] = useState<RitualCatalog>([]);
+  const [ritualSwitchPending, setRitualSwitchPending] = useState(false);
+  const [ritualSwitchError, setRitualSwitchError] = useState<string | null>(
+    null,
+  );
   const [inbox, setInbox] = useState<readonly RitualInboxItem[]>([]);
   const [auditTimeline, setAuditTimeline] = useState<RitualAuditTimeline>([]);
   const [auditTimelineError, setAuditTimelineError] = useState<string | null>(
@@ -110,6 +124,10 @@ export function RitualBuilderWorkspace({
   >(null);
   const [automationPending, setAutomationPending] = useState(false);
   const [automationError, setAutomationError] = useState<string | null>(null);
+  const [draftInputDirty, setDraftInputDirty] = useState(false);
+  const selectedRitualId = state.approved?.ritualId ?? null;
+  const hasUnsavedDraft =
+    !state.approved && (draftInputDirty || state.phase !== "DESCRIBE_PURPOSE");
   const generation = useRef(0);
   const draftInFlight = useRef(false);
   const testRunInFlight = useRef(false);
@@ -118,11 +136,13 @@ export function RitualBuilderWorkspace({
   const cancelRunInFlight = useRef(false);
   const automationMutation = useRef(0);
   const auditTimelineMutation = useRef(0);
+  const ritualCatalogMutation = useRef(0);
   const restoreRevisionInFlight = useRef(false);
   const automationInFlight = useRef(false);
+  const ritualSwitchInFlight = useRef(false);
   const mounted = useRef(true);
   const refreshAutomation = useCallback(async () => {
-    if (!bridge) return;
+    if (!bridge || ritualSwitchInFlight.current) return;
     const mutation = automationMutation.current;
     const automation = await bridge.getAutomationState();
     if (!mounted.current || mutation !== automationMutation.current) return;
@@ -136,7 +156,7 @@ export function RitualBuilderWorkspace({
     );
   }, [bridge]);
   const refreshAuditTimeline = useCallback(async () => {
-    if (!bridge) return;
+    if (!bridge || ritualSwitchInFlight.current) return;
     const mutation = ++auditTimelineMutation.current;
     try {
       const timeline = await bridge.getAuditTimeline();
@@ -151,6 +171,23 @@ export function RitualBuilderWorkspace({
         return;
       setAuditTimelineError(
         "Ritual history may be out of date. Refresh it before relying on the audit trail.",
+      );
+    }
+  }, [bridge]);
+  const refreshRituals = useCallback(async () => {
+    if (!bridge) return;
+    const mutation = ++ritualCatalogMutation.current;
+    try {
+      const catalog = await bridge.getRituals();
+      if (!mounted.current || mutation !== ritualCatalogMutation.current)
+        return;
+      setRituals(catalog);
+      setRitualSwitchError(null);
+    } catch {
+      if (!mounted.current || mutation !== ritualCatalogMutation.current)
+        return;
+      setRitualSwitchError(
+        "The Ritual list may be out of date. Reopen the Steward desk to refresh it.",
       );
     }
   }, [bridge]);
@@ -196,6 +233,7 @@ export function RitualBuilderWorkspace({
             }
           }),
           refreshAuditTimeline(),
+          refreshRituals(),
         ]);
         return true;
       } catch {
@@ -210,7 +248,13 @@ export function RitualBuilderWorkspace({
         if (mounted.current) setRestoreRevisionPending(false);
       }
     },
-    [bridge, refreshAuditTimeline, refreshAutomation, state.approved],
+    [
+      bridge,
+      refreshAuditTimeline,
+      refreshAutomation,
+      refreshRituals,
+      state.approved,
+    ],
   );
 
   useEffect(() => {
@@ -219,6 +263,7 @@ export function RitualBuilderWorkspace({
       mounted.current = false;
       automationMutation.current += 1;
       auditTimelineMutation.current += 1;
+      ritualCatalogMutation.current += 1;
     };
   }, []);
 
@@ -233,43 +278,12 @@ export function RitualBuilderWorkspace({
       .then((initialized) => {
         if (!active) return;
         setIdentity(initialized.identity);
+        setRituals(initialized.rituals ?? []);
         setSchedule(initialized.schedule ?? null);
         setInbox(initialized.inbox ?? []);
         setAuditTimeline(initialized.auditTimeline ?? []);
         setAuditTimelineError(null);
-        if (initialized.approved) {
-          setState((current) => {
-            const restored = reduceRitualBuilder(current, {
-              type: "HYDRATE_APPROVED_REVISION",
-              approved: initialized.approved!,
-            });
-            if (initialized.learningReview) {
-              return reduceRitualBuilder(restored, {
-                type: "RESTORE_LEARNING_REVIEW",
-                review: initialized.learningReview,
-              });
-            }
-            const withTestReceipt = initialized.receipt
-              ? reduceRitualBuilder(restored, {
-                  type: "RESTORE_RECEIPT",
-                  receipt: initialized.receipt,
-                })
-              : restored;
-            const withRun = initialized.run
-              ? reduceRitualBuilder(withTestReceipt, {
-                  type: "RESTORE_RUN",
-                  run: initialized.run,
-                })
-              : withTestReceipt;
-            const withRunReceipt = initialized.runReceipt
-              ? reduceRitualBuilder(withRun, {
-                  type: "RESTORE_RUN_RECEIPT",
-                  receipt: initialized.runReceipt,
-                })
-              : withRun;
-            return withRunReceipt;
-          });
-        }
+        setState(hydrateRitualSnapshot(initialized));
       })
       .catch(() => {
         if (active) setStartupError("Your saved Rituals could not be opened.");
@@ -283,6 +297,46 @@ export function RitualBuilderWorkspace({
       runInFlight.current = false;
     };
   }, [bridge]);
+
+  const selectRitual = useCallback(
+    async (ritualId: string) => {
+      if (
+        !bridge ||
+        ritualId === selectedRitualId ||
+        ritualSwitchInFlight.current
+      )
+        return;
+      ritualSwitchInFlight.current = true;
+      const requestGeneration = ++generation.current;
+      automationMutation.current += 1;
+      auditTimelineMutation.current += 1;
+      setRitualSwitchPending(true);
+      setRitualSwitchError(null);
+      try {
+        const snapshot = await bridge.selectRitual(ritualId);
+        if (!mounted.current || requestGeneration !== generation.current)
+          return;
+        automationMutation.current += 1;
+        auditTimelineMutation.current += 1;
+        setState(hydrateRitualSnapshot(snapshot));
+        setDraftInputDirty(false);
+        setSchedule(snapshot.schedule);
+        setInbox(snapshot.inbox);
+        setAuditTimeline(snapshot.auditTimeline);
+        setAutomationError(null);
+        setAuditTimelineError(null);
+      } catch {
+        if (mounted.current && requestGeneration === generation.current)
+          setRitualSwitchError(
+            "Village could not open that Ritual. Try again after the current work settles.",
+          );
+      } finally {
+        ritualSwitchInFlight.current = false;
+        if (mounted.current) setRitualSwitchPending(false);
+      }
+    },
+    [bridge, selectedRitualId],
+  );
 
   useEffect(() => {
     if (!bridge || schedule?.state !== "ENABLED") return;
@@ -308,7 +362,13 @@ export function RitualBuilderWorkspace({
   }, [bridge, refreshAuditTimeline, refreshAutomation, schedule]);
 
   const configureSchedule = (request: RitualScheduleUpdateRequest) => {
-    if (!bridge || automationPending || automationInFlight.current) return;
+    if (
+      !bridge ||
+      ritualSwitchInFlight.current ||
+      automationPending ||
+      automationInFlight.current
+    )
+      return;
     automationInFlight.current = true;
     const mutation = ++automationMutation.current;
     setAutomationPending(true);
@@ -318,21 +378,26 @@ export function RitualBuilderWorkspace({
       .then((nextSchedule) => {
         if (mutation === automationMutation.current) setSchedule(nextSchedule);
       })
-      .catch(() =>
-        setAutomationError(
-          "The schedule could not be saved. Review the time and try again.",
-        ),
-      )
+      .catch(() => {
+        if (mutation === automationMutation.current)
+          setAutomationError(
+            "The schedule could not be saved. Review the time and try again.",
+          );
+      })
       .finally(() => {
-        if (mutation === automationMutation.current) {
-          automationInFlight.current = false;
-          setAutomationPending(false);
-        }
+        automationInFlight.current = false;
+        if (mounted.current) setAutomationPending(false);
       });
   };
 
   const pauseSchedule = () => {
-    if (!bridge || !schedule || automationPending || automationInFlight.current)
+    if (
+      !bridge ||
+      !schedule ||
+      ritualSwitchInFlight.current ||
+      automationPending ||
+      automationInFlight.current
+    )
       return;
     automationInFlight.current = true;
     const mutation = ++automationMutation.current;
@@ -347,16 +412,15 @@ export function RitualBuilderWorkspace({
       .then((nextSchedule) => {
         if (mutation === automationMutation.current) setSchedule(nextSchedule);
       })
-      .catch(() =>
-        setAutomationError(
-          "The schedule could not be paused. Try again before the next Run.",
-        ),
-      )
+      .catch(() => {
+        if (mutation === automationMutation.current)
+          setAutomationError(
+            "The schedule could not be paused. Try again before the next Run.",
+          );
+      })
       .finally(() => {
-        if (mutation === automationMutation.current) {
-          automationInFlight.current = false;
-          setAutomationPending(false);
-        }
+        automationInFlight.current = false;
+        if (mounted.current) setAutomationPending(false);
       });
   };
 
@@ -426,10 +490,15 @@ export function RitualBuilderWorkspace({
         .createDraftIdentity()
         .then((nextIdentity) => {
           if (generation.current !== requestGeneration) return;
+          automationMutation.current += 1;
           auditTimelineMutation.current += 1;
+          setSchedule(null);
+          setInbox([]);
+          setAutomationError(null);
           setAuditTimeline([]);
           setAuditTimelineError(null);
           setIdentity(nextIdentity);
+          setDraftInputDirty(false);
           setState((current) =>
             reduceRitualBuilder(current, { type: "NEW_RITUAL_READY" }),
           );
@@ -465,10 +534,13 @@ export function RitualBuilderWorkspace({
         void bridge
           .approve(next.pendingApproval)
           .then(() => {
+            automationMutation.current += 1;
             setState((latest) =>
               reduceRitualBuilder(latest, { type: "APPROVAL_SAVED" }),
             );
+            void refreshAutomation().catch(() => undefined);
             void refreshAuditTimeline();
+            void refreshRituals();
           })
           .catch(() => {
             setState((latest) =>
@@ -703,6 +775,7 @@ export function RitualBuilderWorkspace({
           );
           void refreshAutomation().catch(() => undefined);
           void refreshAuditTimeline();
+          void refreshRituals();
         })
         .catch(() => {
           setState((current) =>
@@ -762,10 +835,15 @@ export function RitualBuilderWorkspace({
       identity={identity}
       stewardDesk={
         <RitualAutomationPanel
+          rituals={rituals}
+          selectedRitualId={selectedRitualId}
+          switchDisabled={ritualSwitchPending || hasUnsavedDraft}
+          switchError={ritualSwitchError}
+          onSelectRitual={(ritualId) => void selectRitual(ritualId)}
           approved={state.approved}
           schedule={schedule}
           inbox={inbox}
-          pending={automationPending}
+          pending={automationPending || ritualSwitchPending}
           error={automationError}
           onConfigure={configureSchedule}
           onPause={pauseSchedule}
@@ -773,6 +851,7 @@ export function RitualBuilderWorkspace({
       }
       state={state}
       onEvent={onEvent}
+      onDraftDirtyChange={setDraftInputDirty}
       auditTimeline={auditTimeline}
       auditTimelineError={auditTimelineError}
       onRefreshAuditTimeline={() => void refreshAuditTimeline()}
@@ -788,6 +867,40 @@ export function RitualBuilderWorkspace({
       researchSetup={<ExaApiKeyCard bridge={bridge} />}
     />
   );
+}
+
+function hydrateRitualSnapshot(
+  snapshot: RitualLatestSnapshot,
+): RitualBuilderState {
+  if (!snapshot.approved) return createRitualBuilderState();
+  const restored = reduceRitualBuilder(createRitualBuilderState(), {
+    type: "HYDRATE_APPROVED_REVISION",
+    approved: snapshot.approved,
+  });
+  if (snapshot.learningReview) {
+    return reduceRitualBuilder(restored, {
+      type: "RESTORE_LEARNING_REVIEW",
+      review: snapshot.learningReview,
+    });
+  }
+  const withTestReceipt = snapshot.receipt
+    ? reduceRitualBuilder(restored, {
+        type: "RESTORE_RECEIPT",
+        receipt: snapshot.receipt,
+      })
+    : restored;
+  const withRun = snapshot.run
+    ? reduceRitualBuilder(withTestReceipt, {
+        type: "RESTORE_RUN",
+        run: snapshot.run,
+      })
+    : withTestReceipt;
+  return snapshot.runReceipt
+    ? reduceRitualBuilder(withRun, {
+        type: "RESTORE_RUN_RECEIPT",
+        receipt: snapshot.runReceipt,
+      })
+    : withRun;
 }
 
 function sameScheduleRevision(

@@ -79,7 +79,37 @@ import { createRitualBuilderWindow } from "../src/main/ritual-builder-window.js"
 
 describe("Ritual Builder window", () => {
   const controller = {
+    listRituals: vi.fn(async () => []),
+    loadInitialWorkspaceState: vi.fn(async () => ({
+      approved: null,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [],
+      rituals: [],
+      schedule: null,
+      inbox: [],
+    })),
+    loadRitualWorkspaceState: vi.fn(async () => ({
+      approved: null,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [],
+      schedule: null,
+      inbox: [],
+    })),
     loadLatestState: vi.fn(async () => ({
+      approved: null,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [],
+    })),
+    loadRitualState: vi.fn(async () => ({
       approved: null,
       receipt: null,
       run: null,
@@ -161,6 +191,124 @@ describe("Ritual Builder window", () => {
     expect(controller.close).not.toHaveBeenCalled();
   });
 
+  it("selects one known Ritual and scopes later reads to it", async () => {
+    await createRitualBuilderWindow(windowOptions());
+    const sender = electron.views[0]!.webContents;
+    const select = electron.handlers.get(
+      "village:ritual-builder:select-ritual",
+    )!;
+    const automation = electron.handlers.get(
+      "village:ritual-builder:get-automation-state",
+    )!;
+    const audit = electron.handlers.get(
+      "village:ritual-builder:get-audit-timeline",
+    )!;
+    const ritualId = "rtl_01J00000000000000000000000";
+
+    await select({ sender }, ritualId);
+    await automation({ sender });
+    await audit({ sender });
+
+    expect(controller.loadRitualWorkspaceState).toHaveBeenCalledWith(ritualId);
+    expect(controller.loadAutomationState).toHaveBeenLastCalledWith(ritualId);
+    expect(controller.loadAuditTimeline).toHaveBeenLastCalledWith(ritualId);
+  });
+
+  it("keeps a newer explicit selection after an earlier approval settles", async () => {
+    let resolveApproval!: (value: { ritualId: string }) => void;
+    controller.approve.mockImplementationOnce(
+      async () =>
+        new Promise((resolve) => {
+          resolveApproval = resolve;
+        }),
+    );
+    await createRitualBuilderWindow(windowOptions());
+    const sender = electron.views[0]!.webContents;
+    const event = { sender };
+    const initialize = electron.handlers.get(
+      "village:ritual-builder:initialize",
+    )!;
+    const approve = electron.handlers.get("village:ritual-builder:approve")!;
+    const select = electron.handlers.get(
+      "village:ritual-builder:select-ritual",
+    )!;
+    const automation = electron.handlers.get(
+      "village:ritual-builder:get-automation-state",
+    )!;
+    const initialized = (await initialize(event)) as {
+      identity: { draftId: string; ritualId: string };
+    };
+    const pendingApproval = approve(event, {
+      ritualId: initialized.identity.ritualId,
+      approvedDraftId: initialized.identity.draftId,
+    });
+    const selectedRitualId = "rtl_01J00000000000000000000009";
+    await select(event, selectedRitualId);
+    resolveApproval({ ritualId: initialized.identity.ritualId });
+    await pendingApproval;
+    await automation(event);
+
+    expect(controller.loadAutomationState).toHaveBeenLastCalledWith(
+      selectedRitualId,
+    );
+  });
+
+  it("does not project a prior Ritual while a new draft is active", async () => {
+    await createRitualBuilderWindow(windowOptions());
+    const event = { sender: electron.views[0]!.webContents };
+    await electron.handlers.get("village:ritual-builder:initialize")!(event);
+    await electron.handlers.get(
+      "village:ritual-builder:create-draft-identity",
+    )!(event);
+
+    await expect(
+      electron.handlers.get("village:ritual-builder:get-automation-state")!(
+        event,
+      ),
+    ).resolves.toEqual({ schedule: null, inbox: [] });
+    await expect(
+      electron.handlers.get("village:ritual-builder:get-audit-timeline")!(
+        event,
+      ),
+    ).resolves.toEqual([]);
+    expect(controller.loadAutomationState).not.toHaveBeenCalled();
+    expect(controller.loadAuditTimeline).not.toHaveBeenCalled();
+  });
+
+  it("keeps the current Ritual when a selected workspace cannot load", async () => {
+    const currentRitualId = "rtl_01J00000000000000000000000";
+    controller.loadInitialWorkspaceState.mockResolvedValueOnce({
+      approved: { ritualId: currentRitualId } as never,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [],
+      rituals: [],
+      schedule: null,
+      inbox: [],
+    });
+    controller.loadRitualWorkspaceState.mockRejectedValueOnce(
+      new Error("RITUAL_NOT_FOUND"),
+    );
+    await createRitualBuilderWindow(windowOptions());
+    const event = { sender: electron.views[0]!.webContents };
+    await electron.handlers.get("village:ritual-builder:initialize")!(event);
+    await expect(
+      electron.handlers.get("village:ritual-builder:select-ritual")!(
+        event,
+        "rtl_01J00000000000000000000009",
+      ),
+    ).rejects.toThrow("RITUAL_NOT_FOUND");
+    await electron.handlers.get("village:ritual-builder:get-automation-state")!(
+      event,
+    );
+
+    expect(controller.loadAutomationState).toHaveBeenLastCalledWith(
+      currentRitualId,
+    );
+  });
+
   it("disposes and destroys the window when loading fails", async () => {
     electron.loadError = new Error("renderer failed");
     await expect(createRitualBuilderWindow(windowOptions())).rejects.toThrow(
@@ -209,6 +357,12 @@ describe("Ritual Builder window", () => {
     )!;
     const automationState = electron.handlers.get(
       "village:ritual-builder:get-automation-state",
+    )!;
+    const selectRitual = electron.handlers.get(
+      "village:ritual-builder:select-ritual",
+    )!;
+    const ritualCatalog = electron.handlers.get(
+      "village:ritual-builder:get-rituals",
     )!;
     const auditTimeline = electron.handlers.get(
       "village:ritual-builder:get-audit-timeline",
@@ -274,7 +428,7 @@ describe("Ritual Builder window", () => {
     expect(exaCredentials.configure).toHaveBeenCalledWith(apiKey);
     expect(exaCredentials.revoke).toHaveBeenCalledWith(1);
     expect(openExaDashboard).toHaveBeenCalledOnce();
-    expect(controller.loadLatestState).toHaveBeenCalledOnce();
+    expect(controller.loadInitialWorkspaceState).toHaveBeenCalledOnce();
     expect(controller.draft).toHaveBeenCalledWith({
       draftId: initialized.identity.draftId,
     });
@@ -305,8 +459,12 @@ describe("Ritual Builder window", () => {
     expect(controller.decideLearning).toHaveBeenCalledWith({
       ritualId: initialized.identity.ritualId,
     });
-    expect(controller.loadAutomationState).toHaveBeenCalled();
-    expect(controller.loadAuditTimeline).toHaveBeenCalled();
+    expect(controller.loadAutomationState).toHaveBeenLastCalledWith(
+      initialized.identity.ritualId,
+    );
+    expect(controller.loadAuditTimeline).toHaveBeenLastCalledWith(
+      initialized.identity.ritualId,
+    );
     expect(controller.configureSchedule).toHaveBeenCalledWith({
       ritualId: initialized.identity.ritualId,
     });
@@ -319,6 +477,16 @@ describe("Ritual Builder window", () => {
     await expect(auditTimeline(event, "extra")).rejects.toThrow(
       "MALFORMED_IPC_REQUEST",
     );
+    await expect(ritualCatalog(event, "extra")).rejects.toThrow(
+      "MALFORMED_IPC_REQUEST",
+    );
+    await expect(
+      selectRitual(event, initialized.identity.ritualId, "extra"),
+    ).rejects.toThrow("MALFORMED_IPC_REQUEST");
+    await expect(selectRitual(event, "not-a-ritual-id")).rejects.toThrow();
+    await expect(
+      selectRitual({ sender: {} }, initialized.identity.ritualId),
+    ).rejects.toThrow("UNTRUSTED_RITUAL_BUILDER_SENDER");
     await expect(
       restoreRevision(
         event,
@@ -361,11 +529,16 @@ describe("Ritual Builder window", () => {
   it("restores the latest Receipt only for the latest approved Ritual", async () => {
     const approved = { ritualId: "rtl_01J00000000000000000000000" };
     const receipt = { receiptId: "rcp_01J00000000000000000000000" };
-    controller.loadLatestState.mockResolvedValueOnce({
+    controller.loadInitialWorkspaceState.mockResolvedValueOnce({
       approved: approved as never,
       receipt: receipt as never,
       run: null,
       runReceipt: null,
+      learningReview: null,
+      auditTimeline: [],
+      rituals: [],
+      schedule: null,
+      inbox: [],
     });
     await createRitualBuilderWindow(windowOptions());
     const initialize = electron.handlers.get(
@@ -375,7 +548,7 @@ describe("Ritual Builder window", () => {
     await expect(
       initialize({ sender: electron.views[0]!.webContents }),
     ).resolves.toMatchObject({ approved, receipt });
-    expect(controller.loadLatestState).toHaveBeenCalledOnce();
+    expect(controller.loadInitialWorkspaceState).toHaveBeenCalledOnce();
   });
 
   it("keeps the Exa key when removal is canceled and rejects extra IPC fields", async () => {

@@ -93,6 +93,67 @@ function createRunningRun(
 }
 
 describe("RitualBuilderController", () => {
+  it("lists Rituals and opens one exact persisted snapshot", async () => {
+    const snapshot = {
+      approved,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [],
+    };
+    const catalog = [
+      {
+        ritualId: approved.ritualId,
+        ritualRevision: approved.ritualRevision,
+        name: approved.name,
+        approvedAt: approved.approvedAt,
+      },
+    ];
+    const workspace = {
+      ...snapshot,
+      schedule: null,
+      inbox: [],
+    };
+    const repository = {
+      latestSnapshot: vi.fn(async () => snapshot),
+      snapshotFor: vi.fn(async (ritualId: string) =>
+        ritualId === approved.ritualId ? snapshot : null,
+      ),
+      catalog: vi.fn(async () => catalog),
+      initialWorkspaceSnapshot: vi.fn(async () => ({
+        ...workspace,
+        rituals: catalog,
+      })),
+      workspaceSnapshotFor: vi.fn(async (ritualId: string) =>
+        ritualId === approved.ritualId ? workspace : null,
+      ),
+      automationSnapshotFor: vi.fn(async () => ({
+        approved,
+        schedule: null,
+        inbox: [],
+      })),
+      listSchedules: vi.fn(async () => []),
+      ...unusedRunPersistence(),
+    };
+    const controller = new RitualBuilderController(
+      unavailableProvider(),
+      repository as never,
+    );
+
+    await expect(controller.listRituals()).resolves.toEqual(catalog);
+    await expect(controller.loadInitialWorkspaceState()).resolves.toEqual({
+      ...workspace,
+      rituals: catalog,
+    });
+    await expect(
+      controller.loadRitualWorkspaceState(approved.ritualId),
+    ).resolves.toEqual(workspace);
+    await expect(
+      controller.loadRitualWorkspaceState("rtl_01J00000000000000000000001"),
+    ).rejects.toThrow("RITUAL_NOT_FOUND");
+  });
+
   it("restores an exact prior revision through repository-owned history", async () => {
     const learned = {
       ...approved,

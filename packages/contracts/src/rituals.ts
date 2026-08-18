@@ -787,6 +787,15 @@ export const ritualLatestSnapshotSchema = z.strictObject({
   auditTimeline: ritualAuditTimelineSchema,
 });
 
+export const ritualCatalogItemSchema = z.strictObject({
+  ritualId: ritualIdSchema,
+  ritualRevision: z.number().int().positive(),
+  name: approvedRitualRevisionSchema.shape.name,
+  approvedAt: instantSchema,
+});
+
+export const ritualCatalogSchema = z.array(ritualCatalogItemSchema).max(100);
+
 const ritualLocalTimeSchema = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
 
 const ritualTimeZoneSchema = z
@@ -845,6 +854,14 @@ export const ritualInboxItemSchema = z.strictObject({
     .enum(["OWNER_APPROVAL", "RESOURCE", "REVIEW", "FAILURE"])
     .nullable(),
 });
+
+export const ritualWorkspaceSnapshotSchema = ritualLatestSnapshotSchema.extend({
+  schedule: ritualScheduleSchema.nullable(),
+  inbox: z.array(ritualInboxItemSchema).max(20),
+});
+
+export const ritualInitialWorkspaceSnapshotSchema =
+  ritualWorkspaceSnapshotSchema.extend({ rituals: ritualCatalogSchema });
 
 export const ritualInboxSchema = z.array(ritualInboxItemSchema).max(20);
 
@@ -1083,6 +1100,14 @@ export type RitualLearningDecision = z.infer<
 >;
 export type RitualAuditTimeline = z.infer<typeof ritualAuditTimelineSchema>;
 export type RitualLatestSnapshot = z.infer<typeof ritualLatestSnapshotSchema>;
+export type RitualCatalogItem = z.infer<typeof ritualCatalogItemSchema>;
+export type RitualCatalog = z.infer<typeof ritualCatalogSchema>;
+export type RitualWorkspaceSnapshot = z.infer<
+  typeof ritualWorkspaceSnapshotSchema
+>;
+export type RitualInitialWorkspaceSnapshot = z.infer<
+  typeof ritualInitialWorkspaceSnapshotSchema
+>;
 export type RitualPendingLearningReview = z.infer<
   typeof ritualPendingLearningReviewSchema
 >;
