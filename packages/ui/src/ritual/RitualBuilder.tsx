@@ -16,6 +16,12 @@ const now = () => new Date().toISOString();
 const localTimeZone = () =>
   Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
+export interface RitualFollowUpMessage {
+  id: string;
+  speaker: "OWNER" | "STEWARD";
+  text: string;
+}
+
 export function RitualBuilder({
   state,
   onEvent,
@@ -27,6 +33,7 @@ export function RitualBuilder({
   onRefreshAuditTimeline,
   revisionRestore,
   onDraftDirtyChange,
+  stewardFollowUp,
 }: {
   state: RitualBuilderState;
   onEvent(event: RitualBuilderEvent): void;
@@ -37,6 +44,12 @@ export function RitualBuilder({
   auditTimelineError?: string | null;
   onRefreshAuditTimeline?(): void;
   onDraftDirtyChange?(dirty: boolean): void;
+  stewardFollowUp?: {
+    messages: readonly RitualFollowUpMessage[];
+    pending: boolean;
+    error: string | null;
+    submit(question: string): void;
+  };
   revisionRestore?: {
     pending: boolean;
     error: string | null;
@@ -46,6 +59,10 @@ export function RitualBuilder({
   const [starterMode, setStarterMode] = useState<
     "CUSTOM" | RitualStarter["kind"]
   >("CUSTOM");
+  const [followUpQuestion, setFollowUpQuestion] = useState("");
+  useEffect(() => {
+    setFollowUpQuestion("");
+  }, [state.approved?.ritualId, state.approved?.ritualRevision]);
   const submitPurpose = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
@@ -153,7 +170,61 @@ export function RitualBuilder({
               <p>{entry.text}</p>
             </li>
           ))}
+          {stewardFollowUp?.messages.map((entry) => (
+            <li
+              className={`ritual-message ritual-message--${entry.speaker.toLowerCase()}`}
+              key={entry.id}
+            >
+              <span>{entry.speaker === "STEWARD" ? "Steward" : "You"}</span>
+              <p>{entry.text}</p>
+            </li>
+          ))}
         </ol>
+
+        {state.approved && stewardFollowUp ? (
+          <form
+            className="ritual-follow-up"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const question = followUpQuestion.trim();
+              if (!question || stewardFollowUp.pending) return;
+              stewardFollowUp.submit(question);
+              setFollowUpQuestion("");
+            }}
+          >
+            <div className="ritual-follow-up__heading">
+              <label htmlFor="ritual-follow-up-question">
+                Ask the Steward about this Ritual
+              </label>
+              <span>Read-only follow-up</span>
+            </div>
+            <textarea
+              id="ritual-follow-up-question"
+              value={followUpQuestion}
+              rows={2}
+              minLength={3}
+              maxLength={600}
+              required
+              disabled={stewardFollowUp.pending}
+              placeholder="Ask about the agreement, latest result, evidence, or uncertainty."
+              onChange={(event) =>
+                setFollowUpQuestion(event.currentTarget.value)
+              }
+            />
+            <button type="submit" disabled={stewardFollowUp.pending}>
+              {stewardFollowUp.pending
+                ? "Steward is reviewing…"
+                : "Ask Steward"}
+            </button>
+            <small>
+              Answers cannot start a Run, change the Ritual, or expand its
+              permissions.
+            </small>
+            {stewardFollowUp.error ? (
+              <p role="alert">{stewardFollowUp.error}</p>
+            ) : null}
+          </form>
+        ) : null}
 
         {state.phase === "DESCRIBE_PURPOSE" ? (
           <section className="ritual-start">

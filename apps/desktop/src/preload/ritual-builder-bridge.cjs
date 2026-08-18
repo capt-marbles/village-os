@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld(
       ipcRenderer.invoke("village:ritual-builder:create-draft-identity"),
     draft: (context) =>
       ipcRenderer.invoke("village:ritual-builder:draft", context),
+    followUp: (request) =>
+      ipcRenderer.invoke("village:ritual-builder:follow-up", request),
     approve: (ritual) =>
       ipcRenderer.invoke("village:ritual-builder:approve", ritual),
     restoreRevision: (request) =>

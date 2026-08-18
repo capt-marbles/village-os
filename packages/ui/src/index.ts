@@ -23,7 +23,10 @@ export {
   delegatedWorkflowStates,
   deriveDelegatedWorkflowModel,
 } from "./browser/delegated-workflow-state-matrix.js";
-export { RitualBuilder } from "./ritual/RitualBuilder.js";
+export {
+  RitualBuilder,
+  type RitualFollowUpMessage,
+} from "./ritual/RitualBuilder.js";
 export {
   canRestoreRitualRevision,
   createRitualBuilderState,

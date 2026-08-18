@@ -2,6 +2,8 @@ import type {
   ApprovedRitualRevision,
   RitualStewardContext,
   RitualStewardResult,
+  RitualStewardFollowUpRequest,
+  RitualStewardFollowUpResult,
   RitualLearningApprovalRequest,
   RitualLearningFeedbackRequest,
   RitualLearningResult,
@@ -29,6 +31,7 @@ import {
   type RitualBuilderEvent,
   type RitualBuilderIdentity,
   type RitualBuilderState,
+  type RitualFollowUpMessage,
 } from "@village/ui";
 import {
   useCallback,
@@ -68,6 +71,9 @@ export interface RitualBuilderBridge extends ExaCredentialBridge {
   pauseSchedule(request: RitualSchedulePauseRequest): Promise<RitualSchedule>;
   createDraftIdentity(): Promise<RitualBuilderIdentity>;
   draft(context: RitualStewardContext): Promise<RitualStewardResult>;
+  followUp(
+    request: RitualStewardFollowUpRequest,
+  ): Promise<RitualStewardFollowUpResult>;
   approve(ritual: ApprovedRitualRevision): Promise<ApprovedRitualRevision>;
   restoreRevision(
     request: RitualRevisionRestoreRequest,
@@ -125,6 +131,11 @@ export function RitualBuilderWorkspace({
   const [automationPending, setAutomationPending] = useState(false);
   const [automationError, setAutomationError] = useState<string | null>(null);
   const [draftInputDirty, setDraftInputDirty] = useState(false);
+  const [followUpMessages, setFollowUpMessages] = useState<
+    readonly RitualFollowUpMessage[]
+  >([]);
+  const [followUpPending, setFollowUpPending] = useState(false);
+  const [followUpError, setFollowUpError] = useState<string | null>(null);
   const selectedRitualId = state.approved?.ritualId ?? null;
   const hasUnsavedDraft =
     !state.approved && (draftInputDirty || state.phase !== "DESCRIBE_PURPOSE");
@@ -140,7 +151,14 @@ export function RitualBuilderWorkspace({
   const restoreRevisionInFlight = useRef(false);
   const automationInFlight = useRef(false);
   const ritualSwitchInFlight = useRef(false);
+  const activeFollowUp = useRef<string | null>(null);
   const mounted = useRef(true);
+  const resetFollowUp = useCallback(() => {
+    activeFollowUp.current = null;
+    setFollowUpMessages([]);
+    setFollowUpPending(false);
+    setFollowUpError(null);
+  }, []);
   const refreshAutomation = useCallback(async () => {
     if (!bridge || ritualSwitchInFlight.current) return;
     const mutation = automationMutation.current;
@@ -217,6 +235,7 @@ export function RitualBuilderWorkspace({
         if (!mounted.current || requestGeneration !== generation.current) {
           return false;
         }
+        resetFollowUp();
         setState((previous) =>
           reduceRitualBuilder(previous, {
             type: "REVISION_RESTORE_SAVED",
@@ -253,6 +272,7 @@ export function RitualBuilderWorkspace({
       refreshAuditTimeline,
       refreshAutomation,
       refreshRituals,
+      resetFollowUp,
       state.approved,
     ],
   );
@@ -320,6 +340,7 @@ export function RitualBuilderWorkspace({
         auditTimelineMutation.current += 1;
         setState(hydrateRitualSnapshot(snapshot));
         setDraftInputDirty(false);
+        resetFollowUp();
         setSchedule(snapshot.schedule);
         setInbox(snapshot.inbox);
         setAuditTimeline(snapshot.auditTimeline);
@@ -335,7 +356,71 @@ export function RitualBuilderWorkspace({
         if (mounted.current) setRitualSwitchPending(false);
       }
     },
-    [bridge, selectedRitualId],
+    [bridge, resetFollowUp, selectedRitualId],
+  );
+
+  const submitFollowUp = useCallback(
+    (question: string) => {
+      const current = state.approved;
+      if (!bridge || !current || activeFollowUp.current) return;
+      const requestId = createFollowUpId();
+      const requestGeneration = generation.current;
+      activeFollowUp.current = requestId;
+      setFollowUpPending(true);
+      setFollowUpError(null);
+      setFollowUpMessages((messages) =>
+        appendFollowUpMessage(messages, {
+          id: `${requestId}-owner`,
+          speaker: "OWNER",
+          text: question,
+        }),
+      );
+      void bridge
+        .followUp({
+          schemaVersion: 1,
+          requestId,
+          ritualId: current.ritualId,
+          ritualRevision: current.ritualRevision,
+          question,
+        })
+        .then((result) => {
+          if (
+            !mounted.current ||
+            requestGeneration !== generation.current ||
+            activeFollowUp.current !== requestId
+          )
+            return;
+          if (result.status === "answer") {
+            setFollowUpMessages((messages) =>
+              appendFollowUpMessage(messages, {
+                id: `${requestId}-steward`,
+                speaker: "STEWARD",
+                text: result.answer,
+              }),
+            );
+            return;
+          }
+          setFollowUpError(followUpFailureCopy(result.reason));
+        })
+        .catch(() => {
+          if (
+            mounted.current &&
+            requestGeneration === generation.current &&
+            activeFollowUp.current === requestId
+          ) {
+            setFollowUpError(
+              "The Steward could not answer that follow-up. Try again.",
+            );
+          }
+        })
+        .finally(() => {
+          if (activeFollowUp.current === requestId) {
+            activeFollowUp.current = null;
+            if (mounted.current) setFollowUpPending(false);
+          }
+        });
+    },
+    [bridge, state.approved],
   );
 
   useEffect(() => {
@@ -497,6 +582,7 @@ export function RitualBuilderWorkspace({
           setAutomationError(null);
           setAuditTimeline([]);
           setAuditTimelineError(null);
+          resetFollowUp();
           setIdentity(nextIdentity);
           setDraftInputDirty(false);
           setState((current) =>
@@ -769,6 +855,8 @@ export function RitualBuilderWorkspace({
           approvedAt: next.pendingRevision.approvedAt,
         })
         .then(() => {
+          generation.current += 1;
+          resetFollowUp();
           automationMutation.current += 1;
           setState((current) =>
             reduceRitualBuilder(current, { type: "LEARNING_SAVED" }),
@@ -852,6 +940,12 @@ export function RitualBuilderWorkspace({
       state={state}
       onEvent={onEvent}
       onDraftDirtyChange={setDraftInputDirty}
+      stewardFollowUp={{
+        messages: followUpMessages,
+        pending: followUpPending,
+        error: followUpError,
+        submit: submitFollowUp,
+      }}
       auditTimeline={auditTimeline}
       auditTimelineError={auditTimelineError}
       onRefreshAuditTimeline={() => void refreshAuditTimeline()}
@@ -975,6 +1069,40 @@ function learningFailureCopy(
       return "Village ignored an outdated learning proposal. Nothing changed; try again.";
     case "PROVIDER_UNAVAILABLE":
       return "The local ChatGPT provider became unavailable. Nothing changed; try again.";
+  }
+}
+
+const followUpIdAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+const maximumFollowUpMessages = 20;
+
+function appendFollowUpMessage(
+  messages: readonly RitualFollowUpMessage[],
+  message: RitualFollowUpMessage,
+): readonly RitualFollowUpMessage[] {
+  return [...messages, message].slice(-maximumFollowUpMessages);
+}
+
+function createFollowUpId(): RitualStewardFollowUpRequest["requestId"] {
+  const bytes = crypto.getRandomValues(new Uint8Array(26));
+  return `rfu_${[...bytes]
+    .map((byte) => followUpIdAlphabet[byte & 31])
+    .join("")}`;
+}
+
+function followUpFailureCopy(
+  reason: Extract<RitualStewardFollowUpResult, { status: "waiting" }>["reason"],
+): string {
+  switch (reason) {
+    case "AUTHENTICATION_REQUIRED":
+      return "Connect ChatGPT before asking the Steward a follow-up.";
+    case "TIME_BUDGET_EXHAUSTED":
+      return "The Steward took too long to answer. Try a narrower question.";
+    case "MALFORMED_PROVIDER_OUTPUT":
+      return "The Steward returned an answer Village could not safely validate.";
+    case "STALE_STEWARD_RESULT":
+      return "That answer belonged to an older Ritual selection. Ask again.";
+    case "PROVIDER_UNAVAILABLE":
+      return "The Steward is unavailable. Try again shortly.";
   }
 }
 

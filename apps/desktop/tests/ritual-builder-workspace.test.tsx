@@ -308,6 +308,13 @@ function bridge() {
       permissions: ["Read only connected records"],
       completion: "A reviewable result is ready.",
     })),
+    followUp: vi.fn(async (request) => ({
+      status: "answer" as const,
+      requestId: request.requestId,
+      ritualId: request.ritualId,
+      ritualRevision: request.ritualRevision,
+      answer: "Review the unresolved commercial impact before the next Run.",
+    })),
     approve: vi.fn(async (ritual) => ritual),
     restoreRevision: vi.fn(async () => approved),
     testRun: vi.fn(async () => ({ status: "receipt" as const, receipt })),
@@ -335,6 +342,46 @@ function bridge() {
 }
 
 describe("RitualBuilderWorkspace", () => {
+  it("lets the owner ask the Steward a read-only follow-up about the selected Ritual", async () => {
+    const activeBridge = bridge();
+    activeBridge.initialize.mockResolvedValueOnce({
+      identity,
+      rituals: [],
+      approved,
+      receipt,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [],
+      schedule: null,
+      inbox: [],
+    });
+    render(<RitualBuilderWorkspace bridge={activeBridge} />);
+
+    const question = await screen.findByLabelText(
+      "Ask the Steward about this Ritual",
+    );
+    fireEvent.change(question, {
+      target: { value: "What should I verify before the next Run?" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Ask Steward" }));
+
+    await waitFor(() => expect(activeBridge.followUp).toHaveBeenCalledOnce());
+    expect(activeBridge.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ritualId: approved.ritualId,
+        ritualRevision: approved.ritualRevision,
+        question: "What should I verify before the next Run?",
+      }),
+    );
+    expect(
+      await screen.findByText(
+        "Review the unresolved commercial impact before the next Run.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("Read-only follow-up")).toBeTruthy();
+  });
+
   it("switches the Steward desk to one selected Ritual", async () => {
     const earlier = {
       ...approved,
@@ -404,6 +451,10 @@ describe("RitualBuilderWorkspace", () => {
     const select = await screen.findByRole("combobox", {
       name: "Current Ritual",
     });
+    const followUp = screen.getByLabelText("Ask the Steward about this Ritual");
+    fireEvent.change(followUp, {
+      target: { value: "Question about the current pipeline Ritual" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Enable schedule" }));
     await waitFor(() =>
       expect(ritualBridge.configureSchedule).toHaveBeenCalledOnce(),
@@ -414,6 +465,15 @@ describe("RitualBuilderWorkspace", () => {
       expect(ritualBridge.selectRitual).toHaveBeenCalledWith(earlier.ritualId),
     );
     expect(await screen.findByText(earlier.name)).toBeTruthy();
+    await waitFor(() =>
+      expect(
+        (
+          screen.getByLabelText(
+            "Ask the Steward about this Ritual",
+          ) as HTMLTextAreaElement
+        ).value,
+      ).toBe(""),
+    );
     await waitFor(() =>
       expect(
         (screen.getByLabelText("Ritual local time") as HTMLInputElement).value,
@@ -751,6 +811,19 @@ describe("RitualBuilderWorkspace", () => {
     ]);
     render(<RitualBuilderWorkspace bridge={activeBridge} />);
 
+    const followUp = await screen.findByLabelText(
+      "Ask the Steward about this Ritual",
+    );
+    fireEvent.change(followUp, {
+      target: { value: "What should I remember about revision 2?" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Ask Steward" }));
+    expect(
+      await screen.findByText(
+        "Review the unresolved commercial impact before the next Run.",
+      ),
+    ).toBeTruthy();
+
     fireEvent.click(
       (await screen.findByText("Ritual history")).closest("summary")!,
     );
@@ -769,6 +842,11 @@ describe("RitualBuilderWorkspace", () => {
     });
     expect(activeBridge.startRun).not.toHaveBeenCalled();
     expect(activeBridge.getAutomationState).toHaveBeenCalled();
+    expect(
+      screen.queryByText(
+        "Review the unresolved commercial impact before the next Run.",
+      ),
+    ).toBeNull();
   });
 
   it("does not start a new Ritual while a restore commit is pending", async () => {

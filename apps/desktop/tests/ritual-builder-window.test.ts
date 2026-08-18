@@ -125,6 +125,11 @@ describe("Ritual Builder window", () => {
     configureSchedule: vi.fn(async (schedule) => schedule),
     pauseSchedule: vi.fn(async (schedule) => schedule),
     draft: vi.fn(async () => ({ status: "waiting" })),
+    followUp: vi.fn(async (request) => ({
+      status: "answer",
+      ...request,
+      answer: "Bounded answer",
+    })),
     approve: vi.fn(async (ritual) => ritual),
     restoreRevision: vi.fn(async (ritual) => ritual),
     testRun: vi.fn(async () => ({ status: "waiting" })),
@@ -212,6 +217,51 @@ describe("Ritual Builder window", () => {
     expect(controller.loadRitualWorkspaceState).toHaveBeenCalledWith(ritualId);
     expect(controller.loadAutomationState).toHaveBeenLastCalledWith(ritualId);
     expect(controller.loadAuditTimeline).toHaveBeenLastCalledWith(ritualId);
+  });
+
+  it("allows a follow-up only for the explicitly selected Ritual", async () => {
+    const ritualId = "rtl_01J00000000000000000000000";
+    controller.loadInitialWorkspaceState.mockResolvedValueOnce({
+      approved: { ritualId } as never,
+      receipt: null,
+      run: null,
+      runReceipt: null,
+      learningReview: null,
+      auditTimeline: [],
+      rituals: [],
+      schedule: null,
+      inbox: [],
+    });
+    await createRitualBuilderWindow(windowOptions());
+    const event = { sender: electron.views[0]!.webContents };
+    await electron.handlers.get("village:ritual-builder:initialize")!(event);
+    const followUp = electron.handlers.get("village:ritual-builder:follow-up")!;
+    const request = {
+      schemaVersion: 1,
+      requestId: "rfu_01J00000000000000000000000",
+      ritualId,
+      ritualRevision: 1,
+      question: "What needs my attention?",
+    };
+
+    await expect(followUp(event, request)).resolves.toMatchObject({
+      status: "answer",
+    });
+    await expect(
+      followUp(event, {
+        ...request,
+        ritualId: "rtl_01J00000000000000000000009",
+      }),
+    ).rejects.toThrow("STALE_RITUAL_SELECTION");
+    await expect(followUp(event, request, "extra")).rejects.toThrow(
+      "MALFORMED_IPC_REQUEST",
+    );
+    await expect(
+      followUp(event, { ...request, unexpected: true }),
+    ).rejects.toThrow();
+    await expect(followUp({ sender: {} }, request)).rejects.toThrow(
+      "UNTRUSTED_RITUAL_BUILDER_SENDER",
+    );
   });
 
   it("keeps a newer explicit selection after an earlier approval settles", async () => {

@@ -28,6 +28,29 @@ export function findLearningReceipt(
   return testReceipt ?? runReceipt ?? null;
 }
 
+export function findLatestLearningReceipt(
+  store: RitualStore,
+  ritualId: string,
+  ritualRevision: number,
+): RitualLearningReceipt | null {
+  let latest: RitualLearningReceipt | null = null;
+  for (const receipt of [...store.receipts, ...store.runReceipts]) {
+    if (
+      receipt.ritualId !== ritualId ||
+      receipt.ritualRevision !== ritualRevision
+    ) {
+      continue;
+    }
+    if (
+      !latest ||
+      Date.parse(receipt.recordedAt) > Date.parse(latest.recordedAt)
+    ) {
+      latest = receipt;
+    }
+  }
+  return latest;
+}
+
 export function projectLatestSnapshot(
   store: RitualStore,
   approved: ApprovedRitualRevision | null,

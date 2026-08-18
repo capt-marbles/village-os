@@ -18,6 +18,8 @@ import {
   ritualRevisionRestoreRequestSchema,
   ritualPendingLearningReviewSchema,
   ritualStewardContextSchema,
+  ritualStewardFollowUpContextSchema,
+  ritualStewardFollowUpRequestSchema,
   ritualStewardQuestionContentSchema,
   ritualStewardProposalSchema,
   ritualTestRunRequestSchema,
@@ -35,6 +37,7 @@ import {
   ritualScheduleUpdateRequestSchema,
   createRitualTestReceipt,
   validateRitualStewardResult,
+  validateRitualStewardFollowUpResult,
   validateRitualLearningResult,
   validateRitualTestRunResult,
 } from "../index.js";
@@ -82,6 +85,93 @@ const draft = {
 };
 
 describe("Ritual contracts", () => {
+  it("binds a bounded Steward follow-up to one Ritual revision", () => {
+    const request = ritualStewardFollowUpRequestSchema.parse({
+      schemaVersion: 1,
+      requestId: "rfu_01J00000000000000000000000",
+      ritualId: "rtl_01J00000000000000000000000",
+      ritualRevision: 3,
+      question: "Which uncertainty should I review before the next Run?",
+    });
+    const context = ritualStewardFollowUpContextSchema.parse({
+      ...request,
+      ritual: {
+        name: "Weekday pipeline review",
+        purpose:
+          "Review new opportunities and prepare a focused follow-up list.",
+        trigger: { kind: "SCHEDULED", summary: "Every weekday" },
+        steps: draft.steps,
+        permissions: draft.permissions,
+        completion: draft.completion,
+        reviewPolicy: draft.reviewPolicy,
+      },
+      evidence: {
+        mode: "RUN",
+        outcome: "NEEDS_REVIEW",
+        summary: "Three opportunities need owner review.",
+        steps: [
+          {
+            title: "Review the proposed shortlist",
+            actor: { kind: "VILLAGER", role: "Reviewer" },
+            report: {
+              headline: "One opportunity has a near-term deadline",
+              summary: "The bounded evidence supports reviewing it first.",
+              findings: ["A response is due this week."],
+              uncertainties: ["The decision maker is not confirmed."],
+            },
+          },
+        ],
+        uncertainties: ["The decision maker is not confirmed."],
+        externalEffects: [],
+      },
+    });
+
+    expect(
+      ritualStewardFollowUpContextSchema.safeParse({
+        ...context,
+        evidence: {
+          ...context.evidence,
+          summary: "Review https://example.com/private before the next Run.",
+        },
+      }).success,
+    ).toBe(false);
+
+    expect(
+      validateRitualStewardFollowUpResult(context, {
+        status: "answer",
+        requestId: request.requestId,
+        ritualId: request.ritualId,
+        ritualRevision: request.ritualRevision,
+        answer:
+          "Confirm the decision maker first; that uncertainty affects the priority recommendation.",
+      }),
+    ).toMatchObject({ status: "answer", requestId: request.requestId });
+    expect(
+      validateRitualStewardFollowUpResult(context, {
+        status: "answer",
+        requestId: "rfu_01J00000000000000000000001",
+        ritualId: request.ritualId,
+        ritualRevision: request.ritualRevision,
+        answer: "This response belongs to another request.",
+      }),
+    ).toMatchObject({
+      status: "waiting",
+      reason: "STALE_STEWARD_RESULT",
+    });
+    expect(
+      validateRitualStewardFollowUpResult(context, {
+        status: "answer",
+        requestId: request.requestId,
+        ritualId: request.ritualId,
+        ritualRevision: request.ritualRevision,
+        answer: "Open https://example.com/private for the source detail.",
+      }),
+    ).toMatchObject({
+      status: "waiting",
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    });
+  });
+
   it("accepts a bounded cited research report and rejects unknown source citations", () => {
     const report = {
       headline: "Agent tooling shifted toward governed background work",
