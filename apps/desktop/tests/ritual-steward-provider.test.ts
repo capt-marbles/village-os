@@ -656,6 +656,61 @@ describe("CodexRitualStewardProvider", () => {
     expect(JSON.stringify(prompt)).not.toContain(starterContext.draftId);
   });
 
+  it("shapes Inbox Priority without asking the model to bind Gmail authority", async () => {
+    const starterContext = {
+      ...context,
+      ownerPurpose:
+        "Review recent unread inbox headers and identify likely replies.",
+      starter: { kind: "INBOX_PRIORITY" as const },
+    };
+    let prompt: unknown;
+    const transport = {
+      request: async (method: string) => {
+        if (method === "initialize") return {};
+        if (method === "account/read") return { account: { type: "chatgpt" } };
+        return { thread: { id: "thread-inbox-priority" } };
+      },
+      notify: () => undefined,
+      runToolTurn: async (_threadId: string, candidate: unknown) => {
+        prompt = candidate;
+        return {
+          stewardMessage: "I shaped a metadata-only inbox review.",
+          name: "Inbox priorities",
+          purpose: starterContext.ownerPurpose,
+          steps: [
+            {
+              stepKey: "rank-replies",
+              title: "Rank likely replies",
+              description: "Rank recent unread headers by likely urgency.",
+              actor: { kind: "STEWARD", role: "Steward" },
+              approval: "NONE",
+            },
+          ],
+          permissions: ["The model must not define Gmail authority"],
+          completion: "A metadata-only priority report is ready.",
+          research: {
+            provider: "EXA",
+            query: "private email",
+            maxResults: 5,
+            lookbackDays: 30,
+          },
+        };
+      },
+      close: async () => undefined,
+    };
+
+    const result = await new CodexRitualStewardProvider(transport).draft(
+      starterContext,
+    );
+    expect(result).toMatchObject({
+      status: "proposal",
+      name: "Inbox priorities",
+    });
+    expect(result).not.toHaveProperty("research");
+    expect(prompt).toMatchObject({ starter: { kind: "INBOX_PRIORITY" } });
+    expect(JSON.stringify(prompt)).not.toContain("gmailReview");
+  });
+
   it("fails closed when ChatGPT authentication is unavailable", async () => {
     const transport = {
       request: async (method: string) =>
@@ -1053,5 +1108,107 @@ describe("CodexRitualStewardProvider", () => {
     expect(prompt).not.toContain("hostile-request-id");
     expect(prompt).not.toContain(runLearningContext.receipt.receiptId);
     expect(prompt).not.toContain(runLearningContext.receipt.runId);
+  });
+
+  it("preserves Gmail authority and sends only aggregate mail evidence for learning", async () => {
+    const turns: unknown[] = [];
+    const gmailReview = {
+      provider: "GMAIL" as const,
+      scope: "https://www.googleapis.com/auth/gmail.metadata" as const,
+      maxMessages: 25,
+      lookbackDays: 3,
+      unreadOnly: true,
+    };
+    const mailReport = {
+      metadataOnly: true as const,
+      reviewedMessageCount: 2,
+      headline: "One likely reply",
+      summary: "A customer request ranked highest.",
+      priorities: [
+        {
+          messageNumber: 1,
+          from: "Private Sender <private@example.com>",
+          subject: "Private subject",
+          receivedAt: "2026-08-16T11:30:00.000Z",
+          priority: "HIGH" as const,
+          reason: "A decision appears time-sensitive.",
+          responseFocus: "Answer the requested decision.",
+          uncertainty: null,
+        },
+      ],
+      uncertainties: ["Bodies were not read."],
+    };
+    const context = {
+      ...runLearningContext,
+      ritual: {
+        ...learningContext.ritual,
+        permissions: ["Read Gmail message headers and labels only"],
+        gmailReview,
+      },
+      receipt: {
+        ...runLearningContext.receipt,
+        summary: "A metadata-only priority report is ready.",
+        stepEvidence: [
+          {
+            stepKey: "rank-responses",
+            title: "Rank the responses",
+            actor: { kind: "STEWARD" as const, role: "Steward" },
+            research: null,
+            report: null,
+            mailReport,
+          },
+        ],
+      },
+    };
+    const transport = {
+      request: async (method: string) => {
+        if (method === "initialize") return {};
+        if (method === "account/read") return { account: { type: "chatgpt" } };
+        return { thread: { id: "learning-thread-gmail" } };
+      },
+      notify: () => undefined,
+      runToolTurn: async (_threadId: string, prompt: unknown) => {
+        turns.push(prompt);
+        return {
+          stewardMessage: "I preserved the metadata-only resource.",
+          rationale: "The owner requested a shorter priority report.",
+          proposedDefinition: {
+            name: context.ritual.name,
+            purpose: context.ritual.purpose,
+            trigger: context.ritual.trigger,
+            steps: context.ritual.steps,
+            permissions: context.ritual.permissions,
+            completion: context.ritual.completion,
+            reviewPolicy: context.ritual.reviewPolicy,
+            gmailReview,
+          },
+        };
+      },
+      close: async () => undefined,
+    };
+
+    await expect(
+      new CodexRitualStewardProvider(transport).learn(context),
+    ).resolves.toMatchObject({ status: "proposal" });
+    expect(turns[0]).toMatchObject({
+      currentRitual: { gmailReview },
+      runReceipt: {
+        stepEvidence: [
+          {
+            mailReport: {
+              metadataOnly: true,
+              reviewedMessageCount: 2,
+              headline: "One likely reply",
+              priorityCounts: { high: 1, medium: 0, low: 0 },
+              uncertainties: ["Bodies were not read."],
+            },
+          },
+        ],
+      },
+    });
+    const prompt = JSON.stringify(turns[0]);
+    expect(prompt).not.toContain("Private Sender");
+    expect(prompt).not.toContain("Private subject");
+    expect(prompt).not.toContain("private@example.com");
   });
 });

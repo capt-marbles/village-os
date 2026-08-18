@@ -10,6 +10,7 @@ describe("Ritual runtime shutdown", () => {
     const services = {
       scheduler: { close: vi.fn(async () => schedulerClose) },
       controller: { close: vi.fn(async () => undefined) },
+      gmailCredentials: { close: vi.fn(async () => undefined) },
     };
     const application = { quit: vi.fn() };
     const clear = vi.fn();
@@ -30,6 +31,7 @@ describe("Ritual runtime shutdown", () => {
     await schedulerClose;
     await vi.waitFor(() => expect(application.quit).toHaveBeenCalledOnce());
     expect(services.controller.close).toHaveBeenCalledOnce();
+    expect(services.gmailCredentials.close).toHaveBeenCalledOnce();
 
     handler(event);
     expect(event.preventDefault).toHaveBeenCalledTimes(2);

@@ -50,6 +50,50 @@ function applyStewardProposal(
 }
 
 describe("Ritual Builder state", () => {
+  it("pins the Gmail metadata boundary locally for the inbox starter", () => {
+    const drafting = reduceRitualBuilder(createRitualBuilderState(), {
+      type: "SUBMIT_STARTER",
+      draftId,
+      starter: { kind: "INBOX_PRIORITY" },
+    });
+    if (drafting.phase !== "DRAFTING") throw new Error("expected drafting");
+    const state = reduceRitualBuilder(drafting, {
+      type: "STEWARD_PROPOSED",
+      occurredAt: "2026-08-17T12:00:00.000Z",
+      proposal: {
+        status: "proposal",
+        draftId,
+        requestRevision: 1,
+        stewardMessage: "I shaped a metadata-only inbox review.",
+        name: "Inbox priority review",
+        purpose: drafting.ownerPurpose,
+        steps: [
+          {
+            stepKey: "review-inbox",
+            title: "Review recent inbox metadata",
+            description: "Rank likely replies without reading message bodies.",
+            actor: { kind: "STEWARD", role: "Steward" },
+            approval: "NONE",
+          },
+        ],
+        permissions: ["Read Gmail message headers and labels only"],
+        completion: "A metadata-only priority review is ready.",
+      },
+    });
+
+    expect(state.phase).toBe("CHOOSE_TRIGGER");
+    expect(state.draft?.gmailReview).toEqual({
+      provider: "GMAIL",
+      scope: "https://www.googleapis.com/auth/gmail.metadata",
+      maxMessages: 25,
+      lookbackDays: 3,
+      unreadOnly: true,
+    });
+    expect(state.draft?.permissions).toEqual([
+      "Read Gmail message headers and labels only",
+    ]);
+  });
+
   it("restores a pending learning proposal for Review", () => {
     let state = reduceRitualBuilder(createRitualBuilderState(), {
       type: "HYDRATE_APPROVED_REVISION",

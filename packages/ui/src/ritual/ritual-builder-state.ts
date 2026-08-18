@@ -10,6 +10,7 @@ import {
   ritualRunSchema,
   ritualStarterSchema,
   ritualStewardContextSchema,
+  gmailReviewForRitualStarter,
   purposeForRitualStarter,
   ritualTestReceiptSchema,
   ritualTestRunRequestSchema,
@@ -510,10 +511,16 @@ export function reduceRitualBuilder(
           summary: triggerCopy.ON_DEMAND.summary,
         },
         steps: event.proposal.steps,
-        permissions: event.proposal.permissions,
+        permissions:
+          state.starter?.kind === "INBOX_PRIORITY"
+            ? ["Read Gmail message headers and labels only"]
+            : event.proposal.permissions,
         completion: event.proposal.completion,
         ...(event.proposal.research
           ? { research: event.proposal.research }
+          : {}),
+        ...(state.starter?.kind === "INBOX_PRIORITY"
+          ? { gmailReview: gmailReviewForRitualStarter(state.starter) }
           : {}),
         reviewPolicy: {
           ownerReview: "EVERY_RUN",
@@ -1423,6 +1430,7 @@ function draftFromApproved(approved: ApprovedRitualRevision): RitualDraft {
     completion: approved.completion,
     reviewPolicy: approved.reviewPolicy,
     ...(approved.research ? { research: approved.research } : {}),
+    ...(approved.gmailReview ? { gmailReview: approved.gmailReview } : {}),
     updatedAt: approved.approvedAt,
   });
 }

@@ -163,12 +163,35 @@ describe("Ritual Builder window", () => {
     })),
   };
   const openExaDashboard = vi.fn(async () => undefined);
+  const gmailCredentials = {
+    status: vi.fn(async () => ({
+      provider: "GMAIL" as const,
+      state: "DISCONNECTED" as const,
+    })),
+    connect: vi.fn(async () => ({
+      status: "snapshot" as const,
+      snapshot: {
+        provider: "GMAIL" as const,
+        state: "CONNECTED" as const,
+        accountEmail: "owner@example.com",
+        version: 1,
+      },
+    })),
+    disconnect: vi.fn(async () => ({
+      status: "snapshot" as const,
+      snapshot: {
+        provider: "GMAIL" as const,
+        state: "DISCONNECTED" as const,
+      },
+    })),
+  };
 
   const windowOptions = () => ({
     preloadPath: "/app/ritual-builder-bridge.cjs",
     controller,
     exaCredentials,
     openExaDashboard,
+    gmailCredentials,
   });
 
   beforeEach(() => {
@@ -435,6 +458,15 @@ describe("Ritual Builder window", () => {
     const openDashboard = electron.handlers.get(
       "village:ritual-builder:open-exa-dashboard",
     )!;
+    const gmailStatus = electron.handlers.get(
+      "village:ritual-builder:get-gmail-connection-status",
+    )!;
+    const connectGmail = electron.handlers.get(
+      "village:ritual-builder:connect-gmail",
+    )!;
+    const disconnectGmail = electron.handlers.get(
+      "village:ritual-builder:disconnect-gmail",
+    )!;
 
     const initialized = (await initialize(event)) as {
       identity: { draftId: string; ritualId: string };
@@ -475,9 +507,25 @@ describe("Ritual Builder window", () => {
       snapshot: { state: "CONFIGURATION_REQUIRED" },
     });
     await openDashboard(event);
+    await expect(gmailStatus(event)).resolves.toMatchObject({
+      state: "DISCONNECTED",
+    });
+    await expect(connectGmail(event)).resolves.toMatchObject({
+      snapshot: { state: "CONNECTED" },
+    });
+    await expect(disconnectGmail(event)).resolves.toMatchObject({
+      snapshot: { state: "DISCONNECTED" },
+    });
+    electron.dialogResponse = 1;
+    await expect(disconnectGmail(event)).resolves.toEqual({
+      status: "snapshot",
+      snapshot: { provider: "GMAIL", state: "DISCONNECTED" },
+    });
     expect(exaCredentials.configure).toHaveBeenCalledWith(apiKey);
     expect(exaCredentials.revoke).toHaveBeenCalledWith(1);
     expect(openExaDashboard).toHaveBeenCalledOnce();
+    expect(gmailCredentials.connect).toHaveBeenCalledOnce();
+    expect(gmailCredentials.disconnect).toHaveBeenCalledOnce();
     expect(controller.loadInitialWorkspaceState).toHaveBeenCalledOnce();
     expect(controller.draft).toHaveBeenCalledWith({
       draftId: initialized.identity.draftId,

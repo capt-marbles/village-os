@@ -3,7 +3,7 @@ import vm from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 
 describe("Ritual Builder preload", () => {
-  it("exposes only the fixed Ritual and Exa credential operations", async () => {
+  it("exposes only the fixed Ritual, Exa, and Gmail connection operations", async () => {
     const source = await readFile(
       new URL("../src/preload/ritual-builder-bridge.cjs", import.meta.url),
       "utf8",
@@ -28,13 +28,16 @@ describe("Ritual Builder preload", () => {
       "cancelRun",
       "configureExaApiKey",
       "configureSchedule",
+      "connectGmail",
       "createDraftIdentity",
       "decideLearning",
+      "disconnectGmail",
       "draft",
       "followUp",
       "getAuditTimeline",
       "getAutomationState",
       "getExaCredentialStatus",
+      "getGmailConnectionStatus",
       "getRituals",
       "initialize",
       "openExaDashboard",
@@ -68,6 +71,9 @@ describe("Ritual Builder preload", () => {
     await bridge.configureExaApiKey!(key);
     await bridge.removeExaApiKey!();
     await bridge.openExaDashboard!();
+    await bridge.getGmailConnectionStatus!();
+    await bridge.connectGmail!();
+    await bridge.disconnectGmail!();
     await bridge.getAutomationState!();
     await bridge.configureSchedule!({ ritualId: "bounded" });
     await bridge.pauseSchedule!({ ritualId: "bounded" });
@@ -107,6 +113,9 @@ describe("Ritual Builder preload", () => {
       ["village:ritual-builder:configure-exa-api-key", key],
       ["village:ritual-builder:remove-exa-api-key"],
       ["village:ritual-builder:open-exa-dashboard"],
+      ["village:ritual-builder:get-gmail-connection-status"],
+      ["village:ritual-builder:connect-gmail"],
+      ["village:ritual-builder:disconnect-gmail"],
       ["village:ritual-builder:get-automation-state"],
       ["village:ritual-builder:configure-schedule", { ritualId: "bounded" }],
       ["village:ritual-builder:pause-schedule", { ritualId: "bounded" }],

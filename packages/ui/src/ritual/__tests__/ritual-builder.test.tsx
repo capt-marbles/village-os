@@ -10,6 +10,12 @@ import {
 import { useReducer } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createRitualRun,
+  createRitualRunReceipt,
+  reduceRitualRun,
+  type ApprovedRitualRevision,
+} from "@village/contracts";
 import { RitualBuilder } from "../RitualBuilder.js";
 import {
   createRitualBuilderState,
@@ -129,6 +135,34 @@ describe("Ritual Builder", () => {
     });
   });
 
+  it("offers an inbox-priority starter with honest metadata-only limits", () => {
+    const onEvent = vi.fn();
+    render(
+      <RitualBuilder
+        identity={identity}
+        state={createRitualBuilderState()}
+        onEvent={onEvent}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Inbox priority review/u }),
+    );
+    expect(screen.getByText(/headers and labels only/u)).toBeTruthy();
+    expect(
+      screen.getByText(/does not read message bodies or attachments/u),
+    ).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Shape the inbox review" }),
+    );
+
+    expect(onEvent).toHaveBeenCalledWith({
+      type: "SUBMIT_STARTER",
+      draftId: identity.draftId,
+      starter: { kind: "INBOX_PRIORITY" },
+    });
+  });
+
   it("shows graphical trigger choices and the exact draft revision for approval", () => {
     let state = draftedState("Review my pipeline and prepare next actions.");
     const triggerHtml = renderToStaticMarkup(
@@ -199,5 +233,107 @@ describe("Ritual Builder", () => {
     expect(
       screen.getByDisplayValue("Weekday pipeline briefing"),
     ).toHaveProperty("disabled", true);
+  });
+
+  it("renders a metadata-only Gmail priority report with its review boundary", () => {
+    const approved: ApprovedRitualRevision = {
+      schemaVersion: 1,
+      ritualId: identity.ritualId,
+      ritualRevision: 1,
+      status: "APPROVED",
+      approvedDraftId: identity.draftId,
+      approvedDraftRevision: 1,
+      name: "Inbox priority review",
+      purpose: "Identify unread inbox items that likely need a response.",
+      trigger: { kind: "ON_DEMAND", summary: "Whenever I ask" },
+      steps: [
+        {
+          stepKey: "review-inbox",
+          title: "Review inbox metadata",
+          description: "Rank bounded unread message headers and labels.",
+          actor: { kind: "STEWARD", role: "Steward" },
+          approval: "NONE",
+        },
+      ],
+      permissions: ["Read only bounded Gmail message headers and labels"],
+      completion: "A metadata-only priority list is ready for review.",
+      reviewPolicy: { ownerReview: "EVERY_RUN", learning: "PROPOSE_ONLY" },
+      gmailReview: {
+        provider: "GMAIL",
+        scope: "https://www.googleapis.com/auth/gmail.metadata",
+        maxMessages: 25,
+        lookbackDays: 3,
+        unreadOnly: true,
+      },
+      approvedAt: "2026-08-17T12:00:00.000Z",
+    };
+    let run = createRitualRun({
+      approved,
+      request: {
+        schemaVersion: 1,
+        ritualId: approved.ritualId,
+        ritualRevision: 1,
+      },
+      runId: "rrn_01J00000000000000000000000",
+      createdAt: "2026-08-17T12:01:00.000Z",
+    });
+    run = reduceRitualRun(run, approved, {
+      type: "START",
+      occurredAt: "2026-08-17T12:01:01.000Z",
+    });
+    run = reduceRitualRun(run, approved, {
+      type: "COMPLETE_STEP",
+      stepKey: "review-inbox",
+      mailReport: {
+        metadataOnly: true,
+        reviewedMessageCount: 1,
+        headline: "One inbox item likely needs attention",
+        summary: "Village ranked one unread message from metadata.",
+        priorities: [
+          {
+            messageNumber: 1,
+            from: "Customer <customer@example.com>",
+            subject: "Approval needed today",
+            receivedAt: "2026-08-17T11:30:00.000Z",
+            priority: "HIGH",
+            reason: "Gmail marked it important.",
+            responseFocus: "Open the message and verify the request.",
+            uncertainty: "The body was not read.",
+          },
+        ],
+        uncertainties: ["Message bodies and attachments were not read."],
+      },
+      occurredAt: "2026-08-17T12:01:02.000Z",
+    });
+    run = reduceRitualRun(run, approved, {
+      type: "COMPLETE_RUN",
+      outcome: "NEEDS_REVIEW",
+      occurredAt: "2026-08-17T12:01:03.000Z",
+    });
+    const receipt = createRitualRunReceipt({
+      approved,
+      run,
+      receiptId: "rcp_01J00000000000000000000000",
+      summary: "Inbox priority review completed.",
+      recordedAt: "2026-08-17T12:01:03.000Z",
+    });
+    let state = reduceRitualBuilder(createRitualBuilderState(), {
+      type: "HYDRATE_APPROVED_REVISION",
+      approved,
+    });
+    state = reduceRitualBuilder(state, { type: "START_RUN" });
+    state = reduceRitualBuilder(state, { type: "RUN_RECEIPT", run, receipt });
+
+    render(
+      <RitualBuilder identity={identity} state={state} onEvent={vi.fn()} />,
+    );
+    expect(
+      screen.getByText("One inbox item likely needs attention"),
+    ).toBeTruthy();
+    expect(screen.getByText("Approval needed today")).toBeTruthy();
+    expect(
+      screen.getByText(/No mail mutations; Gmail metadata only/u),
+    ).toBeTruthy();
+    expect(screen.getByText("What Village did not read")).toBeTruthy();
   });
 });

@@ -10,6 +10,7 @@ import { isTrustedVillageSender, trustedWebPreferences } from "./security.js";
 import type { RitualBuilderController } from "./ritual-builder-controller.js";
 import { createVillageId } from "./local-village-id.js";
 import type { ExaCredentialOperations } from "../research/exa-credential-controller.js";
+import type { GmailCredentialOperations } from "../gmail/gmail-oauth-controller.js";
 import {
   ritualIdSchema,
   ritualStewardFollowUpRequestSchema,
@@ -25,6 +26,7 @@ export async function createRitualBuilderWindow(options: {
   controller: RitualBuilderController;
   exaCredentials: ExaCredentialOperations;
   openExaDashboard: () => Promise<void>;
+  gmailCredentials: GmailCredentialOperations;
 }): Promise<RitualBuilderWindow> {
   const window = new BaseWindow({
     width: 1_280,
@@ -80,6 +82,10 @@ export async function createRitualBuilderWindow(options: {
   const configureExaChannel = "village:ritual-builder:configure-exa-api-key";
   const removeExaChannel = "village:ritual-builder:remove-exa-api-key";
   const openExaDashboardChannel = "village:ritual-builder:open-exa-dashboard";
+  const gmailStatusChannel =
+    "village:ritual-builder:get-gmail-connection-status";
+  const connectGmailChannel = "village:ritual-builder:connect-gmail";
+  const disconnectGmailChannel = "village:ritual-builder:disconnect-gmail";
   const assertSender = (event: IpcMainInvokeEvent) => {
     if (
       event.sender !== appView.webContents ||
@@ -253,6 +259,36 @@ export async function createRitualBuilderWindow(options: {
     if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
     await options.openExaDashboard();
   });
+  ipcMain.handle(gmailStatusChannel, async (event, ...arguments_) => {
+    assertSender(event);
+    if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
+    return options.gmailCredentials.status();
+  });
+  ipcMain.handle(connectGmailChannel, async (event, ...arguments_) => {
+    assertSender(event);
+    if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
+    return options.gmailCredentials.connect();
+  });
+  ipcMain.handle(disconnectGmailChannel, async (event, ...arguments_) => {
+    assertSender(event);
+    if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
+    const response = await dialog.showMessageBox({
+      type: "warning",
+      title: "Disconnect Gmail from this Mac?",
+      message:
+        "Future inbox-review steps will wait until you reconnect. Existing Rituals and Receipts are unchanged.",
+      buttons: ["Disconnect Gmail", "Keep connected"],
+      defaultId: 1,
+      cancelId: 1,
+      noLink: true,
+    });
+    return response.response === 0
+      ? options.gmailCredentials.disconnect()
+      : {
+          status: "snapshot" as const,
+          snapshot: await options.gmailCredentials.status(),
+        };
+  });
   const cleanup = () => {
     if (closed) return;
     closed = true;
@@ -279,6 +315,9 @@ export async function createRitualBuilderWindow(options: {
     ipcMain.removeHandler(configureExaChannel);
     ipcMain.removeHandler(removeExaChannel);
     ipcMain.removeHandler(openExaDashboardChannel);
+    ipcMain.removeHandler(gmailStatusChannel);
+    ipcMain.removeHandler(connectGmailChannel);
+    ipcMain.removeHandler(disconnectGmailChannel);
     disposeView();
   };
   window.on("close", cleanup);

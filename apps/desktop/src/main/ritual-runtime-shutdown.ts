@@ -1,6 +1,9 @@
+import type { GmailCredentialOperations } from "../gmail/gmail-oauth-controller.js";
+
 export interface RitualShutdownServices {
   scheduler: { close(): Promise<void> };
   controller: { close(): Promise<void> };
+  gmailCredentials: Pick<GmailCredentialOperations, "close">;
 }
 
 export function createRitualShutdownHandler(
@@ -23,6 +26,7 @@ export function createRitualShutdownHandler(
     shutdown = active.scheduler
       .close()
       .then(() => active.controller.close())
+      .then(() => active.gmailCredentials.close())
       .catch(() => undefined)
       .then(() => {
         complete = true;

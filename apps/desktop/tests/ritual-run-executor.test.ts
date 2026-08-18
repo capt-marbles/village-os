@@ -229,6 +229,131 @@ describe("LocalRitualRunExecutor", () => {
     });
   });
 
+  it("creates a bounded metadata-only inbox priority report without mail effects", async () => {
+    const gmailApproved: ApprovedRitualRevision = {
+      ...approved,
+      name: "Inbox priority review",
+      gmailReview: {
+        provider: "GMAIL",
+        scope: "https://www.googleapis.com/auth/gmail.metadata",
+        maxMessages: 25,
+        lookbackDays: 3,
+        unreadOnly: true,
+      },
+    };
+    let run = createRitualRun({
+      approved: gmailApproved,
+      request: {
+        schemaVersion: 1,
+        ritualId: gmailApproved.ritualId,
+        ritualRevision: gmailApproved.ritualRevision,
+      },
+      runId: "rrn_01J00000000000000000000007",
+      createdAt: "2026-08-16T12:00:01.000Z",
+    });
+    run = reduceRitualRun(run, gmailApproved, {
+      type: "START",
+      occurredAt: "2026-08-16T12:00:02.000Z",
+    });
+    const review = vi.fn(async () => ({
+      status: "result" as const,
+      provider: "GMAIL" as const,
+      messages: [
+        {
+          messageNumber: 1,
+          from: "Customer <customer@example.com>",
+          subject: "Urgent: approval needed at www. ",
+          receivedAt: "2026-08-16T11:30:00.000Z",
+          unread: true,
+          labelIds: ["INBOX", "UNREAD", "IMPORTANT"],
+          taint: "UNTRUSTED_GMAIL_METADATA" as const,
+        },
+        {
+          messageNumber: 2,
+          from: "Newsletter <noreply@example.com>",
+          subject: "Weekly digest",
+          receivedAt: "2026-08-16T10:00:00.000Z",
+          unread: true,
+          labelIds: ["INBOX", "UNREAD"],
+          taint: "UNTRUSTED_GMAIL_METADATA" as const,
+        },
+      ],
+    }));
+
+    await expect(
+      new LocalRitualRunExecutor({ gmail: { review } }).completeCurrentStep({
+        approved: gmailApproved,
+        run,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      stepKey: "collect-signals",
+      externalEffects: [],
+      research: null,
+      mailReport: {
+        metadataOnly: true,
+        reviewedMessageCount: 2,
+        priorities: [
+          {
+            messageNumber: 1,
+            from: "Customer <customer@example.com>",
+            subject: "Urgent: approval needed at [link removed]",
+            priority: "HIGH",
+          },
+        ],
+      },
+    });
+    expect(review).toHaveBeenCalledWith(
+      { schemaVersion: 1, ...gmailApproved.gmailReview },
+      {},
+    );
+  });
+
+  it("waits for Gmail authentication without completing or mutating mail", async () => {
+    const gmailApproved: ApprovedRitualRevision = {
+      ...approved,
+      gmailReview: {
+        provider: "GMAIL",
+        scope: "https://www.googleapis.com/auth/gmail.metadata",
+        maxMessages: 25,
+        lookbackDays: 3,
+        unreadOnly: true,
+      },
+    };
+    let run = createRitualRun({
+      approved: gmailApproved,
+      request: {
+        schemaVersion: 1,
+        ritualId: gmailApproved.ritualId,
+        ritualRevision: gmailApproved.ritualRevision,
+      },
+      runId: "rrn_01J00000000000000000000008",
+      createdAt: "2026-08-16T12:00:01.000Z",
+    });
+    run = reduceRitualRun(run, gmailApproved, {
+      type: "START",
+      occurredAt: "2026-08-16T12:00:02.000Z",
+    });
+
+    await expect(
+      new LocalRitualRunExecutor({
+        gmail: {
+          review: async () => ({
+            status: "waiting",
+            provider: "GMAIL",
+            reason: "AUTHENTICATION_REQUIRED",
+          }),
+        },
+      }).completeCurrentStep({ approved: gmailApproved, run }),
+    ).resolves.toEqual({
+      status: "waiting",
+      stepKey: "collect-signals",
+      reason: "AUTHENTICATION_REQUIRED",
+      source: "GMAIL",
+      externalEffects: [],
+    });
+  });
+
   it("retries synthesis from checkpointed evidence without repeating Exa", async () => {
     const researchApproved: ApprovedRitualRevision = {
       ...approved,

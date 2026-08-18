@@ -33,6 +33,8 @@ import {
   ritualRunRequestSchema,
   ritualRunSchema,
   ritualRunStepStateSchema,
+  ritualStarterSchema,
+  gmailReviewForRitualStarter,
   ritualScheduleSchema,
   ritualScheduleUpdateRequestSchema,
   createRitualTestReceipt,
@@ -85,6 +87,122 @@ const draft = {
 };
 
 describe("Ritual contracts", () => {
+  it("pins the inbox-priority starter to a bounded metadata-only Gmail review", () => {
+    const starter = ritualStarterSchema.parse({ kind: "INBOX_PRIORITY" });
+    expect(gmailReviewForRitualStarter(starter)).toEqual({
+      provider: "GMAIL",
+      scope: "https://www.googleapis.com/auth/gmail.metadata",
+      maxMessages: 25,
+      lookbackDays: 3,
+      unreadOnly: true,
+    });
+    const context = ritualStewardContextSchema.parse({
+      schemaVersion: 1,
+      draftId: draft.draftId,
+      requestRevision: 1,
+      ownerPurpose:
+        "Review recent unread inbox metadata and identify likely replies.",
+      starter,
+    });
+    const proposal = {
+      status: "proposal" as const,
+      draftId: draft.draftId,
+      requestRevision: 1,
+      stewardMessage: "I shaped a metadata-only inbox priority review.",
+      name: "Inbox priority review",
+      purpose: context.ownerPurpose,
+      steps: draft.steps,
+      permissions: ["Read Gmail message headers and labels only"],
+      completion: "A metadata-only priority review is ready.",
+    };
+    expect(validateRitualStewardResult(context, proposal)).toEqual(proposal);
+    expect(
+      validateRitualStewardResult(context, {
+        ...proposal,
+        research: draft.research,
+      }),
+    ).toMatchObject({
+      status: "waiting",
+      reason: "MALFORMED_PROVIDER_OUTPUT",
+    });
+  });
+
+  it("does not let learning widen an approved Gmail review", () => {
+    const gmailReview = gmailReviewForRitualStarter({
+      kind: "INBOX_PRIORITY",
+    });
+    const approved = approveRitualDraft(
+      { ...draft, research: undefined, gmailReview },
+      {
+        schemaVersion: 1,
+        draftId: draft.draftId,
+        expectedRevision: draft.revision,
+        ritualId: "rtl_01J00000000000000000000000",
+        approvedAt: "2026-08-17T12:00:00.000Z",
+      },
+    );
+    const receipt = {
+      schemaVersion: 1 as const,
+      receiptId: "rcp_01J00000000000000000000000",
+      runId: "rrn_01J00000000000000000000000",
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      mode: "TEST" as const,
+      outcome: "NEEDS_REVIEW" as const,
+      summary: "The bounded inbox review needs owner review.",
+      evidence: ["Only message metadata was considered."],
+      uncertainties: ["Message bodies were not read."],
+      sampleDigest: "a".repeat(64),
+      sampleCharacterCount: 42,
+      externalEffects: [] as const,
+      recordedAt: "2026-08-17T12:01:00.000Z",
+    };
+    const context = ritualLearningContextSchema.parse({
+      schemaVersion: 1,
+      proposalId: "rlp_01J00000000000000000000000",
+      ritual: approved,
+      receipt,
+      ownerFeedback: "Review fewer recent messages next time.",
+    });
+    const proposal = {
+      status: "proposal" as const,
+      proposalId: context.proposalId,
+      ritualId: approved.ritualId,
+      fromRevision: approved.ritualRevision,
+      receiptId: receipt.receiptId,
+      ownerFeedback: context.ownerFeedback,
+      stewardMessage: "I propose narrowing the inbox review.",
+      rationale: "The owner asked for a smaller review set.",
+      proposedDefinition: {
+        name: approved.name,
+        purpose: approved.purpose,
+        trigger: approved.trigger,
+        steps: approved.steps,
+        permissions: approved.permissions,
+        completion: approved.completion,
+        reviewPolicy: approved.reviewPolicy,
+        gmailReview: { ...gmailReview, maxMessages: 10, lookbackDays: 2 },
+      },
+    };
+    expect(validateRitualLearningResult(context, proposal)).toEqual(proposal);
+    for (const widened of [
+      { ...gmailReview, unreadOnly: false },
+      { ...gmailReview, lookbackDays: 4 },
+    ]) {
+      expect(
+        validateRitualLearningResult(context, {
+          ...proposal,
+          proposedDefinition: {
+            ...proposal.proposedDefinition,
+            gmailReview: widened,
+          },
+        }),
+      ).toMatchObject({
+        status: "waiting",
+        reason: "MALFORMED_PROVIDER_OUTPUT",
+      });
+    }
+  });
   it("binds a bounded Steward follow-up to one Ritual revision", () => {
     const request = ritualStewardFollowUpRequestSchema.parse({
       schemaVersion: 1,
@@ -609,7 +727,7 @@ describe("Ritual contracts", () => {
       completion: "A grounded 30-day signal brief is ready for review.",
       research: {
         provider: "EXA" as const,
-        query: context.starter!.topic,
+        query: "AI coding agents",
         maxResults: 5,
         lookbackDays: 30,
       },

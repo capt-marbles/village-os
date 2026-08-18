@@ -256,6 +256,111 @@ describe("RitualBuilderController", () => {
     expect(JSON.stringify(context.evidence)).not.toMatch(/https?:\/\/|www\./i);
   });
 
+  it("shares only a bounded Gmail aggregate with Steward follow-up", async () => {
+    const gmailApproved = {
+      ...approved,
+      permissions: ["Read Gmail message headers and labels only"],
+      gmailReview: {
+        provider: "GMAIL" as const,
+        scope: "https://www.googleapis.com/auth/gmail.metadata" as const,
+        maxMessages: 25,
+        lookbackDays: 3,
+        unreadOnly: true,
+      },
+    };
+    const runReceipt = {
+      schemaVersion: 1 as const,
+      receiptId: "rcp_01J00000000000000000000019",
+      runId: "rrn_01J00000000000000000000019",
+      ritualId: gmailApproved.ritualId,
+      ritualRevision: gmailApproved.ritualRevision,
+      mode: "RUN" as const,
+      executionProvider: "LOCAL_RITUAL_V1" as const,
+      outcome: "NEEDS_REVIEW" as const,
+      summary: "Inbox priority review is ready.",
+      stepEvidence: [
+        {
+          stepKey: "prepare-review",
+          title: "Prepare the review",
+          actor: gmailApproved.steps[0]!.actor,
+          research: null,
+          report: null,
+          mailReport: {
+            metadataOnly: true as const,
+            reviewedMessageCount: 1,
+            headline: "One high-priority message",
+            summary: "Private sender customer@example.com needs a reply.",
+            priorities: [
+              {
+                messageNumber: 1,
+                from: "Customer <customer@example.com>",
+                subject: "Private acquisition subject",
+                receivedAt: "2026-08-17T12:00:00.000Z",
+                priority: "HIGH" as const,
+                reason: "A response is requested.",
+                responseFocus: "Confirm next steps.",
+                uncertainty: null,
+              },
+            ],
+            uncertainties: ["Message bodies were not read."],
+          },
+        },
+      ],
+      uncertainties: [],
+      externalEffects: [] as const,
+      startedAt: "2026-08-17T12:00:00.000Z",
+      recordedAt: "2026-08-17T12:01:00.000Z",
+    };
+    const repository = {
+      snapshotFor: vi.fn(async () => ({
+        approved: gmailApproved,
+        receipt: null,
+        run: null,
+        runReceipt,
+        learningReview: null,
+        auditTimeline: [],
+      })),
+      latestReceiptFor: vi.fn(async () => runReceipt),
+      ...unusedRunPersistence(),
+    };
+    const provider = {
+      ...unavailableProvider(),
+      followUp: vi.fn(async (context) => ({
+        status: "answer" as const,
+        requestId: context.requestId,
+        ritualId: context.ritualId,
+        ritualRevision: context.ritualRevision,
+        answer: "One message needs attention.",
+      })),
+    };
+    const controller = new RitualBuilderController(
+      provider,
+      repository as never,
+    );
+
+    await controller.followUp({
+      schemaVersion: 1,
+      requestId: "rfu_01J00000000000000000000019",
+      ritualId: gmailApproved.ritualId,
+      ritualRevision: gmailApproved.ritualRevision,
+      question: "What needs attention?",
+    });
+
+    const context = provider.followUp.mock.calls[0]![0];
+    expect(context.ritual.gmailReview).toEqual(gmailApproved.gmailReview);
+    expect(context.evidence?.mode).toBe("RUN");
+    expect(context.evidence?.steps[0]?.mailReport).toEqual({
+      metadataOnly: true,
+      reviewedMessageCount: 1,
+      headline: "One high-priority message",
+      priorityCounts: { high: 1, medium: 0, low: 0 },
+      uncertainties: ["Message bodies were not read."],
+    });
+    expect(JSON.stringify(context)).not.toMatch(
+      /customer@example\.com|Private acquisition subject/,
+    );
+  });
+
   it("answers for an approved Ritual when no Receipt exists", async () => {
     const repository = {
       snapshotFor: vi.fn(async () => ({
@@ -1294,6 +1399,84 @@ describe("RitualBuilderController", () => {
       },
     });
     expect(completeCurrentStep).toHaveBeenCalledTimes(2);
+    expect(repository.completeRun).toHaveBeenCalledOnce();
+  });
+
+  it("persists a completed Gmail priority report in the Run Receipt", async () => {
+    const gmailApproved = {
+      ...automaticApproved,
+      permissions: ["Read Gmail message headers and labels only"],
+      gmailReview: {
+        provider: "GMAIL" as const,
+        scope: "https://www.googleapis.com/auth/gmail.metadata" as const,
+        maxMessages: 25,
+        lookbackDays: 3,
+        unreadOnly: true,
+      },
+    };
+    let currentRun: RitualRun | null = null;
+    const repository = {
+      find: vi.fn(async () => gmailApproved),
+      findNonterminalRun: vi.fn(async () => currentRun),
+      saveRun: vi.fn(async (run: RitualRun) => {
+        currentRun = run;
+      }),
+      completeRun: vi.fn(async (run: RitualRun) => {
+        currentRun = run;
+      }),
+    };
+    const mailReport = {
+      metadataOnly: true as const,
+      reviewedMessageCount: 1,
+      headline: "One message likely needs a response",
+      summary: "A customer asked for an urgent decision.",
+      priorities: [
+        {
+          messageNumber: 1,
+          from: "Customer <customer@example.com>",
+          subject: "Urgent: approval needed today",
+          receivedAt: "2026-08-16T11:30:00.000Z",
+          priority: "HIGH" as const,
+          reason: "The sender requested a decision today.",
+          responseFocus: "Confirm or decline the requested approval.",
+          uncertainty: "The body was not read.",
+        },
+      ],
+      uncertainties: ["Only Gmail metadata was reviewed."],
+    };
+    const completeCurrentStep = vi.fn(async () => ({
+      status: "completed" as const,
+      stepKey: "prepare-review",
+      research: null,
+      report: null,
+      mailReport,
+      externalEffects: [] as const,
+    }));
+    const controller = new RitualBuilderController(
+      unavailableProvider(),
+      repository,
+      {
+        createId: (prefix) =>
+          prefix === "rrn"
+            ? "rrn_01J00000000000000000000018"
+            : "rcp_01J00000000000000000000018",
+        now: () => "2026-08-16T12:08:00.000Z",
+        runExecutor: { completeCurrentStep },
+      },
+    );
+
+    await expect(
+      controller.startRun({
+        schemaVersion: 1,
+        ritualId: gmailApproved.ritualId,
+        ritualRevision: gmailApproved.ritualRevision,
+      }),
+    ).resolves.toMatchObject({
+      status: "receipt",
+      run: { steps: [{ mailReport }] },
+      receipt: { stepEvidence: [{ mailReport }] },
+    });
+    expect(completeCurrentStep).toHaveBeenCalledOnce();
     expect(repository.completeRun).toHaveBeenCalledOnce();
   });
 
