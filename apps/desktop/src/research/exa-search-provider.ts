@@ -7,6 +7,7 @@ import {
 } from "@village/contracts";
 import { z } from "zod";
 import type { ExaCredentialSource } from "./exa-credential-source.js";
+import { readBoundedResponseBody } from "../net/read-bounded-response-body.js";
 
 const EXA_SEARCH_ENDPOINT = "https://api.exa.ai/search";
 const MAX_RESPONSE_BYTES = 512 * 1_024;
@@ -151,7 +152,12 @@ export class ExaSearchProvider implements WebResearchProvider {
       }
       let candidate: unknown;
       try {
-        candidate = JSON.parse(await readBoundedBody(response));
+        candidate = JSON.parse(
+          await readBoundedResponseBody(response, {
+            maxBytes: MAX_RESPONSE_BYTES,
+            errorCode: "EXA_RESPONSE_TOO_LARGE",
+          }),
+        );
       } catch {
         return waiting(
           signal.aborted
@@ -261,34 +267,4 @@ function sourceMatchesDomains(
   return domains.some(
     (domain) => hostname === domain || hostname.endsWith(`.${domain}`),
   );
-}
-
-async function readBoundedBody(response: Response): Promise<string> {
-  const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) {
-    throw new Error("EXA_RESPONSE_TOO_LARGE");
-  }
-  if (!response.body) return "";
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  let bytes = 0;
-  const chunks: string[] = [];
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      bytes += value.byteLength;
-      if (bytes > MAX_RESPONSE_BYTES) {
-        throw new Error("EXA_RESPONSE_TOO_LARGE");
-      }
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-    chunks.push(decoder.decode());
-    return chunks.join("");
-  } catch (error) {
-    await reader.cancel().catch(() => undefined);
-    throw error;
-  } finally {
-    reader.releaseLock();
-  }
 }

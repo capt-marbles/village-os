@@ -50,5 +50,11 @@ contextBridge.exposeInMainWorld(
       ipcRenderer.invoke("village:ritual-builder:remove-exa-api-key"),
     openExaDashboard: () =>
       ipcRenderer.invoke("village:ritual-builder:open-exa-dashboard"),
+    getGmailConnectionStatus: () =>
+      ipcRenderer.invoke("village:ritual-builder:get-gmail-connection-status"),
+    connectGmail: () =>
+      ipcRenderer.invoke("village:ritual-builder:connect-gmail"),
+    disconnectGmail: () =>
+      ipcRenderer.invoke("village:ritual-builder:disconnect-gmail"),
   }),
 );

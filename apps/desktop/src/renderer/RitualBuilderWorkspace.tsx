@@ -42,9 +42,14 @@ import {
   type SetStateAction,
 } from "react";
 import { ExaApiKeyCard, type ExaCredentialBridge } from "./ExaApiKeyCard.js";
+import {
+  GmailConnectionCard,
+  type GmailConnectionBridge,
+} from "./GmailConnectionCard.js";
 import { RitualAutomationPanel } from "./RitualAutomationPanel.js";
 
-export interface RitualBuilderBridge extends ExaCredentialBridge {
+export interface RitualBuilderBridge
+  extends ExaCredentialBridge, GmailConnectionBridge {
   initialize(): Promise<
     RitualLatestSnapshot & {
       identity: RitualBuilderIdentity;
@@ -958,7 +963,12 @@ export function RitualBuilderWorkspace({
             },
           }
         : {})}
-      researchSetup={<ExaApiKeyCard bridge={bridge} />}
+      researchSetup={
+        <>
+          <GmailConnectionCard bridge={bridge} />
+          <ExaApiKeyCard bridge={bridge} />
+        </>
+      }
     />
   );
 }

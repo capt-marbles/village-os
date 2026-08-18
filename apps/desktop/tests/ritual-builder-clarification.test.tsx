@@ -71,6 +71,12 @@ function setup() {
       completion: "A reviewable result is ready.",
     }));
   const activeBridge = {
+    getGmailConnectionStatus: vi.fn(async () => ({
+      provider: "GMAIL" as const,
+      state: "DISCONNECTED" as const,
+    })),
+    connectGmail: vi.fn(),
+    disconnectGmail: vi.fn(),
     getExaCredentialStatus: vi.fn(async () => ({
       provider: "EXA" as const,
       state: "CONFIGURATION_REQUIRED" as const,

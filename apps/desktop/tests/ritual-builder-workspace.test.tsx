@@ -222,6 +222,26 @@ const researchCanceledRun = reduceRitualRun(
 
 function bridge() {
   return {
+    getGmailConnectionStatus: vi.fn(async () => ({
+      provider: "GMAIL" as const,
+      state: "DISCONNECTED" as const,
+    })),
+    connectGmail: vi.fn(async () => ({
+      status: "snapshot" as const,
+      snapshot: {
+        provider: "GMAIL" as const,
+        state: "CONNECTED" as const,
+        accountEmail: "owner@example.com",
+        version: 1,
+      },
+    })),
+    disconnectGmail: vi.fn(async () => ({
+      status: "snapshot" as const,
+      snapshot: {
+        provider: "GMAIL" as const,
+        state: "DISCONNECTED" as const,
+      },
+    })),
     getExaCredentialStatus: vi.fn(async () => ({
       provider: "EXA" as const,
       state: "CONFIGURATION_REQUIRED" as const,

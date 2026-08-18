@@ -11,6 +11,7 @@ import type {
   RitualBuilderIdentity,
   RitualBuilderState,
 } from "./ritual-builder-state.js";
+import { GmailPriorityReport } from "./GmailPriorityReport.js";
 
 const now = () => new Date().toISOString();
 const localTimeZone = () =>
@@ -76,6 +77,14 @@ export function RitualBuilder({
         type: "SUBMIT_STARTER",
         draftId: identity.draftId,
         starter,
+      });
+      return;
+    }
+    if (starterMode === "INBOX_PRIORITY") {
+      onEvent({
+        type: "SUBMIT_STARTER",
+        draftId: identity.draftId,
+        starter: { kind: "INBOX_PRIORITY" },
       });
       return;
     }
@@ -254,6 +263,20 @@ export function RitualBuilder({
                 <strong>30-day signal brief</strong>
                 <small>Track one topic across recent public-web sources</small>
               </button>
+              <button
+                type="button"
+                aria-pressed={starterMode === "INBOX_PRIORITY"}
+                onClick={() => {
+                  setStarterMode("INBOX_PRIORITY");
+                  onDraftDirtyChange?.(false);
+                }}
+              >
+                <span aria-hidden="true">@</span>
+                <strong>Inbox priority review</strong>
+                <small>
+                  Identify likely replies from recent Gmail metadata
+                </small>
+              </button>
             </fieldset>
             <form className="ritual-composer" onSubmit={submitPurpose}>
               {starterMode === "LAST_30_DAYS" ? (
@@ -281,6 +304,18 @@ export function RitualBuilder({
                     or YouTube engagement.
                   </p>
                   <button type="submit">Shape the 30-day brief</button>
+                </>
+              ) : starterMode === "INBOX_PRIORITY" ? (
+                <>
+                  <p>
+                    Review up to 25 unread inbox messages from the previous
+                    three days using headers and labels only.
+                  </p>
+                  <p>
+                    This first version does not read message bodies or
+                    attachments, send replies, or change your mailbox.
+                  </p>
+                  <button type="submit">Shape the inbox review</button>
                 </>
               ) : (
                 <>
@@ -626,6 +661,18 @@ export function RitualBuilder({
               </RitualField>
             ) : null}
 
+            {state.draft.gmailReview ? (
+              <RitualField label="Inbox resource">
+                <strong>Gmail · metadata only</strong>
+                <small>
+                  Up to {state.draft.gmailReview.maxMessages} unread inbox
+                  headers from the previous{" "}
+                  {state.draft.gmailReview.lookbackDays}
+                  days. Message bodies and attachments are not read.
+                </small>
+              </RitualField>
+            ) : null}
+
             <RitualField label="Review">
               <strong>
                 {state.draft.reviewPolicy.ownerReview === "EVERY_RUN"
@@ -711,8 +758,8 @@ export function RitualBuilder({
                 <h3>Run in progress</h3>
                 <p>
                   Village is following the exact approved steps. Public-web
-                  research may use Exa when this Ritual includes it; external
-                  effects remain blocked.
+                  approved resources may read bounded Exa or Gmail metadata;
+                  external effects remain blocked.
                 </p>
                 {state.run ? <RunStepProgress run={state.run} /> : null}
                 {state.phase === "RUNNING_RITUAL" || state.run ? (
@@ -756,7 +803,9 @@ export function RitualBuilder({
                 <h3>
                   {state.run.waitingSource === "STEWARD"
                     ? "Steward report is waiting"
-                    : "Exa research is waiting"}
+                    : state.run.waitingSource === "GMAIL"
+                      ? "Gmail metadata is waiting"
+                      : "Exa research is waiting"}
                 </h3>
                 <p>
                   {resourceWaitingCopy(
@@ -771,7 +820,9 @@ export function RitualBuilder({
                 >
                   {state.run.waitingSource === "STEWARD"
                     ? "Retry report"
-                    : "Retry research"}
+                    : state.run.waitingSource === "GMAIL"
+                      ? "Retry inbox review"
+                      : "Retry research"}
                 </button>
                 <button
                   type="button"
@@ -791,9 +842,11 @@ export function RitualBuilder({
                     : "Run canceled"}
                 </h3>
                 <p>
-                  {state.run.steps.some((step) => step.research)
-                    ? "Public-web research already occurred, but it was read-only; no external mutations occurred. The approved Ritual is unchanged."
-                    : "No public-web research completed and no external mutations occurred. The approved Ritual is unchanged."}
+                  {state.run.steps.some((step) => step.mailReport)
+                    ? "Gmail metadata was read locally, but no message bodies, attachments, or mail mutations were requested. The approved Ritual is unchanged."
+                    : state.run.steps.some((step) => step.research)
+                      ? "Public-web research already occurred, but it was read-only; no external mutations occurred. The approved Ritual is unchanged."
+                      : "No public-web research completed and no external mutations occurred. The approved Ritual is unchanged."}
                 </p>
                 <RunStepProgress run={state.run} />
                 <button
@@ -827,12 +880,19 @@ export function RitualBuilder({
                   <strong>Local Ritual v1</strong>
                   <span>Safety</span>
                   <strong>
-                    {state.runReceipt.stepEvidence.some((step) => step.research)
-                      ? "No external mutations; public-web search only"
-                      : "No external mutations"}
+                    {state.runReceipt.stepEvidence.some(
+                      (step) => step.mailReport,
+                    )
+                      ? "No mail mutations; Gmail metadata only"
+                      : state.runReceipt.stepEvidence.some(
+                            (step) => step.research,
+                          )
+                        ? "No external mutations; public-web search only"
+                        : "No external mutations"}
                   </strong>
                 </div>
                 <RunStepProgress run={state.run} />
+                <GmailPriorityReport receipt={state.runReceipt} />
                 <ResearchReport receipt={state.runReceipt} />
                 <ResearchEvidence receipt={state.runReceipt} />
                 <div className="ritual-receipt__uncertainty">
@@ -1377,6 +1437,24 @@ function resourceWaitingCopy(
   reason: RitualRun["waitingReason"],
   source: NonNullable<RitualRun["waitingSource"]>,
 ): string {
+  if (source === "GMAIL") {
+    switch (reason) {
+      case "AUTHENTICATION_REQUIRED":
+        return "Connect Gmail above, then retry this exact metadata-only Run.";
+      case "RATE_LIMITED":
+        return "Gmail is rate-limiting metadata requests. Wait briefly, then retry this exact Run.";
+      case "TIME_BUDGET_EXHAUSTED":
+        return "The Gmail metadata request took too long. Retry when the connection is stable.";
+      case "CREDENTIAL_STORE_UNAVAILABLE":
+        return "Village cannot access the local Gmail grant. Unlock this Mac and retry.";
+      case "PROVIDER_REQUEST_REJECTED":
+        return "Gmail rejected the bounded metadata request. Review the connection before retrying.";
+      case "MALFORMED_PROVIDER_OUTPUT":
+        return "Gmail returned metadata Village could not safely validate. Retry later.";
+      default:
+        return "Gmail metadata is unavailable on this Mac. Check the connection above, then retry.";
+    }
+  }
   if (source === "STEWARD") {
     switch (reason) {
       case "AUTHENTICATION_REQUIRED":

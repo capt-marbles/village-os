@@ -58,6 +58,9 @@ import { CodexRitualStewardProvider } from "../model-provider/ritual-steward.js"
 import { ExaApiKeyStore } from "../research/exa-api-key-store.js";
 import { ExaCredentialController } from "../research/exa-credential-controller.js";
 import { ExaSearchProvider } from "../research/exa-search-provider.js";
+import { GmailTokenStore } from "../gmail/gmail-token-store.js";
+import { GmailOAuthController } from "../gmail/gmail-oauth-controller.js";
+import { GmailMetadataProvider } from "../gmail/gmail-metadata-provider.js";
 import { installRitualBuilderMenu } from "./ritual-builder-menu.js";
 import { LocalRitualRunExecutor } from "./ritual-run-executor.js";
 import { RitualScheduler } from "./ritual-scheduler.js";
@@ -84,6 +87,7 @@ interface RitualRuntimeServices {
   controller: RitualBuilderController;
   scheduler: RitualScheduler;
   exaCredentials: ExaCredentialController;
+  gmailCredentials: GmailOAuthController;
 }
 app.on(
   "before-quit",
@@ -357,6 +361,7 @@ async function createRitualBuilderSurface(): Promise<RitualBuilderWindow> {
     exaCredentials: services.exaCredentials,
     openExaDashboard: () =>
       shell.openExternal("https://dashboard.exa.ai/api-keys"),
+    gmailCredentials: services.gmailCredentials,
   });
 }
 
@@ -381,6 +386,17 @@ async function createRitualServices(): Promise<RitualRuntimeServices> {
     ),
   );
   const exaCredentials = new ExaCredentialController(exaApiKeyStore);
+  const gmailTokenStore = new GmailTokenStore(
+    new SecretVault(
+      join(app.getPath("userData"), "gmail", "oauth-vault.json"),
+      new ElectronSafeStorageProtector(),
+    ),
+  );
+  const gmailCredentials = new GmailOAuthController({
+    clientId: process.env.VILLAGE_GOOGLE_OAUTH_CLIENT_ID ?? "",
+    tokenStore: gmailTokenStore,
+    openExternal: (url) => shell.openExternal(url),
+  });
   const repository = new RitualRepository(
     join(app.getPath("userData"), "rituals", "approved.json"),
   );
@@ -391,6 +407,7 @@ async function createRitualServices(): Promise<RitualRuntimeServices> {
   const controller = new RitualBuilderController(stewardProvider, repository, {
     runExecutor: new LocalRitualRunExecutor({
       research: new ExaSearchProvider({ credentials: exaApiKeyStore }),
+      gmail: new GmailMetadataProvider({ accessTokens: gmailCredentials }),
       synthesis: stewardProvider,
     }),
     onScheduleChanged: () => scheduler?.wake(),
@@ -400,5 +417,6 @@ async function createRitualServices(): Promise<RitualRuntimeServices> {
     controller,
     scheduler,
     exaCredentials,
+    gmailCredentials,
   };
 }

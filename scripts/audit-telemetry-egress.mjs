@@ -6,12 +6,18 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const telemetryModules = ["apps/desktop/src/main/crash-reporting.ts"];
 const allowedOutboundModules = [
   "apps/desktop/src/research/exa-search-provider.ts",
+  "apps/desktop/src/gmail/gmail-oauth-controller.ts",
+  "apps/desktop/src/gmail/gmail-metadata-provider.ts",
   "apps/desktop/src/main/update-runtime.ts",
 ];
 const exaEgressContract =
   /const EXA_SEARCH_ENDPOINT = ["']https:\/\/api\.exa\.ai\/search["'];[\s\S]*this\.request\(EXA_SEARCH_ENDPOINT,/;
 const updaterEgressContract =
   /export function desktopUpdateFetch[\s\S]*return globalThis\.fetch\(input, init\);[\s\S]*beginTimedFetch\(\s*this\.dependencies\.fetch,\s*this\.dependencies\.policy\.endpoint,[\s\S]*prevalidateManifest\([\s\S]*beginTimedFetch\(\s*this\.dependencies\.fetch,\s*manifest\.artifactUrl,/;
+const gmailOAuthEgressContract =
+  /const AUTHORIZE_ENDPOINT = ["']https:\/\/accounts\.google\.com\/o\/oauth2\/v2\/auth["'];[\s\S]*const TOKEN_ENDPOINT = ["']https:\/\/oauth2\.googleapis\.com\/token["'];[\s\S]*const REVOKE_ENDPOINT = ["']https:\/\/oauth2\.googleapis\.com\/revoke["'];[\s\S]*const PROFILE_ENDPOINT =\s*["']https:\/\/gmail\.googleapis\.com\/gmail\/v1\/users\/me\/profile["'];[\s\S]*bestEffortRequestWithTimeout\(\s*this\.request,\s*REVOKE_ENDPOINT,[\s\S]*this\.request\(TOKEN_ENDPOINT,[\s\S]*this\.request\(PROFILE_ENDPOINT,/;
+const gmailMetadataEgressContract =
+  /const GMAIL_API = ["']https:\/\/gmail\.googleapis\.com\/gmail\/v1\/users\/me["'];[\s\S]*new URL\(`\$\{GMAIL_API\}\/messages`\)[\s\S]*listUrl\.searchParams\.set\(["']fields["'], ["']messages\/id["']\)[\s\S]*new URL\(`\$\{GMAIL_API\}\/messages\/\$\{encodeURIComponent\(id\)\}`\)[\s\S]*url\.searchParams\.set\(["']format["'], ["']METADATA["']\)[\s\S]*["']id,labelIds,internalDate,payload\/headers["']/;
 const sourceRoots = ["apps/desktop/src", "packages/ui/src"];
 
 const outboundTransport =
@@ -36,6 +42,33 @@ export function auditTelemetrySource(source, file) {
     errors.push(`${file} must retain the fixed Exa egress contract`);
   }
   if (
+    file === "apps/desktop/src/gmail/gmail-oauth-controller.ts" &&
+    (!gmailOAuthEgressContract.test(source) ||
+      hasUnexpectedGmailTransport(source) ||
+      JSON.stringify(requestTargets(source)) !==
+        JSON.stringify([
+          "TOKEN_ENDPOINT",
+          "PROFILE_ENDPOINT",
+          "TOKEN_ENDPOINT",
+        ]))
+  ) {
+    errors.push(
+      `${file} must retain fixed Google OAuth and Gmail profile endpoints`,
+    );
+  }
+  if (
+    file === "apps/desktop/src/gmail/gmail-metadata-provider.ts" &&
+    (!gmailMetadataEgressContract.test(source) ||
+      hasUnexpectedGmailTransport(source) ||
+      JSON.stringify(requestTargets(source)) !== JSON.stringify(["url"]) ||
+      /searchParams\.set\(["']q["']/.test(source) ||
+      /["'](?:FULL|RAW|full|raw|snippet|payload\/body|attachment)["']/.test(
+        source,
+      ))
+  ) {
+    errors.push(`${file} must retain metadata-only Gmail API egress`);
+  }
+  if (
     file === "apps/desktop/src/main/update-runtime.ts" &&
     !updaterEgressContract.test(source)
   ) {
@@ -53,6 +86,20 @@ export function auditTelemetrySource(source, file) {
     errors.push(`${file} must retain the compile-time diagnostic allowlist`);
   }
   return errors;
+}
+
+function hasUnexpectedGmailTransport(source) {
+  const runtimeSource = source.replaceAll("typeof globalThis.fetch", "");
+  return (
+    (runtimeSource.match(/\bglobalThis\.fetch\b/g) ?? []).length !== 1 ||
+    /(?<!\.)\bfetch\s*\(/.test(runtimeSource)
+  );
+}
+
+function requestTargets(source) {
+  return [...source.matchAll(/this\.request\(\s*([^,\n]+)/g)].map((match) =>
+    match[1].trim(),
+  );
 }
 
 async function sourceFiles(relative) {

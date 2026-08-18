@@ -25,6 +25,7 @@ export * from "./jobs.js";
 export * from "./model-provider.js";
 export * from "./redaction.js";
 export * from "./research.js";
+export * from "./gmail.js";
 export * from "./rituals.js";
 export * from "./secrets.js";
 export * from "./signatures.js";

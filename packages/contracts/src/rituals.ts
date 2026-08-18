@@ -13,6 +13,12 @@ import {
   webResearchSuccessSchema,
   webResearchWaitingReasonSchema,
 } from "./research.js";
+import {
+  gmailMetadataReviewRequestSchema,
+  gmailMetadataWaitingReasonSchema,
+  gmailOAuthScopeSchema,
+  gmailPriorityReportSchema,
+} from "./gmail.js";
 
 const shortLabelSchema = z.string().trim().min(1).max(80);
 const sentenceSchema = z.string().trim().min(1).max(320);
@@ -23,6 +29,11 @@ export const ritualProviderWaitingReasonSchema = z.enum([
   "MALFORMED_PROVIDER_OUTPUT",
   "TIME_BUDGET_EXHAUSTED",
   "STALE_STEWARD_RESULT",
+]);
+
+export const ritualRunWaitingReasonSchema = z.union([
+  webResearchWaitingReasonSchema,
+  gmailMetadataWaitingReasonSchema,
 ]);
 
 export const ritualTriggerSchema = z.discriminatedUnion("kind", [
@@ -69,10 +80,17 @@ export const ritualResearchSchema = z.strictObject({
     .optional(),
 });
 
+export const ritualGmailReviewSchema = gmailMetadataReviewRequestSchema.omit({
+  schemaVersion: true,
+});
+
 export const ritualStarterSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("LAST_30_DAYS"),
     topic: webResearchRequestSchema.shape.query.max(160),
+  }),
+  z.strictObject({
+    kind: z.literal("INBOX_PRIORITY"),
   }),
 ]);
 
@@ -215,6 +233,7 @@ const ritualDefinition = {
   completion: sentenceSchema,
   reviewPolicy: ritualReviewPolicySchema,
   research: ritualResearchSchema.optional(),
+  gmailReview: ritualGmailReviewSchema.optional(),
 };
 
 export const ritualDraftSchema = z.strictObject({
@@ -407,6 +426,7 @@ export const ritualRunStepStateSchema = z
     completedAt: instantSchema.nullable(),
     research: ritualResearchEvidenceSchema.nullable().optional(),
     report: ritualResearchReportSchema.nullable().optional(),
+    mailReport: gmailPriorityReportSchema.nullable().optional(),
   })
   .superRefine(validateResearchReportBinding);
 
@@ -435,8 +455,11 @@ export const ritualRunSchema = z
     failureCode: z
       .enum(["EXECUTOR_FAILED", "INTERRUPTED", "POLICY_DENIED"])
       .nullable(),
-    waitingReason: webResearchWaitingReasonSchema.nullable().optional(),
-    waitingSource: z.enum(["RESEARCH", "STEWARD"]).nullable().optional(),
+    waitingReason: ritualRunWaitingReasonSchema.nullable().optional(),
+    waitingSource: z
+      .enum(["RESEARCH", "STEWARD", "GMAIL"])
+      .nullable()
+      .optional(),
     createdAt: instantSchema,
     startedAt: instantSchema.nullable(),
     updatedAt: instantSchema,
@@ -583,6 +606,7 @@ export const ritualRunReceiptSchema = z.strictObject({
           actor: ritualActorSchema,
           research: ritualResearchEvidenceSchema.nullable().optional(),
           report: ritualResearchReportSchema.nullable().optional(),
+          mailReport: gmailPriorityReportSchema.nullable().optional(),
         })
         .superRefine(validateResearchReportBinding),
     )
@@ -1035,6 +1059,7 @@ const ritualStewardFollowUpRitualSchema = z.strictObject({
   permissions: ritualDefinition.permissions,
   completion: ritualDefinition.completion,
   reviewPolicy: ritualDefinition.reviewPolicy,
+  gmailReview: ritualDefinition.gmailReview,
 });
 
 const ritualStewardFollowUpReportSchema = z.strictObject({
@@ -1042,6 +1067,18 @@ const ritualStewardFollowUpReportSchema = z.strictObject({
   summary: ritualResearchReportTextSchema(500),
   findings: z.array(ritualResearchReportTextSchema(600)).max(8),
   uncertainties: z.array(ritualResearchReportTextSchema(280)).max(8),
+});
+
+const ritualStewardFollowUpMailAggregateSchema = z.strictObject({
+  metadataOnly: z.literal(true),
+  reviewedMessageCount: z.number().int().min(0).max(25),
+  headline: ritualResearchReportTextSchema(160),
+  priorityCounts: z.strictObject({
+    high: z.number().int().min(0).max(10),
+    medium: z.number().int().min(0).max(10),
+    low: z.number().int().min(0).max(10),
+  }),
+  uncertainties: z.array(ritualResearchReportTextSchema(280)).max(6),
 });
 
 const ritualStewardFollowUpEvidenceSchema = z.discriminatedUnion("mode", [
@@ -1063,6 +1100,9 @@ const ritualStewardFollowUpEvidenceSchema = z.discriminatedUnion("mode", [
           title: shortLabelSchema,
           actor: ritualActorSchema,
           report: ritualStewardFollowUpReportSchema.nullable(),
+          mailReport: ritualStewardFollowUpMailAggregateSchema
+            .nullable()
+            .optional(),
         }),
       )
       .max(6),
@@ -1126,6 +1166,7 @@ export type RitualStewardFollowUpResult = z.infer<
   typeof ritualStewardFollowUpResultSchema
 >;
 export type RitualResearch = z.infer<typeof ritualResearchSchema>;
+export type RitualGmailReview = z.infer<typeof ritualGmailReviewSchema>;
 export type RitualStarter = z.infer<typeof ritualStarterSchema>;
 export type RitualResearchEvidence = z.infer<
   typeof ritualResearchEvidenceSchema
@@ -1234,10 +1275,7 @@ export function validateRitualStewardResult(
   if (
     result.data.status === "proposal" &&
     context.starter &&
-    !matchesStarterResearch(
-      result.data.research,
-      researchForRitualStarter(context.starter),
-    )
+    !matchesStarterResources(context.starter, result.data.research)
   ) {
     return {
       status: "waiting",
@@ -1310,7 +1348,25 @@ export function researchForRitualStarter(
         maxResults: 5,
         lookbackDays: 30,
       });
+    case "INBOX_PRIORITY":
+      throw new Error("INBOX_PRIORITY has no public-web research binding");
   }
+}
+
+export function gmailReviewForRitualStarter(
+  starterCandidate: unknown,
+): RitualGmailReview {
+  const starter = ritualStarterSchema.parse(starterCandidate);
+  if (starter.kind !== "INBOX_PRIORITY") {
+    throw new Error("LAST_30_DAYS has no Gmail review binding");
+  }
+  return ritualGmailReviewSchema.parse({
+    provider: "GMAIL",
+    scope: gmailOAuthScopeSchema.value,
+    maxMessages: 25,
+    lookbackDays: 3,
+    unreadOnly: true,
+  });
 }
 
 export function purposeForRitualStarter(starterCandidate: unknown): string {
@@ -1318,6 +1374,23 @@ export function purposeForRitualStarter(starterCandidate: unknown): string {
   switch (starter.kind) {
     case "LAST_30_DAYS":
       return `Prepare a grounded brief on the most important public-web developments about ${starter.topic} from the last 30 days.`;
+    case "INBOX_PRIORITY":
+      return "Review up to 25 unread inbox message headers from the previous three days and identify which likely need a response, while clearly stating that bodies and attachments are not read.";
+  }
+}
+
+function matchesStarterResources(
+  starter: RitualStarter,
+  research: RitualResearch | undefined,
+): boolean {
+  switch (starter.kind) {
+    case "LAST_30_DAYS":
+      return matchesStarterResearch(
+        research,
+        researchForRitualStarter(starter),
+      );
+    case "INBOX_PRIORITY":
+      return research === undefined;
   }
 }
 
@@ -1368,6 +1441,7 @@ export function createRitualRun(input: {
       completedAt: null,
       research: null,
       report: null,
+      mailReport: null,
     })),
     permissions: approved.permissions,
     externalEffects: [],
@@ -1389,6 +1463,7 @@ export type RitualRunEvent =
       stepKey: string;
       research?: z.infer<typeof ritualResearchEvidenceSchema>;
       report?: z.infer<typeof ritualResearchReportSchema>;
+      mailReport?: z.infer<typeof gmailPriorityReportSchema>;
       occurredAt: string;
     }
   | {
@@ -1399,8 +1474,8 @@ export type RitualRunEvent =
     }
   | {
       type: "WAIT_FOR_RESOURCE";
-      reason: z.infer<typeof webResearchWaitingReasonSchema>;
-      source?: "RESEARCH" | "STEWARD";
+      reason: z.infer<typeof ritualRunWaitingReasonSchema>;
+      source?: "RESEARCH" | "STEWARD" | "GMAIL";
       research?: z.infer<typeof ritualResearchEvidenceSchema>;
       occurredAt: string;
     }
@@ -1565,6 +1640,7 @@ export function reduceRitualRun(
             completedAt: event.occurredAt,
             research: event.research ?? step.research ?? null,
             report: event.report ?? step.report ?? null,
+            mailReport: event.mailReport ?? step.mailReport ?? null,
           }
         : step,
     );
@@ -1671,16 +1747,23 @@ export function createRitualRunReceipt(input: {
       actor: step.actor,
       research: step.research ?? null,
       report: step.report ?? null,
+      mailReport: step.mailReport ?? null,
     })),
-    uncertainties: run.steps.some(
-      (step) => (step.research?.sources.length ?? 0) > 0,
-    )
-      ? ["Web evidence is untrusted source material and requires owner review."]
-      : run.steps.some((step) => step.research != null)
-        ? ["Exa returned no qualifying sources for the approved search window."]
-        : [
-            "No external provider was invoked; this Receipt proves orchestration only.",
-          ],
+    uncertainties: run.steps.some((step) => step.mailReport != null)
+      ? [
+          "Priority is based only on Gmail headers and labels; message bodies and attachments were not read.",
+        ]
+      : run.steps.some((step) => (step.research?.sources.length ?? 0) > 0)
+        ? [
+            "Web evidence is untrusted source material and requires owner review.",
+          ]
+        : run.steps.some((step) => step.research != null)
+          ? [
+              "Exa returned no qualifying sources for the approved search window.",
+            ]
+          : [
+              "No external provider was invoked; this Receipt proves orchestration only.",
+            ],
     externalEffects: [],
     startedAt: run.startedAt,
     recordedAt: input.recordedAt,
@@ -1712,7 +1795,9 @@ export function validateRitualRunReceipt(
         JSON.stringify(evidence.research ?? null) !==
           JSON.stringify(step.research ?? null) ||
         JSON.stringify(evidence.report ?? null) !==
-          JSON.stringify(step.report ?? null)
+          JSON.stringify(step.report ?? null) ||
+        JSON.stringify(evidence.mailReport ?? null) !==
+          JSON.stringify(step.mailReport ?? null)
       );
     })
   ) {
@@ -1758,6 +1843,7 @@ export function approveRitualDraft(
     completion: draft.completion,
     reviewPolicy: draft.reviewPolicy,
     ...(draft.research ? { research: draft.research } : {}),
+    ...(draft.gmailReview ? { gmailReview: draft.gmailReview } : {}),
     approvedAt: request.approvedAt,
   });
 }
@@ -1855,11 +1941,30 @@ export function validateRitualLearningResult(
       !isResearchNoBroader(
         context.ritual.research,
         result.data.proposedDefinition.research,
+      ) ||
+      !isGmailReviewNoBroader(
+        context.ritual.gmailReview,
+        result.data.proposedDefinition.gmailReview,
       ))
   ) {
     return learningWaiting(context, "MALFORMED_PROVIDER_OUTPUT");
   }
   return result.data;
+}
+
+function isGmailReviewNoBroader(
+  current: RitualGmailReview | undefined,
+  proposed: RitualGmailReview | undefined,
+): boolean {
+  if (!current) return !proposed;
+  if (!proposed) return true;
+  return (
+    proposed.provider === current.provider &&
+    proposed.scope === current.scope &&
+    proposed.maxMessages <= current.maxMessages &&
+    proposed.lookbackDays <= current.lookbackDays &&
+    !(current.unreadOnly && !proposed.unreadOnly)
+  );
 }
 
 function isLearningAuthorityNoBroader(
@@ -2002,6 +2107,7 @@ export function ritualDefinitionOf(ritual: ApprovedRitualRevision) {
     completion: ritual.completion,
     reviewPolicy: ritual.reviewPolicy,
     ...(ritual.research ? { research: ritual.research } : {}),
+    ...(ritual.gmailReview ? { gmailReview: ritual.gmailReview } : {}),
   };
 }
 

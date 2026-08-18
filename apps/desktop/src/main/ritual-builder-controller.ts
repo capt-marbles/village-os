@@ -207,6 +207,30 @@ export class RitualBuilderController {
                     ),
                   }
                 : null,
+              mailReport: step.mailReport
+                ? {
+                    metadataOnly: true as const,
+                    reviewedMessageCount: step.mailReport.reviewedMessageCount,
+                    headline: sanitizeFollowUpText(
+                      step.mailReport.headline,
+                      160,
+                    ),
+                    priorityCounts: {
+                      high: step.mailReport.priorities.filter(
+                        (item) => item.priority === "HIGH",
+                      ).length,
+                      medium: step.mailReport.priorities.filter(
+                        (item) => item.priority === "MEDIUM",
+                      ).length,
+                      low: step.mailReport.priorities.filter(
+                        (item) => item.priority === "LOW",
+                      ).length,
+                    },
+                    uncertainties: step.mailReport.uncertainties.map(
+                      (uncertainty) => sanitizeFollowUpText(uncertainty, 280),
+                    ),
+                  }
+                : null,
             })),
             uncertainties: latestReceipt.uncertainties.map((uncertainty) =>
               sanitizeFollowUpText(uncertainty, 280),
@@ -241,6 +265,9 @@ export class RitualBuilderController {
         permissions: snapshot.approved.permissions,
         completion: snapshot.approved.completion,
         reviewPolicy: snapshot.approved.reviewPolicy,
+        ...(snapshot.approved.gmailReview
+          ? { gmailReview: snapshot.approved.gmailReview }
+          : {}),
       },
       evidence,
     });
@@ -871,6 +898,7 @@ export class RitualBuilderController {
           stepKey: executed.stepKey,
           ...(executed.research ? { research: executed.research } : {}),
           ...(executed.report ? { report: executed.report } : {}),
+          ...(executed.mailReport ? { mailReport: executed.mailReport } : {}),
           occurredAt: this.dependencies.now(),
         });
         await this.repository.saveRun(run);
@@ -916,13 +944,13 @@ export class RitualBuilderController {
           approved: ritual,
           run,
           receiptId: this.dependencies.createId("rcp"),
-          summary: run.steps.some(
-            (step) => (step.research?.sources.length ?? 0) > 0,
-          )
-            ? `The local Run completed ${run.steps.length} approved ${run.steps.length === 1 ? "step" : "steps"} with bounded Exa evidence.`
-            : run.steps.some((step) => step.research != null)
-              ? "Exa completed the approved search, but no qualifying sources were found."
-              : `The local Run completed all ${run.steps.length} approved orchestration ${run.steps.length === 1 ? "step" : "steps"}.`,
+          summary: run.steps.some((step) => step.mailReport != null)
+            ? `The local Run reviewed Gmail metadata and completed ${run.steps.length} approved ${run.steps.length === 1 ? "step" : "steps"} without mail mutations.`
+            : run.steps.some((step) => (step.research?.sources.length ?? 0) > 0)
+              ? `The local Run completed ${run.steps.length} approved ${run.steps.length === 1 ? "step" : "steps"} with bounded Exa evidence.`
+              : run.steps.some((step) => step.research != null)
+                ? "Exa completed the approved search, but no qualifying sources were found."
+                : `The local Run completed all ${run.steps.length} approved orchestration ${run.steps.length === 1 ? "step" : "steps"}.`,
           recordedAt: this.dependencies.now(),
         });
         await this.repository.completeRun(run, receipt, { signal });
