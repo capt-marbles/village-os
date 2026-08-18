@@ -10,7 +10,10 @@ import { isTrustedVillageSender, trustedWebPreferences } from "./security.js";
 import type { RitualBuilderController } from "./ritual-builder-controller.js";
 import { createVillageId } from "./local-village-id.js";
 import type { ExaCredentialOperations } from "../research/exa-credential-controller.js";
-import { ritualIdSchema } from "@village/contracts";
+import {
+  ritualIdSchema,
+  ritualStewardFollowUpRequestSchema,
+} from "@village/contracts";
 
 export interface RitualBuilderWindow {
   window: BaseWindow;
@@ -57,6 +60,7 @@ export async function createRitualBuilderWindow(options: {
   const createDraftIdentityChannel =
     "village:ritual-builder:create-draft-identity";
   const draftChannel = "village:ritual-builder:draft";
+  const followUpChannel = "village:ritual-builder:follow-up";
   const selectRitualChannel = "village:ritual-builder:select-ritual";
   const ritualCatalogChannel = "village:ritual-builder:get-rituals";
   const approveChannel = "village:ritual-builder:approve";
@@ -123,6 +127,15 @@ export async function createRitualBuilderWindow(options: {
       throw new Error("STALE_RITUAL_BUILDER_IDENTITY");
     }
     return options.controller.draft(candidate);
+  });
+  ipcMain.handle(followUpChannel, async (event, candidate, ...arguments_) => {
+    assertSender(event);
+    if (arguments_.length !== 0) throw new Error("MALFORMED_IPC_REQUEST");
+    const request = ritualStewardFollowUpRequestSchema.parse(candidate);
+    if (selectedRitualId !== request.ritualId) {
+      throw new Error("STALE_RITUAL_SELECTION");
+    }
+    return options.controller.followUp(request);
   });
   ipcMain.handle(approveChannel, async (event, candidate) => {
     assertSender(event);
@@ -248,6 +261,7 @@ export async function createRitualBuilderWindow(options: {
     ipcMain.removeHandler(selectRitualChannel);
     ipcMain.removeHandler(ritualCatalogChannel);
     ipcMain.removeHandler(draftChannel);
+    ipcMain.removeHandler(followUpChannel);
     ipcMain.removeHandler(approveChannel);
     ipcMain.removeHandler(restoreRevisionChannel);
     ipcMain.removeHandler(testRunChannel);

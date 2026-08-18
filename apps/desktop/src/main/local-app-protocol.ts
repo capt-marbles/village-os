@@ -113,6 +113,15 @@ body { margin: 0; min-width: 320px; min-height: 100vh; background: radial-gradie
 .ritual-composer textarea, .ritual-composer input { width: 100%; resize: vertical; border: 1px solid #405242; border-radius: 1rem; padding: 1rem 1.1rem; color: #f2f5ed; background: #151c16; font: inherit; line-height: 1.5; }
 .ritual-composer button, .ritual-approval button { min-height: 46px; margin-top: .8rem; border: 0; border-radius: 999px; padding: .7rem 1.15rem; color: #11200f; background: #b8e19f; font: 800 .84rem ui-sans-serif, system-ui; cursor: pointer; }
 .ritual-composer > p { margin: .65rem 0 0; color: #8fa08e; font-size: .76rem; line-height: 1.45; }
+.ritual-follow-up { max-width: 710px; margin: 1.5rem auto 0; border-top: 1px solid #283629; padding-top: 1.25rem; }
+.ritual-follow-up__heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .7rem; }
+.ritual-follow-up__heading label { color: #cbd7c7; font-size: .82rem; font-weight: 750; }
+.ritual-follow-up__heading span { border: 1px solid #405242; border-radius: 999px; padding: .28rem .55rem; color: #9fb29d; font-size: .66rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.ritual-follow-up textarea { width: 100%; resize: vertical; border: 1px solid #405242; border-radius: 1rem; padding: .9rem 1rem; color: #f2f5ed; background: #151c16; font: inherit; line-height: 1.5; }
+.ritual-follow-up button { min-height: 42px; margin-top: .7rem; border: 0; border-radius: 999px; padding: .65rem 1rem; color: #11200f; background: #b8e19f; font: 800 .8rem ui-sans-serif, system-ui; cursor: pointer; }
+.ritual-follow-up button:disabled, .ritual-follow-up textarea:disabled { cursor: wait; opacity: .68; }
+.ritual-follow-up small { display: block; margin-top: .55rem; color: #8fa08e; line-height: 1.4; }
+.ritual-follow-up [role="alert"] { color: #efb2a8; }
 .ritual-clarification { margin-top: 1rem; }
 .ritual-test-composer p { margin: .55rem 0 0; color: #8fa08e; font-size: .76rem; line-height: 1.45; }
 .ritual-decisions > div { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; }

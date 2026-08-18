@@ -24,6 +24,10 @@ import {
   validateRitualTestRunResult,
   validateRitualLearningResult,
   ritualStewardContextSchema,
+  ritualStewardFollowUpContextSchema,
+  ritualStewardFollowUpRequestSchema,
+  ritualStewardFollowUpWaiting,
+  validateRitualStewardFollowUpResult,
   validateRitualStewardResult,
   type ApprovedRitualRevision,
   type RitualTestReceipt,
@@ -39,6 +43,7 @@ import {
   type RitualInboxItem,
   type RitualSchedule,
   type RitualStewardResult,
+  type RitualStewardFollowUpResult,
   type RitualAuditTimeline,
   type RitualCatalog,
   type RitualInitialWorkspaceSnapshot,
@@ -68,6 +73,10 @@ export interface RitualPersistence {
     ritualRevision: number,
   ): Promise<ApprovedRitualRevision | null>;
   findReceipt(receiptId: string): Promise<RitualLearningReceipt | null>;
+  latestReceiptFor(
+    ritualId: string,
+    ritualRevision: number,
+  ): Promise<RitualLearningReceipt | null>;
   findLearningProposal(
     proposalId: string,
   ): Promise<RitualLearningProposal | null>;
@@ -160,6 +169,92 @@ export class RitualBuilderController {
       context,
       await this.provider.draft(context),
     );
+  }
+
+  async followUp(candidate: unknown): Promise<RitualStewardFollowUpResult> {
+    const request = ritualStewardFollowUpRequestSchema.parse(candidate);
+    const snapshot = await this.enqueueRun(async () =>
+      this.repository.snapshotFor(request.ritualId),
+    );
+    if (!snapshot?.approved) throw new Error("RITUAL_NOT_FOUND");
+    if (snapshot.approved.ritualRevision !== request.ritualRevision) {
+      throw new Error("STALE_RITUAL_REVISION");
+    }
+    const latestReceipt = await this.enqueueRun(() =>
+      this.repository.latestReceiptFor(
+        request.ritualId,
+        request.ritualRevision,
+      ),
+    );
+    const evidence =
+      latestReceipt?.mode === "RUN"
+        ? {
+            mode: "RUN" as const,
+            outcome: latestReceipt.outcome,
+            summary: sanitizeFollowUpText(latestReceipt.summary, 500),
+            steps: latestReceipt.stepEvidence.slice(0, 6).map((step) => ({
+              title: step.title,
+              actor: step.actor,
+              report: step.report
+                ? {
+                    headline: sanitizeFollowUpText(step.report.headline, 280),
+                    summary: sanitizeFollowUpText(step.report.summary, 500),
+                    findings: step.report.findings.map((finding) =>
+                      sanitizeFollowUpText(finding.claim, 600),
+                    ),
+                    uncertainties: step.report.uncertainties.map(
+                      (uncertainty) => sanitizeFollowUpText(uncertainty, 280),
+                    ),
+                  }
+                : null,
+            })),
+            uncertainties: latestReceipt.uncertainties.map((uncertainty) =>
+              sanitizeFollowUpText(uncertainty, 280),
+            ),
+            externalEffects: latestReceipt.externalEffects.map((effect) =>
+              sanitizeFollowUpText(effect, 280),
+            ),
+          }
+        : latestReceipt?.mode === "TEST"
+          ? {
+              mode: "TEST" as const,
+              outcome: latestReceipt.outcome,
+              summary: sanitizeFollowUpText(latestReceipt.summary, 500),
+              evidence: latestReceipt.evidence.map((item) =>
+                sanitizeFollowUpText(item, 600),
+              ),
+              uncertainties: latestReceipt.uncertainties.map((uncertainty) =>
+                sanitizeFollowUpText(uncertainty, 280),
+              ),
+              externalEffects: latestReceipt.externalEffects.map((effect) =>
+                sanitizeFollowUpText(effect, 280),
+              ),
+            }
+          : null;
+    const context = ritualStewardFollowUpContextSchema.parse({
+      ...request,
+      ritual: {
+        name: snapshot.approved.name,
+        purpose: snapshot.approved.purpose,
+        trigger: snapshot.approved.trigger,
+        steps: snapshot.approved.steps,
+        permissions: snapshot.approved.permissions,
+        completion: snapshot.approved.completion,
+        reviewPolicy: snapshot.approved.reviewPolicy,
+      },
+      evidence,
+    });
+    const result = validateRitualStewardFollowUpResult(
+      context,
+      await this.provider.followUp(context),
+    );
+    const current = await this.enqueueRun(() =>
+      this.repository.snapshotFor(request.ritualId),
+    );
+    if (current?.approved?.ritualRevision !== request.ritualRevision) {
+      return ritualStewardFollowUpWaiting(context, "STALE_STEWARD_RESULT");
+    }
+    return result;
   }
 
   async loadLatestState(): Promise<RitualLatestSnapshot> {
@@ -933,4 +1028,12 @@ function abortable<T>(work: () => Promise<T>, signal: AbortSignal): Promise<T> {
 
 function throwIfRunCanceled(signal: AbortSignal, pending: boolean): void {
   if (signal.aborted || pending) throw new Error("RITUAL_RUN_CANCELED");
+}
+
+function sanitizeFollowUpText(value: string, maximum: number): string {
+  const sanitized = value
+    .replace(/\b(?:https?:\/\/|www\.)\S+/gi, "[link omitted]")
+    .replace(/\s+/g, " ")
+    .trim();
+  return (sanitized || "[source detail omitted]").slice(0, maximum).trim();
 }

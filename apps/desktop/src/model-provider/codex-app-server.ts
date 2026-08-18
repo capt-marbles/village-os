@@ -91,6 +91,7 @@ export type AppServerToolName =
   | "village_ritual_draft"
   | "village_ritual_test_result"
   | "village_ritual_learning_proposal"
+  | "village_ritual_follow_up"
   | "village_ritual_research_report";
 
 export interface AppServerTransport {

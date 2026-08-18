@@ -3,6 +3,7 @@ import {
   instantSchema,
   receiptIdSchema,
   ritualDraftIdSchema,
+  ritualFollowUpIdSchema,
   ritualIdSchema,
   ritualLearningProposalIdSchema,
   ritualRunIdSchema,
@@ -1018,6 +1019,90 @@ export const ritualStewardResultSchema = z.discriminatedUnion("status", [
   }),
 ]);
 
+export const ritualStewardFollowUpRequestSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  requestId: ritualFollowUpIdSchema,
+  ritualId: ritualIdSchema,
+  ritualRevision: z.number().int().positive(),
+  question: z.string().trim().min(3).max(600),
+});
+
+const ritualStewardFollowUpRitualSchema = z.strictObject({
+  name: ritualDefinition.name,
+  purpose: ritualDefinition.purpose,
+  trigger: ritualDefinition.trigger,
+  steps: ritualDefinition.steps,
+  permissions: ritualDefinition.permissions,
+  completion: ritualDefinition.completion,
+  reviewPolicy: ritualDefinition.reviewPolicy,
+});
+
+const ritualStewardFollowUpReportSchema = z.strictObject({
+  headline: ritualResearchReportTextSchema(280),
+  summary: ritualResearchReportTextSchema(500),
+  findings: z.array(ritualResearchReportTextSchema(600)).max(8),
+  uncertainties: z.array(ritualResearchReportTextSchema(280)).max(8),
+});
+
+const ritualStewardFollowUpEvidenceSchema = z.discriminatedUnion("mode", [
+  z.strictObject({
+    mode: z.literal("TEST"),
+    outcome: z.enum(["COMPLETED", "NEEDS_REVIEW"]),
+    summary: ritualResearchReportTextSchema(500),
+    evidence: z.array(ritualResearchReportTextSchema(600)).max(8),
+    uncertainties: z.array(ritualResearchReportTextSchema(280)).max(8),
+    externalEffects: z.array(ritualResearchReportTextSchema(280)).max(8),
+  }),
+  z.strictObject({
+    mode: z.literal("RUN"),
+    outcome: z.enum(["COMPLETED", "NEEDS_REVIEW"]),
+    summary: ritualResearchReportTextSchema(500),
+    steps: z
+      .array(
+        z.strictObject({
+          title: shortLabelSchema,
+          actor: ritualActorSchema,
+          report: ritualStewardFollowUpReportSchema.nullable(),
+        }),
+      )
+      .max(6),
+    uncertainties: z.array(ritualResearchReportTextSchema(280)).max(8),
+    externalEffects: z.array(ritualResearchReportTextSchema(280)).max(8),
+  }),
+]);
+
+export const ritualStewardFollowUpContextSchema =
+  ritualStewardFollowUpRequestSchema.extend({
+    ritual: ritualStewardFollowUpRitualSchema,
+    evidence: ritualStewardFollowUpEvidenceSchema.nullable(),
+  });
+
+export const ritualStewardFollowUpAnswerContentSchema = z.strictObject({
+  answer: ritualResearchReportTextSchema(1_200),
+});
+
+export const ritualStewardFollowUpAnswerContentJsonSchema = z.toJSONSchema(
+  ritualStewardFollowUpAnswerContentSchema,
+);
+
+export const ritualStewardFollowUpResultSchema = z.discriminatedUnion(
+  "status",
+  [
+    ritualStewardFollowUpRequestSchema
+      .pick({ requestId: true, ritualId: true, ritualRevision: true })
+      .extend({
+        status: z.literal("answer"),
+        ...ritualStewardFollowUpAnswerContentSchema.shape,
+      }),
+    ritualStewardFollowUpRequestSchema
+      .pick({ requestId: true, ritualId: true, ritualRevision: true })
+      .extend({
+        status: z.literal("waiting"),
+        reason: ritualProviderWaitingReasonSchema,
+      }),
+  ],
+);
+
 export type RitualDraft = z.infer<typeof ritualDraftSchema>;
 export type RitualApprovalRequest = z.infer<typeof ritualApprovalRequestSchema>;
 export type RitualRevisionRestoreRequest = z.infer<
@@ -1031,6 +1116,15 @@ export type RitualStewardContext = z.infer<typeof ritualStewardContextSchema>;
 export type RitualStewardProposal = z.infer<typeof ritualStewardProposalSchema>;
 export type RitualStewardQuestion = z.infer<typeof ritualStewardQuestionSchema>;
 export type RitualStewardResult = z.infer<typeof ritualStewardResultSchema>;
+export type RitualStewardFollowUpRequest = z.infer<
+  typeof ritualStewardFollowUpRequestSchema
+>;
+export type RitualStewardFollowUpContext = z.infer<
+  typeof ritualStewardFollowUpContextSchema
+>;
+export type RitualStewardFollowUpResult = z.infer<
+  typeof ritualStewardFollowUpResultSchema
+>;
 export type RitualResearch = z.infer<typeof ritualResearchSchema>;
 export type RitualStarter = z.infer<typeof ritualStarterSchema>;
 export type RitualResearchEvidence = z.infer<
@@ -1171,6 +1265,37 @@ export function validateRitualStewardResult(
     }
   }
   return result.data;
+}
+
+export function validateRitualStewardFollowUpResult(
+  contextCandidate: unknown,
+  resultCandidate: unknown,
+): RitualStewardFollowUpResult {
+  const context = ritualStewardFollowUpContextSchema.parse(contextCandidate);
+  const result = ritualStewardFollowUpResultSchema.safeParse(resultCandidate);
+  if (!result.success)
+    return ritualStewardFollowUpWaiting(context, "MALFORMED_PROVIDER_OUTPUT");
+  if (
+    result.data.requestId !== context.requestId ||
+    result.data.ritualId !== context.ritualId ||
+    result.data.ritualRevision !== context.ritualRevision
+  ) {
+    return ritualStewardFollowUpWaiting(context, "STALE_STEWARD_RESULT");
+  }
+  return result.data;
+}
+
+export function ritualStewardFollowUpWaiting(
+  context: RitualStewardFollowUpContext,
+  reason: Extract<RitualStewardFollowUpResult, { status: "waiting" }>["reason"],
+): RitualStewardFollowUpResult {
+  return {
+    status: "waiting",
+    requestId: context.requestId,
+    ritualId: context.ritualId,
+    ritualRevision: context.ritualRevision,
+    reason,
+  };
 }
 
 export function researchForRitualStarter(

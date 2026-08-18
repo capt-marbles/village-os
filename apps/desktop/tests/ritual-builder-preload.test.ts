@@ -31,6 +31,7 @@ describe("Ritual Builder preload", () => {
       "createDraftIdentity",
       "decideLearning",
       "draft",
+      "followUp",
       "getAuditTimeline",
       "getAutomationState",
       "getExaCredentialStatus",
@@ -48,6 +49,7 @@ describe("Ritual Builder preload", () => {
     await bridge.initialize!();
     await bridge.createDraftIdentity!();
     await bridge.draft!({ purpose: "bounded" });
+    await bridge.followUp!({ ritualId: "bounded", question: "bounded" });
     await bridge.approve!({ ritualId: "bounded" });
     await bridge.restoreRevision!({
       ritualId: "bounded",
@@ -75,6 +77,10 @@ describe("Ritual Builder preload", () => {
       ["village:ritual-builder:initialize"],
       ["village:ritual-builder:create-draft-identity"],
       ["village:ritual-builder:draft", { purpose: "bounded" }],
+      [
+        "village:ritual-builder:follow-up",
+        { ritualId: "bounded", question: "bounded" },
+      ],
       ["village:ritual-builder:approve", { ritualId: "bounded" }],
       [
         "village:ritual-builder:restore-revision",

@@ -43,6 +43,7 @@ import {
   type RitualWorkspaceSnapshot,
 } from "@village/contracts";
 import {
+  findLatestLearningReceipt,
   findLearningReceipt,
   inboxFromStore,
   projectAutomationSnapshot,
@@ -382,6 +383,15 @@ export class RitualRepository {
       const store = await this.read();
       return findLearningReceipt(store, receiptId);
     });
+  }
+
+  latestReceiptFor(
+    ritualId: string,
+    ritualRevision: number,
+  ): Promise<RitualLearningReceipt | null> {
+    return this.enqueue(async () =>
+      findLatestLearningReceipt(await this.read(), ritualId, ritualRevision),
+    );
   }
 
   saveLearningProposal(candidate: RitualLearningProposal): Promise<void> {

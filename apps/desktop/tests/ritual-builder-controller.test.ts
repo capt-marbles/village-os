@@ -62,6 +62,9 @@ function unavailableProvider() {
     learn: vi.fn(async () => {
       throw new Error("not used");
     }),
+    followUp: vi.fn(async () => {
+      throw new Error("not used");
+    }),
     close: vi.fn(async () => undefined),
   };
 }
@@ -93,6 +96,272 @@ function createRunningRun(
 }
 
 describe("RitualBuilderController", () => {
+  it("answers a follow-up from the selected Ritual and sanitized latest Receipt", async () => {
+    const runReceipt = {
+      schemaVersion: 1 as const,
+      receiptId: "rcp_01J00000000000000000000009",
+      runId: "rrn_01J00000000000000000000009",
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      mode: "RUN" as const,
+      executionProvider: "LOCAL_RITUAL_V1" as const,
+      outcome: "NEEDS_REVIEW" as const,
+      summary: "The pipeline review is ready.",
+      stepEvidence: [
+        {
+          stepKey: "prepare-review",
+          title: "Prepare the review",
+          actor: approved.steps[0]!.actor,
+          research: null,
+          report: null,
+        },
+      ],
+      uncertainties: ["The final owner priority is unknown."],
+      externalEffects: [] as const,
+      startedAt: "2026-08-17T12:00:00.000Z",
+      recordedAt: "2026-08-17T12:01:00.000Z",
+    };
+    const snapshot = {
+      approved,
+      receipt: null,
+      run: null,
+      runReceipt,
+      learningReview: null,
+      auditTimeline: [],
+    };
+    const repository = {
+      snapshotFor: vi.fn(async () => snapshot),
+      latestReceiptFor: vi.fn(async () => runReceipt),
+      ...unusedRunPersistence(),
+    };
+    const provider = {
+      ...unavailableProvider(),
+      followUp: vi.fn(async (context) => ({
+        status: "answer" as const,
+        requestId: context.requestId,
+        ritualId: context.ritualId,
+        ritualRevision: context.ritualRevision,
+        answer: "Review the unknown final priority before the next Run.",
+      })),
+    };
+    const controller = new RitualBuilderController(
+      provider,
+      repository as never,
+    );
+
+    await expect(
+      controller.followUp({
+        schemaVersion: 1,
+        requestId: "rfu_01J00000000000000000000000",
+        ritualId: approved.ritualId,
+        ritualRevision: approved.ritualRevision,
+        question: "What needs my attention?",
+      }),
+    ).resolves.toMatchObject({ status: "answer" });
+    expect(provider.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ritual: expect.objectContaining({ name: approved.name }),
+        evidence: expect.objectContaining({
+          mode: "RUN",
+          summary: runReceipt.summary,
+        }),
+      }),
+    );
+    await expect(
+      controller.followUp({
+        schemaVersion: 1,
+        requestId: "rfu_01J00000000000000000000001",
+        ritualId: approved.ritualId,
+        ritualRevision: 2,
+        question: "Can this use the prior revision?",
+      }),
+    ).rejects.toThrow("STALE_RITUAL_REVISION");
+    expect(provider.followUp).toHaveBeenCalledOnce();
+    expect(repository.latestReceiptFor).toHaveBeenCalledWith(
+      approved.ritualId,
+      approved.ritualRevision,
+    );
+  });
+
+  it("uses the newest Receipt and removes URLs from its follow-up evidence", async () => {
+    const olderRunReceipt = {
+      schemaVersion: 1 as const,
+      receiptId: "rcp_01J00000000000000000000008",
+      runId: "rrn_01J00000000000000000000008",
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      mode: "RUN" as const,
+      executionProvider: "LOCAL_RITUAL_V1" as const,
+      outcome: "NEEDS_REVIEW" as const,
+      summary: "The older Run is ready.",
+      stepEvidence: [],
+      uncertainties: [],
+      externalEffects: [] as const,
+      startedAt: "2026-08-17T11:00:00.000Z",
+      recordedAt: "2026-08-17T16:00:00.000Z",
+    };
+    const newerTestReceipt = {
+      schemaVersion: 1 as const,
+      receiptId: "rcp_01J00000000000000000000009",
+      runId: "rrn_01J00000000000000000000009",
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      mode: "TEST" as const,
+      outcome: "NEEDS_REVIEW" as const,
+      summary: "Review https://example.com/private before the next Run.",
+      evidence: ["The private source at www.example.com supports review."],
+      uncertainties: ["The source https://example.com may have changed."],
+      sampleDigest: "a".repeat(64),
+      sampleCharacterCount: 42,
+      externalEffects: [] as const,
+      recordedAt: "2026-08-17T12:00:00.000-05:00",
+    };
+    const repository = {
+      snapshotFor: vi.fn(async () => ({
+        approved,
+        receipt: newerTestReceipt,
+        run: null,
+        runReceipt: olderRunReceipt,
+        learningReview: null,
+        auditTimeline: [],
+      })),
+      latestReceiptFor: vi.fn(async () => newerTestReceipt),
+      ...unusedRunPersistence(),
+    };
+    const provider = {
+      ...unavailableProvider(),
+      followUp: vi.fn(async (context) => ({
+        status: "answer" as const,
+        requestId: context.requestId,
+        ritualId: context.ritualId,
+        ritualRevision: context.ritualRevision,
+        answer: "Review the newest Test Receipt.",
+      })),
+    };
+    const controller = new RitualBuilderController(
+      provider,
+      repository as never,
+    );
+
+    await controller.followUp({
+      schemaVersion: 1,
+      requestId: "rfu_01J00000000000000000000002",
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      question: "What changed most recently?",
+    });
+
+    const context = provider.followUp.mock.calls[0]![0];
+    expect(context.evidence).toMatchObject({ mode: "TEST" });
+    expect(JSON.stringify(context.evidence)).not.toMatch(/https?:\/\/|www\./i);
+  });
+
+  it("answers for an approved Ritual when no Receipt exists", async () => {
+    const repository = {
+      snapshotFor: vi.fn(async () => ({
+        approved,
+        receipt: null,
+        run: null,
+        runReceipt: null,
+        learningReview: null,
+        auditTimeline: [],
+      })),
+      latestReceiptFor: vi.fn(async () => null),
+      ...unusedRunPersistence(),
+    };
+    const provider = {
+      ...unavailableProvider(),
+      followUp: vi.fn(async (context) => ({
+        status: "answer" as const,
+        requestId: context.requestId,
+        ritualId: context.ritualId,
+        ritualRevision: context.ritualRevision,
+        answer: "This Ritual has not produced a Receipt yet.",
+      })),
+    };
+    const controller = new RitualBuilderController(
+      provider,
+      repository as never,
+    );
+
+    await expect(
+      controller.followUp({
+        schemaVersion: 1,
+        requestId: "rfu_01J00000000000000000000004",
+        ritualId: approved.ritualId,
+        ritualRevision: approved.ritualRevision,
+        question: "What evidence do we have?",
+      }),
+    ).resolves.toMatchObject({ status: "answer" });
+    expect(provider.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({ evidence: null }),
+    );
+  });
+
+  it("rejects a delayed follow-up after the Ritual revision changes", async () => {
+    let currentApproved = approved;
+    let resolveProvider!: (value: {
+      status: "answer";
+      requestId: string;
+      ritualId: string;
+      ritualRevision: number;
+      answer: string;
+    }) => void;
+    const repository = {
+      snapshotFor: vi.fn(async () => ({
+        approved: currentApproved,
+        receipt: null,
+        run: null,
+        runReceipt: null,
+        learningReview: null,
+        auditTimeline: [],
+      })),
+      latestReceiptFor: vi.fn(async () => null),
+      ...unusedRunPersistence(),
+    };
+    const provider = {
+      ...unavailableProvider(),
+      followUp: vi.fn(
+        async () =>
+          new Promise<{
+            status: "answer";
+            requestId: string;
+            ritualId: string;
+            ritualRevision: number;
+            answer: string;
+          }>((resolve) => {
+            resolveProvider = resolve;
+          }),
+      ),
+    };
+    const controller = new RitualBuilderController(
+      provider,
+      repository as never,
+    );
+    const pending = controller.followUp({
+      schemaVersion: 1,
+      requestId: "rfu_01J00000000000000000000003",
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      question: "Is this still current?",
+    });
+    await vi.waitFor(() => expect(provider.followUp).toHaveBeenCalledOnce());
+    currentApproved = { ...approved, ritualRevision: 2 } as typeof approved;
+    resolveProvider({
+      status: "answer",
+      requestId: "rfu_01J00000000000000000000003",
+      ritualId: approved.ritualId,
+      ritualRevision: approved.ritualRevision,
+      answer: "This answer belongs to revision 1.",
+    });
+
+    await expect(pending).resolves.toMatchObject({
+      status: "waiting",
+      reason: "STALE_STEWARD_RESULT",
+    });
+    expect(repository.snapshotFor).toHaveBeenCalledTimes(2);
+  });
+
   it("lists Rituals and opens one exact persisted snapshot", async () => {
     const snapshot = {
       approved,
