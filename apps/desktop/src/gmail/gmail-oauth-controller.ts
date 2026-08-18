@@ -640,9 +640,8 @@ async function openLoopbackCallback(input: {
       callbackUrl.username ||
       callbackUrl.password ||
       callbackUrl.hash ||
-      Array.from(callbackUrl.searchParams.keys()).some(
-        (key) => !["code", "state", "error"].includes(key),
-      ) ||
+      // OAuth providers may add response parameters. Only fields that affect
+      // authorization are consumed and cardinality checked here.
       callbackUrl.searchParams.getAll("state").length !== 1 ||
       callbackUrl.searchParams.getAll("code").length > 1 ||
       callbackUrl.searchParams.getAll("error").length > 1

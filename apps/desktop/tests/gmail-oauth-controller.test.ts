@@ -90,7 +90,16 @@ describe("Gmail OAuth controller", () => {
       const redirect = authorization.searchParams.get("redirect_uri");
       expect(state).toMatch(/^[A-Za-z0-9_-]{43}$/);
       expect(redirect).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/oauth\/callback$/);
-      await globalThis.fetch(`${redirect}?code=approved-code&state=${state}`);
+      const callback = new URL(redirect!);
+      callback.searchParams.set("state", state!);
+      callback.searchParams.set("code", "approved-code");
+      callback.searchParams.set(
+        "scope",
+        "https://www.googleapis.com/auth/gmail.metadata",
+      );
+      callback.searchParams.set("authuser", "0");
+      callback.searchParams.set("prompt", "consent");
+      await globalThis.fetch(callback);
     });
     const controller = new GmailOAuthController({
       clientId: "desktop-client.apps.googleusercontent.com",
@@ -441,11 +450,6 @@ describe("Gmail OAuth controller", () => {
   });
 
   it.each([
-    [
-      "unknown parameter",
-      (url: URL) => url.searchParams.set("extra", "1"),
-      "OAUTH_CALLBACK_INVALID",
-    ],
     [
       "duplicate state",
       (url: URL) => url.searchParams.append("state", "again"),
