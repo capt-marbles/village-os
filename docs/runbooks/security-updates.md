@@ -9,9 +9,15 @@ The distributable configuration requires hardened runtime, ASAR integrity valida
 Before packaging, provide signing material through Electron Builder's supported `CSC_LINK` or `CSC_NAME` mechanism, one supported Apple notarization credential set, and `VILLAGE_RELEASE_SIGNER_SHA256` with the reviewed certificate fingerprint. Run:
 
 ```sh
+export VILLAGE_RELEASE_METRICS_PATH="$PWD/release/evidence/release-metrics.json"
 pnpm release:validate
 pnpm --filter @village/desktop package:mac:release
 ```
+
+The evidence file and collection procedure are defined in
+`docs/runbooks/release-metrics.md`. Release validation fails before signing when
+the measured setup, recovery, leakage, attention, or replay gates are absent,
+stale, incomplete, or below threshold.
 
 The validation command intentionally fails in an ordinary checkout. This repository has no Apple signing credentials and cannot currently claim a signed or notarized release. Never commit credentials, certificate archives, passwords, API keys, or notarization profiles.
 

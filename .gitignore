@@ -1,6 +1,9 @@
 node_modules/
 dist/
 release/
+!docs/release/
+docs/release/*
+!docs/release/release-metrics.template.json
 .wrangler/
 .vite/
 coverage/

@@ -3,6 +3,9 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { parse } from "yaml";
 
+const rootPackage = JSON.parse(
+  await readFile(new URL("../package.json", import.meta.url), "utf8"),
+);
 const desktopPackage = JSON.parse(
   await readFile(
     new URL("../apps/desktop/package.json", import.meta.url),
@@ -113,6 +116,25 @@ test("the release package audits and emits its CycloneDX SBOM", () => {
   assert.ok(
     release.indexOf("generate:sbom") >
       release.indexOf("verify-packaged-mac.mjs --release"),
+  );
+});
+
+test("release validation fails closed before signing when measured metrics are absent", () => {
+  assert.equal(
+    rootPackage.scripts["release:metrics"],
+    "node scripts/verify-release-metrics.mjs",
+  );
+  assert.match(
+    rootPackage.scripts["release:validate"],
+    /^pnpm release:metrics && /,
+  );
+  const release = desktopPackage.scripts["package:mac:release"];
+  assert.match(release, /pnpm --dir \.\.\/\.\. release:validate/);
+  assert.ok(
+    release.indexOf("release:validate") < release.indexOf("pnpm build"),
+  );
+  assert.ok(
+    release.indexOf("release:validate") < release.indexOf("electron-builder"),
   );
 });
 
