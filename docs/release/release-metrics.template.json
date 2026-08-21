@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "0000000000000000000000000000000000000000",
+  "appVersion": "0.1.0",
+  "recordedAt": "1970-01-01T00:00:00.000Z",
+  "environment": {
+    "platform": "darwin",
+    "architecture": "arm64"
+  },
+  "setup": {
+    "firstLaunchToRetainedSessionMs": [0, 0, 0]
+  },
+  "forcedRecovery": {
+    "scenarios": [
+      {
+        "kind": "TAKEOVER",
+        "attempts": 0,
+        "converged": 0,
+        "duplicateContinuations": 0,
+        "convergenceLatencyMs": []
+      },
+      {
+        "kind": "RECONNECT",
+        "attempts": 0,
+        "converged": 0,
+        "duplicateContinuations": 0,
+        "convergenceLatencyMs": []
+      },
+      {
+        "kind": "RESTART",
+        "attempts": 0,
+        "converged": 0,
+        "duplicateContinuations": 0,
+        "convergenceLatencyMs": []
+      }
+    ]
+  },
+  "leakage": {
+    "corpusCases": 0,
+    "prohibitedMatches": 0
+  },
+  "attention": {
+    "controlHeartbeatMs": 0,
+    "uiPropagationBudgetMs": 0,
+    "scenarios": [
+      { "kind": "OFFLINE", "latencyMs": 0 },
+      { "kind": "CHALLENGE", "latencyMs": 0 }
+    ]
+  },
+  "observerReplay": {
+    "attempts": 0,
+    "stateMatches": 0,
+    "sensitivePayloadMatches": 0
+  }
+}
