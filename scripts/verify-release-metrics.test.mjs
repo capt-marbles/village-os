@@ -12,6 +12,7 @@ import {
 } from "./verify-release-metrics.mjs";
 
 const sourceCommit = "a".repeat(40);
+const validationNowMs = Date.parse("2026-08-20T16:00:00.000Z");
 const execFileAsync = promisify(execFile);
 const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 
@@ -77,6 +78,7 @@ test("accepts measured alpha evidence only when every release metric passes", ()
   const result = verifyReleaseMetrics(passingEvidence(), {
     expectedSourceCommit: sourceCommit,
     expectedAppVersion: "0.1.0",
+    nowMs: validationNowMs,
   });
 
   assert.deepEqual(result, {
@@ -184,7 +186,34 @@ test("rejects stale, incomplete, unsafe, or threshold-missing evidence", () => {
     const errors = validateReleaseMetrics(mutate(passingEvidence()), {
       expectedSourceCommit: sourceCommit,
       expectedAppVersion: "0.1.0",
+      nowMs: validationNowMs,
       ...options,
+    });
+    assert.ok(errors.includes(expected), `${name}: ${errors.join(", ")}`);
+  }
+});
+
+test("rejects evidence older than 24 hours or more than 5 minutes in the future", () => {
+  const cases = [
+    [
+      "stale evidence",
+      new Date(validationNowMs - 24 * 60 * 60 * 1000 - 1).toISOString(),
+      "RELEASE_METRICS_EVIDENCE_STALE",
+    ],
+    [
+      "future-dated evidence",
+      new Date(validationNowMs + 5 * 60 * 1000 + 1).toISOString(),
+      "RELEASE_METRICS_RECORDED_AT_FUTURE",
+    ],
+  ];
+
+  for (const [name, recordedAt, expected] of cases) {
+    const evidence = passingEvidence();
+    evidence.recordedAt = recordedAt;
+    const errors = validateReleaseMetrics(evidence, {
+      expectedSourceCommit: sourceCommit,
+      expectedAppVersion: "0.1.0",
+      nowMs: validationNowMs,
     });
     assert.ok(errors.includes(expected), `${name}: ${errors.join(", ")}`);
   }
@@ -204,6 +233,7 @@ test("rejects malformed and undersampled evidence without throwing", () => {
     validateReleaseMetrics(evidence, {
       expectedSourceCommit: sourceCommit,
       expectedAppVersion: "0.1.0",
+      nowMs: validationNowMs,
     }),
     [
       "RELEASE_METRICS_RECORDED_AT_INVALID",
@@ -257,6 +287,7 @@ test("the release CLI binds evidence to a clean source and its production enviro
     const evidence = passingEvidence();
     evidence.sourceCommit = commit.trim();
     evidence.environment.architecture = process.arch;
+    evidence.recordedAt = new Date().toISOString();
     await writeFile(evidencePath, JSON.stringify(evidence), { mode: 0o600 });
 
     const accepted = await execFileAsync(

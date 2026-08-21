@@ -9,6 +9,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const requiredRecoveryKinds = ["TAKEOVER", "RECONNECT", "RESTART"];
 const requiredAttentionKinds = ["OFFLINE", "CHALLENGE"];
 const maximumEvidenceBytes = 128 * 1024;
+const maximumEvidenceAgeMs = 24 * 60 * 60 * 1000;
+const maximumFutureClockSkewMs = 5 * 60 * 1000;
 
 function isRecord(value) {
   return (
@@ -63,7 +65,12 @@ function hasUniqueRequiredKinds(values, requiredKinds) {
 
 export function validateReleaseMetrics(
   evidence,
-  { expectedSourceCommit, expectedAppVersion, expectedArchitecture } = {},
+  {
+    expectedSourceCommit,
+    expectedAppVersion,
+    expectedArchitecture,
+    nowMs = Date.now(),
+  } = {},
 ) {
   const errors = [];
   if (!isRecord(evidence)) return ["RELEASE_METRICS_SCHEMA_INVALID"];
@@ -102,12 +109,17 @@ export function validateReleaseMetrics(
   ) {
     errors.push("RELEASE_METRICS_APP_VERSION_MISMATCH");
   }
+  const recordedAtMs = Date.parse(evidence.recordedAt);
   if (
     typeof evidence.recordedAt !== "string" ||
-    Number.isNaN(Date.parse(evidence.recordedAt)) ||
+    Number.isNaN(recordedAtMs) ||
     new Date(evidence.recordedAt).toISOString() !== evidence.recordedAt
   ) {
     errors.push("RELEASE_METRICS_RECORDED_AT_INVALID");
+  } else if (nowMs - recordedAtMs > maximumEvidenceAgeMs) {
+    errors.push("RELEASE_METRICS_EVIDENCE_STALE");
+  } else if (recordedAtMs - nowMs > maximumFutureClockSkewMs) {
+    errors.push("RELEASE_METRICS_RECORDED_AT_FUTURE");
   }
   const supportedEnvironment =
     hasExactKeys(evidence.environment, ["platform", "architecture"]) &&

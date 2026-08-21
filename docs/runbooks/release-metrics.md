@@ -14,7 +14,9 @@ account identifiers, credentials, cookies, screenshots, or free-form notes.
    desktop package version, `recordedAt` to a current UTC ISO instant, and the
    architecture of the packaged test Mac. Run the release from that same
    architecture and a clean worktree; tracked or untracked source changes fail
-   the gate because they are not covered by the recorded commit.
+   the gate because they are not covered by the recorded commit. Evidence must
+   be no more than 24 hours old and may be at most 5 minutes ahead of the
+   release Mac's clock.
 3. Measure at least three fresh-owner setup ceremonies from first launch until
    the same local Site Session is retained after restart. Record milliseconds;
    the median must be below ten minutes.
@@ -54,7 +56,8 @@ VILLAGE_RELEASE_METRICS_PATH="$PWD/release/evidence/release-metrics.json" \
 ```
 
 The verifier rejects missing evidence, unknown fields, unsupported platforms,
-stale source commits or app versions, insufficient samples, partial recovery,
-duplicate continuation, leakage, attention latency beyond the declared bound,
-and replay disagreement. Archive the accepted evidence beside the signed
-package, notarization, SBOM, update manifest, and packaged-verifier output.
+stale or future-dated measurements, stale source commits or app versions,
+insufficient samples, partial recovery, duplicate continuation, leakage,
+attention latency beyond the declared bound, and replay disagreement. Archive
+the accepted evidence beside the signed package, notarization, SBOM, update
+manifest, and packaged-verifier output.
