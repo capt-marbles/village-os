@@ -69,7 +69,7 @@ export async function createRuntimeControlPlaneComposition(
     options.controlPlaneUrl.origin,
     options.connectionId ??
       `desktop_${crypto.randomUUID().replaceAll("-", "")}`,
-    deviceIdentity.privateKey,
+    deviceIdentity.signer,
     new FileProtocolSequenceStore(join(stateDirectory, "sequences.json")),
     options.request,
     30_000,

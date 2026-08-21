@@ -47,7 +47,7 @@ describe("desktop encrypted continuity mailbox client", () => {
     });
     const client = new ContinuityMailboxClient({
       baseUrl: new URL("https://village.test"),
-      privateKey: keys.privateKey,
+      signingKey: keys.privateKey,
       sequences: { reserveNext: async () => 7 },
       request,
       now: () => Date.parse("2026-08-15T20:00:00.000Z"),
@@ -95,7 +95,7 @@ describe("desktop encrypted continuity mailbox client", () => {
     });
     const client = new ContinuityMailboxClient({
       baseUrl: new URL("https://village.test"),
-      privateKey: keys.privateKey,
+      signingKey: keys.privateKey,
       sequences: { reserveNext: async () => ++sequence },
       request,
       now: () => Date.parse("2026-08-15T20:00:00.000Z"),
@@ -148,7 +148,7 @@ describe("desktop encrypted continuity mailbox client", () => {
     let sequence = 0;
     const client = new ContinuityMailboxClient({
       baseUrl: new URL("https://village.test"),
-      privateKey: keys.privateKey,
+      signingKey: keys.privateKey,
       sequences: { reserveNext: async () => ++sequence },
       request,
       now: () => Date.parse("2026-08-15T20:00:00.000Z"),
@@ -210,7 +210,7 @@ describe("desktop encrypted continuity mailbox client", () => {
     const observed: unknown[] = [];
     const client = new ContinuityMailboxClient({
       baseUrl: new URL("https://village.test"),
-      privateKey: keys.privateKey,
+      signingKey: keys.privateKey,
       sequences: {
         reserveNext: async (_deviceId, _browserSessionId, scope) => {
           const next = (sequences.get(scope) ?? 0) + 1;
@@ -253,14 +253,14 @@ describe("desktop encrypted continuity mailbox client", () => {
       () =>
         new ContinuityMailboxClient({
           baseUrl: new URL("http://public.example"),
-          privateKey: keys.privateKey,
+          signingKey: keys.privateKey,
           sequences: { reserveNext: async () => 1 },
         }),
     ).toThrow("CONTINUITY_CONTROL_PLANE_URL_UNSAFE");
 
     const malformed = new ContinuityMailboxClient({
       baseUrl: new URL("https://village.test"),
-      privateKey: keys.privateKey,
+      signingKey: keys.privateKey,
       sequences: { reserveNext: async () => 1 },
       request: vi.fn(async () => Response.json({ ok: true, revision: {} })),
     });
@@ -270,7 +270,7 @@ describe("desktop encrypted continuity mailbox client", () => {
 
     const timedOut = new ContinuityMailboxClient({
       baseUrl: new URL("https://village.test"),
-      privateKey: keys.privateKey,
+      signingKey: keys.privateKey,
       sequences: { reserveNext: async () => 1 },
       request: vi.fn(() => new Promise<Response>(() => undefined)),
       timeoutMs: 5,

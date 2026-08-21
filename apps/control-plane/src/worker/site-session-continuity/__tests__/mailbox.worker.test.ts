@@ -51,15 +51,29 @@ function namespace(): DurableObjectNamespace<SiteSessionMailbox> {
 
 async function publicJwk(key: CryptoKey) {
   const exported = await crypto.subtle.exportKey("jwk", key);
+  if (exported.kty === "EC") {
+    return {
+      kty: "EC" as const,
+      crv: "P-256" as const,
+      x: exported.x!,
+      y: exported.y!,
+    };
+  }
   return { kty: "OKP" as const, crv: "Ed25519" as const, x: exported.x! };
 }
 
-async function signedRevision() {
+function signingAlgorithm(key: CryptoKey) {
+  return key.algorithm.name === "ECDSA"
+    ? ({ name: "ECDSA", hash: "SHA-256" } as const)
+    : ("Ed25519" as const);
+}
+
+async function signedRevision(keys = sourceKeys, selectedBinding = binding) {
   const ciphertextBytes = new TextEncoder().encode("opaque-fixture-revision");
   const ciphertext = Buffer.from(ciphertextBytes).toString("base64url");
   const partial = {
     protocolVersion: 1 as const,
-    ...binding,
+    ...selectedBinding,
     revision: 1,
     previousDigest: null,
     issuedAt: "2099-08-15T19:00:00.000Z",
@@ -84,8 +98,8 @@ async function signedRevision() {
   ).toString("hex");
   const unsigned = { ...partial, ciphertext, digest };
   const signature = await crypto.subtle.sign(
-    "Ed25519",
-    sourceKeys.privateKey,
+    signingAlgorithm(keys.privateKey),
+    keys.privateKey,
     canonicalContinuityRevisionBytes(unsigned),
   );
   return encryptedContinuityRevisionSchema.parse({
@@ -94,18 +108,18 @@ async function signedRevision() {
   });
 }
 
-async function signedFetch() {
+async function signedFetch(keys = destinationKeys, selectedBinding = binding) {
   const unsigned = {
     protocolVersion: 1 as const,
-    ...binding,
+    ...selectedBinding,
     sequence: 1,
     afterRevision: 0,
     issuedAt: "2099-08-15T19:00:30.000Z",
     expiresAt: "2099-08-15T19:01:00.000Z",
   };
   const signature = await crypto.subtle.sign(
-    "Ed25519",
-    destinationKeys.privateKey,
+    signingAlgorithm(keys.privateKey),
+    keys.privateKey,
     canonicalContinuityFetchBytes(unsigned),
   );
   return continuityFetchEnvelopeSchema.parse({
@@ -136,6 +150,45 @@ async function signedAcknowledgement(digest: string) {
 }
 
 describe("Site Session ciphertext mailbox", () => {
+  it("accepts hardware-backed P-256 device signatures", async () => {
+    const hardwareBinding = {
+      ...binding,
+      grantId: "cgr_01J00000000000000000000010",
+    } as const;
+    const p256Source = (await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"],
+    )) as CryptoKeyPair;
+    const p256Destination = (await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"],
+    )) as CryptoKeyPair;
+    const stub = namespace().getByName(
+      `${hardwareBinding.principalId}:${hardwareBinding.grantId}`,
+    );
+    await expect(
+      stub.initialize({
+        binding: hardwareBinding,
+        sourceSigningPublicKey: await publicJwk(p256Source.publicKey),
+        destinationSigningPublicKey: await publicJwk(p256Destination.publicKey),
+        createdAt: "2099-08-15T18:59:00.000Z",
+        expiresAt: "2099-08-16T19:00:00.000Z",
+      }),
+    ).resolves.toEqual({ ok: true, initialized: true });
+    const revision = await signedRevision(p256Source, hardwareBinding);
+    await expect(
+      stub.publish(revision, "2099-08-15T19:00:01.000Z"),
+    ).resolves.toEqual({ ok: true, stored: true });
+    await expect(
+      stub.fetchAfter(
+        await signedFetch(p256Destination, hardwareBinding),
+        "2099-08-15T19:00:31.000Z",
+      ),
+    ).resolves.toEqual({ ok: true, revision });
+  });
+
   it("survives eviction and delivers one ordered opaque revision until ack", async () => {
     const stub = namespace().getByName(
       `${binding.principalId}:${binding.grantId}`,

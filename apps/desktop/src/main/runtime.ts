@@ -17,6 +17,7 @@ import {
 } from "./app-window.js";
 import { DeviceIdentityVault } from "./device-identity-vault.js";
 import { ElectronSafeStorageProtector } from "./electron-safe-storage.js";
+import { MacSecureEnclaveProvider } from "./mac-secure-enclave-provider.js";
 import {
   ensureVillageProtocolInstalled,
   registerVillageScheme,
@@ -144,6 +145,18 @@ export async function startVillageRuntime(
   const packagedProtector = app.isPackaged
     ? new ElectronSafeStorageProtector()
     : undefined;
+  const hardwareDeviceKeys =
+    app.isPackaged && process.platform === "darwin"
+      ? MacSecureEnclaveProvider.forHelper(
+          join(
+            process.resourcesPath,
+            "app.asar.unpacked",
+            "dist",
+            "native",
+            "village-secure-enclave",
+          ),
+        )
+      : undefined;
   if (packagedProtector) {
     assertMacOsProfileEncryptionAvailable(
       await packagedProtector.availability(),
@@ -187,6 +200,7 @@ export async function startVillageRuntime(
         new DeviceIdentityVault(
           join(identityDirectory, "device.json"),
           packagedProtector!,
+          hardwareDeviceKeys,
         ),
         new PairingClient(pairingUrl.origin),
         runtimeStore,
@@ -213,6 +227,7 @@ export async function startVillageRuntime(
     const deviceIdentity = await new DeviceIdentityVault(
       join(identityDirectory, "device.json"),
       packagedProtector!,
+      hardwareDeviceKeys,
     ).load();
     const deviceIdentitySource = { load: async () => deviceIdentity };
     automationFence = await createRuntimeControlPlaneAutomationFence({

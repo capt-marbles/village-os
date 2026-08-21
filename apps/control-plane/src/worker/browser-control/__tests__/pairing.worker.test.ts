@@ -39,7 +39,12 @@ async function challenge() {
     principalId,
     deviceId,
     deviceDisplayName: "Andrew's Mac",
-    publicKey: { kty: "OKP", crv: "Ed25519", x: "cHVibGljX2tleQ" },
+    publicKey: {
+      kty: "EC",
+      crv: "P-256",
+      x: "a".repeat(43),
+      y: "b".repeat(43),
+    },
     protection: "HARDWARE_NON_EXPORTABLE",
     secretHash: await hashSecret(pairingSecret),
     now,
@@ -47,6 +52,20 @@ async function challenge() {
 }
 
 describe("device pairing", () => {
+  it("rejects a public key whose declared protection does not match", async () => {
+    await expect(
+      beginPairing(env.VILLAGE_DB, {
+        principalId,
+        deviceId,
+        deviceDisplayName: "Andrew's Mac",
+        publicKey: { kty: "OKP", crv: "Ed25519", x: "cHVibGljX2tleQ" },
+        protection: "HARDWARE_NON_EXPORTABLE",
+        secretHash: await hashSecret(pairingSecret),
+        now,
+      }),
+    ).resolves.toEqual({ ok: false, code: "INVALID_PAIRING_REQUEST" });
+  });
+
   it("requires owner confirmation and consumes the high-entropy secret once", async () => {
     const begun = await challenge();
     if (!begun.ok) throw new Error(begun.code);
@@ -73,6 +92,17 @@ describe("device pairing", () => {
         now,
       }),
     ).toEqual({ ok: true, deviceId });
+    await expect(
+      env.VILLAGE_DB.prepare(
+        `SELECT algorithm, credential_protection AS protection
+         FROM devices WHERE principal_id = ? AND device_id = ?`,
+      )
+        .bind(principalId, deviceId)
+        .first(),
+    ).resolves.toEqual({
+      algorithm: "ES256",
+      protection: "HARDWARE_NON_EXPORTABLE",
+    });
     expect(
       await consumePairing(env.VILLAGE_DB, {
         principalId,
@@ -153,16 +183,26 @@ describe("device pairing", () => {
         principalId,
         deviceId: "dev_01J00000000000000000000001",
         publicKey: { kty: "OKP", crv: "Ed25519", x: "cm90YXRlZA" },
+        protection: "OS_PROTECTED_FALLBACK",
         now,
       }),
     ).toEqual({ ok: true });
     const rotated = await env.VILLAGE_DB.prepare(
-      `SELECT public_key, credential_generation FROM devices
+      `SELECT public_key, algorithm, credential_protection, credential_generation FROM devices
        WHERE principal_id = ? AND device_id = ?`,
     )
       .bind(principalId, "dev_01J00000000000000000000001")
-      .first<{ public_key: string; credential_generation: number }>();
-    expect(rotated).toMatchObject({ credential_generation: 2 });
+      .first<{
+        public_key: string;
+        algorithm: string;
+        credential_protection: string;
+        credential_generation: number;
+      }>();
+    expect(rotated).toMatchObject({
+      algorithm: "Ed25519",
+      credential_protection: "OS_PROTECTED_FALLBACK",
+      credential_generation: 2,
+    });
     expect(JSON.parse(rotated!.public_key)).toMatchObject({ x: "cm90YXRlZA" });
     expect(
       await revokeDevice(
@@ -178,7 +218,7 @@ describe("device pairing", () => {
       deviceId: "dev_01J00000000000000000000002",
       deviceDisplayName: "Rejected host",
       publicKey: { kty: "OKP", crv: "Ed25519", x: "cmVqZWN0ZWQ" },
-      protection: "HARDWARE_NON_EXPORTABLE",
+      protection: "OS_PROTECTED_FALLBACK",
       secretHash: await hashSecret(pairingSecret),
       now,
     });

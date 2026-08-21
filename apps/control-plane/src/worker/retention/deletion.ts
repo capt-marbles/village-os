@@ -69,6 +69,7 @@ export async function exportPrincipalRecords(
     db
       .prepare(
         `SELECT device_id AS deviceId, credential_status AS credentialStatus,
+                algorithm, credential_protection AS credentialProtection,
                 protocol_version AS protocolVersion, created_at AS createdAt,
                 revoked_at AS revokedAt
          FROM devices WHERE principal_id = ? ORDER BY created_at, device_id`,

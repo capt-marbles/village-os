@@ -1,5 +1,6 @@
 import {
-  deviceCredentialSchema,
+  deviceSigningPublicKeySchema,
+  devicePairingMaterialSchema,
   deviceIdSchema,
   instantSchema,
   pairingIdSchema,
@@ -7,14 +8,21 @@ import {
 } from "@village/contracts";
 import { z } from "zod";
 
-const publicKeySchema = deviceCredentialSchema.shape.publicKey;
+const publicKeySchema = deviceSigningPublicKeySchema;
+const [hardwarePairingMaterial, fallbackPairingMaterial] =
+  devicePairingMaterialSchema.options;
 
-const beginPairingSchema = z.strictObject({
+function withPairingMaterial<T extends z.ZodRawShape>(fields: T) {
+  return z.union([
+    z.strictObject({ ...fields, ...hardwarePairingMaterial.shape }),
+    z.strictObject({ ...fields, ...fallbackPairingMaterial.shape }),
+  ]);
+}
+
+const beginPairingSchema = withPairingMaterial({
   principalId: principalIdSchema,
   deviceId: deviceIdSchema,
   deviceDisplayName: z.string().trim().min(1).max(80),
-  publicKey: publicKeySchema,
-  protection: z.enum(["HARDWARE_NON_EXPORTABLE", "OS_PROTECTED_FALLBACK"]),
   secretHash: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   now: instantSchema,
 });
@@ -29,10 +37,9 @@ const consumePairingSchema = pairingOperationSchema.extend({
   secret: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
 });
 
-const rotateCredentialSchema = z.strictObject({
+const rotateCredentialSchema = withPairingMaterial({
   principalId: principalIdSchema,
   deviceId: deviceIdSchema,
-  publicKey: publicKeySchema,
   now: instantSchema,
 });
 
@@ -271,11 +278,21 @@ export async function consumePairing(db: D1Database, candidate: unknown) {
       db
         .prepare(
           `INSERT INTO devices
-           (principal_id, device_id, public_key, credential_status, protocol_version,
+           (principal_id, device_id, public_key, algorithm,
+            credential_protection, credential_status, protocol_version,
             last_accepted_sequence, created_at)
-           VALUES (?, ?, ?, 'ACTIVE', 1, 0, ?)`,
+           VALUES (?, ?, ?, ?, ?, 'ACTIVE', 1, 0, ?)`,
         )
-        .bind(input.principalId, row.device_id, row.public_key_json, input.now),
+        .bind(
+          input.principalId,
+          row.device_id,
+          row.public_key_json,
+          algorithmForKey(
+            publicKeySchema.parse(JSON.parse(row.public_key_json)),
+          ),
+          row.protection,
+          input.now,
+        ),
       db
         .prepare(
           `UPDATE pairing_challenges SET state = 'CONSUMED', consumed_at = ?
@@ -300,12 +317,15 @@ export async function rotateDeviceCredential(
   const result = await db
     .prepare(
       `UPDATE devices
-       SET public_key = ?, protocol_version = 1, last_accepted_sequence = 0,
+       SET public_key = ?, algorithm = ?, credential_protection = ?,
+           protocol_version = 1, last_accepted_sequence = 0,
            credential_generation = credential_generation + 1, rotated_at = ?
        WHERE principal_id = ? AND device_id = ? AND credential_status = 'ACTIVE'`,
     )
     .bind(
       JSON.stringify(input.publicKey),
+      algorithmForKey(input.publicKey),
+      input.protection,
       input.now,
       input.principalId,
       input.deviceId,
@@ -314,6 +334,10 @@ export async function rotateDeviceCredential(
   return result.meta.changes === 1
     ? { ok: true as const }
     : { ok: false as const, code: "DEVICE_NOT_ACTIVE" };
+}
+
+function algorithmForKey(publicKey: z.infer<typeof publicKeySchema>) {
+  return publicKey.kty === "EC" ? "ES256" : "Ed25519";
 }
 
 export async function revokeDevice(

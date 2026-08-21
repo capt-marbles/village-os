@@ -20,6 +20,12 @@ import {
 } from "@village/contracts";
 import type { Cookie, CookiesGetFilter, CookiesSetDetails } from "electron";
 import { z } from "zod";
+import {
+  signDeviceBytes,
+  verifyDeviceBytes,
+  type DeviceSigningKey,
+  type DeviceVerificationKey,
+} from "./device-identity.js";
 
 const fixtureCookieSchema = z
   .strictObject({
@@ -96,7 +102,7 @@ interface CreateEncryptedFixtureRevisionInput {
   cookies: readonly FixtureCookie[];
   issuedAt: string;
   expiresAt: string;
-  sourceSigningKey: CryptoKey;
+  sourceSigningKey: DeviceSigningKey;
   destinationEncryptionKey: CryptoKey;
 }
 
@@ -174,8 +180,7 @@ export async function createEncryptedFixtureRevision(
     ),
   };
   const signature = new Uint8Array(
-    await crypto.subtle.sign(
-      "Ed25519",
+    await signDeviceBytes(
       input.sourceSigningKey,
       canonicalContinuityRevisionBytes(unsigned),
     ),
@@ -191,7 +196,7 @@ export async function openEncryptedFixtureRevision(
   options: {
     binding: ContinuityBinding;
     now: number;
-    sourceSigningKey: CryptoKey;
+    sourceSigningKey: DeviceVerificationKey;
     destinationEncryptionKey: CryptoKey;
   },
 ): Promise<z.infer<typeof fixtureSnapshotSchema>> {
@@ -206,8 +211,7 @@ export async function openEncryptedFixtureRevision(
     throw new Error("CONTINUITY_REVISION_EXPIRED");
   }
   const { signature, ...unsigned } = revision;
-  const verified = await crypto.subtle.verify(
-    "Ed25519",
+  const verified = await verifyDeviceBytes(
     options.sourceSigningKey,
     decode(signature),
     canonicalContinuityRevisionBytes(unsigned),
@@ -348,7 +352,7 @@ interface FixtureContinuitySourceOptions {
   binding: ContinuityBinding;
   journalPath: string;
   cookieStore: FixtureCookieSource;
-  sourceSigningKey: CryptoKey;
+  sourceSigningKey: DeviceSigningKey;
   destinationEncryptionKey: CryptoKey;
   publish(revision: EncryptedContinuityRevision): Promise<{ stored: boolean }>;
   now?: () => number;
@@ -459,7 +463,7 @@ interface FixtureContinuityDestinationOptions {
   binding: ContinuityBinding;
   journalPath: string;
   cookieStore: FixtureCookieStore;
-  sourceSigningKey: CryptoKey;
+  sourceSigningKey: DeviceVerificationKey;
   destinationEncryptionKey: CryptoKey;
   now?: () => number;
 }

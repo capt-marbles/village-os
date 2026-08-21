@@ -31,6 +31,48 @@ const cookies = [
 ];
 
 describe("encrypted Site Session continuity revision", () => {
+  it("authenticates a continuity revision with a hardware-style ES256 signer", async () => {
+    const signing = await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"],
+    );
+    const exported = await crypto.subtle.exportKey("jwk", signing.publicKey);
+    const destinationEncryptionKeys =
+      await generateContinuityEncryptionKeyPair();
+    const revision = await createEncryptedFixtureRevision({
+      binding,
+      revision: 1,
+      previousDigest: null,
+      cookies,
+      issuedAt: "2026-08-15T19:00:00.000Z",
+      expiresAt: "2026-08-16T19:00:00.000Z",
+      sourceSigningKey: {
+        sign: (payload) =>
+          crypto.subtle.sign(
+            { name: "ECDSA", hash: "SHA-256" },
+            signing.privateKey,
+            payload,
+          ),
+      },
+      destinationEncryptionKey: destinationEncryptionKeys.publicKey,
+    });
+
+    await expect(
+      openEncryptedFixtureRevision(revision, {
+        binding,
+        now: Date.parse("2026-08-15T19:01:00.000Z"),
+        sourceSigningKey: {
+          kty: "EC",
+          crv: "P-256",
+          x: exported.x!,
+          y: exported.y!,
+        },
+        destinationEncryptionKey: destinationEncryptionKeys.privateKey,
+      }),
+    ).resolves.toEqual({ schemaVersion: 1, cookies });
+  });
+
   it("crosses an opaque relay and opens only on the bound destination", async () => {
     const sourceSigningKeys = await crypto.subtle.generateKey(
       "Ed25519",

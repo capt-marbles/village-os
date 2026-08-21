@@ -83,7 +83,7 @@ function mailboxClient(
 ) {
   return new ContinuityMailboxClient({
     baseUrl,
-    privateKey,
+    signingKey: privateKey,
     sequences: new FileProtocolSequenceStore(
       join(profilePath, "continuity", "sequences.json"),
     ),
@@ -108,7 +108,7 @@ async function sourceMode(profilePath: string, baseUrl: URL): Promise<void> {
   const activation = new RuntimeContinuityActivation({
     identity,
     journalRoot: join(profilePath, "continuity"),
-    devicePrivateKey: sourceSigningKey,
+    deviceSigningKey: sourceSigningKey,
     recipientPrivateKey: sourceEncryptionKey,
     cookieStore: browserSession.cookies,
     mailbox: mailboxClient(baseUrl, sourceSigningKey, profilePath),
@@ -171,7 +171,7 @@ async function destinationMode(
   const activation = new RuntimeContinuityActivation({
     identity,
     journalRoot: join(profilePath, "continuity"),
-    devicePrivateKey: destinationSigningKey,
+    deviceSigningKey: destinationSigningKey,
     recipientPrivateKey: destinationEncryptionKey,
     cookieStore: browserSession.cookies,
     mailbox: mailboxClient(baseUrl, destinationSigningKey, profilePath),

@@ -7,6 +7,8 @@ import {
   principalIdSchema,
   setupObjectiveSchema,
   continuityGrantIdSchema,
+  devicePairingMaterialSchema,
+  ed25519DevicePublicKeySchema,
 } from "@village/contracts";
 import { z } from "zod";
 import type { Environment } from "../env.js";
@@ -63,6 +65,19 @@ import { consumeAuthenticatedQuota } from "../worker/limits/quotas.js";
 
 const deletionConfirmation = "DELETE_CLOUD_DATA";
 const deletionIdAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+function normalizeLegacyDevicePairingMaterial(candidate: unknown): unknown {
+  if (
+    typeof candidate !== "object" ||
+    candidate === null ||
+    "protection" in candidate ||
+    !("publicKey" in candidate) ||
+    !ed25519DevicePublicKeySchema.safeParse(candidate.publicKey).success
+  ) {
+    return candidate;
+  }
+  return { ...candidate, protection: "OS_PROTECTED_FALLBACK" };
+}
 
 function createDeletionRequestId(): string {
   const random = crypto.getRandomValues(new Uint8Array(26));
@@ -536,7 +551,9 @@ export async function routeRequest(
       if (!csrf.ok) return json(request, environment, csrf, 403);
       const auth = await authenticateRequest(request, environment);
       if (!auth.ok) return json(request, environment, auth, 401);
-      const body = await boundedJson(request);
+      const body = normalizeLegacyDevicePairingMaterial(
+        await boundedJson(request),
+      );
       const result = await beginPairing(environment.VILLAGE_DB, {
         ...(typeof body === "object" && body !== null ? body : {}),
         principalId: auth.principalId,
@@ -649,15 +666,9 @@ export async function routeRequest(
       const auth = await authenticateRequest(request, environment);
       if (!auth.ok) return json(request, environment, auth, 401);
       const deviceId = deviceIdSchema.safeParse(credential[1]);
-      const body = z
-        .strictObject({
-          publicKey: z.strictObject({
-            kty: z.literal("OKP"),
-            crv: z.literal("Ed25519"),
-            x: z.string().min(1).max(128),
-          }),
-        })
-        .safeParse(await boundedJson(request));
+      const body = devicePairingMaterialSchema.safeParse(
+        normalizeLegacyDevicePairingMaterial(await boundedJson(request)),
+      );
       if (!deviceId.success || !body.success)
         return json(
           request,
@@ -669,6 +680,7 @@ export async function routeRequest(
         principalId: auth.principalId,
         deviceId: deviceId.data,
         publicKey: body.data.publicKey,
+        protection: body.data.protection,
         now: new Date().toISOString(),
       });
       return json(request, environment, result, result.ok ? 200 : 404);

@@ -1,29 +1,29 @@
 import {
   browserSessionIdSchema,
+  devicePairingMaterialSchema,
   deviceIdSchema,
   pairingIdSchema,
   principalIdSchema,
+  type PublicPairingRequest,
 } from "@village/contracts";
 import type { DeviceIdentity } from "./device-identity-vault.js";
 import type { PairingClient } from "./pairing-client.js";
 import type { RuntimeIdentity } from "./runtime-identity.js";
 
 interface DeviceIdentitySource {
-  load(): Promise<Pick<DeviceIdentity, "publicJwk" | "protectionBackend">>;
-  create(): Promise<Pick<DeviceIdentity, "publicJwk" | "protectionBackend">>;
+  load(): Promise<
+    Pick<DeviceIdentity, "publicJwk" | "protection" | "protectionBackend">
+  >;
+  create(): Promise<
+    Pick<DeviceIdentity, "publicJwk" | "protection" | "protectionBackend">
+  >;
 }
 
 interface RuntimeIdentitySink {
   store(identity: RuntimeIdentity): Promise<void>;
 }
 
-export interface PublicPairingRequest {
-  deviceId: string;
-  deviceDisplayName: string;
-  publicKey: { kty: "OKP"; crv: "Ed25519"; x: string };
-  protection: "OS_PROTECTED_FALLBACK";
-  secretHash: string;
-}
+export type { PublicPairingRequest } from "@village/contracts";
 
 export interface PairingCompletion {
   principalId: string;
@@ -62,7 +62,8 @@ export async function deviceIdForPublicKey(publicKey: object): Promise<string> {
 
 export class PairingBootstrapService {
   private identity:
-    Pick<DeviceIdentity, "publicJwk" | "protectionBackend"> | undefined;
+    | Pick<DeviceIdentity, "publicJwk" | "protection" | "protectionBackend">
+    | undefined;
   private deviceId: string | undefined;
   private pairedDevice: { principalId: string; deviceId: string } | undefined;
   private pairingSecret: string | undefined;
@@ -105,11 +106,14 @@ export class PairingBootstrapService {
         new TextEncoder().encode(this.pairingSecret),
       ),
     ).toString("base64url");
+    const pairingMaterial = devicePairingMaterialSchema.parse({
+      publicKey: this.identity.publicJwk,
+      protection: this.identity.protection,
+    });
     return {
       deviceId: deviceIdSchema.parse(this.deviceId),
       deviceDisplayName: this.deviceDisplayName,
-      publicKey: this.identity.publicJwk,
-      protection: "OS_PROTECTED_FALLBACK",
+      ...pairingMaterial,
       secretHash,
     };
   }

@@ -17,6 +17,7 @@ import {
   type EncryptedContinuityRevision,
 } from "@village/contracts";
 import { z } from "zod";
+import { signDeviceBytes, type DeviceSigningKey } from "./device-identity.js";
 
 interface ContinuitySequenceStore {
   reserveNext(
@@ -29,7 +30,7 @@ interface ContinuitySequenceStore {
 
 interface ContinuityMailboxClientOptions {
   baseUrl: URL;
-  privateKey: CryptoKey;
+  signingKey: DeviceSigningKey;
   sequences: ContinuitySequenceStore;
   request?: typeof fetch;
   now?: () => number;
@@ -91,9 +92,8 @@ export class ContinuityMailboxClient {
       issuedAt: new Date(issuedAt).toISOString(),
       expiresAt: new Date(issuedAt + 30_000).toISOString(),
     };
-    const signature = await crypto.subtle.sign(
-      "Ed25519",
-      this.options.privateKey,
+    const signature = await signDeviceBytes(
+      this.options.signingKey,
       canonicalContinuityActivationRequestBytes(unsigned),
     );
     const activation = continuityActivationRequestSchema.parse({
@@ -134,9 +134,8 @@ export class ContinuityMailboxClient {
       expiresAt: new Date(issuedAt + 30_000).toISOString(),
       encryptionPublicKey,
     };
-    const signature = await crypto.subtle.sign(
-      "Ed25519",
-      this.options.privateKey,
+    const signature = await signDeviceBytes(
+      this.options.signingKey,
       canonicalContinuityRecipientKeyEnrollmentBytes(unsigned),
     );
     const enrollment = continuityRecipientKeyEnrollmentSchema.parse({
@@ -190,9 +189,8 @@ export class ContinuityMailboxClient {
       issuedAt: new Date(issuedAt).toISOString(),
       expiresAt: new Date(issuedAt + 30_000).toISOString(),
     };
-    const signature = await crypto.subtle.sign(
-      "Ed25519",
-      this.options.privateKey,
+    const signature = await signDeviceBytes(
+      this.options.signingKey,
       canonicalContinuityFetchBytes(unsigned),
     );
     const envelope = continuityFetchEnvelopeSchema.parse({
@@ -225,9 +223,8 @@ export class ContinuityMailboxClient {
       issuedAt: new Date(issuedAt).toISOString(),
       expiresAt: new Date(issuedAt + 30_000).toISOString(),
     };
-    const signature = await crypto.subtle.sign(
-      "Ed25519",
-      this.options.privateKey,
+    const signature = await signDeviceBytes(
+      this.options.signingKey,
       canonicalContinuityAcknowledgementBytes(unsigned),
     );
     const envelope = continuityAcknowledgementEnvelopeSchema.parse({

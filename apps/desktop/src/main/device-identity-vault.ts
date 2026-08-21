@@ -9,7 +9,11 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { dirname } from "node:path";
-import { exportPublicDeviceJwk } from "./device-identity.js";
+import {
+  p256DevicePublicKeySchema,
+  type DeviceSigningPublicKey,
+} from "@village/contracts";
+import { exportPublicDeviceJwk, type DeviceSigner } from "./device-identity.js";
 
 export interface PlatformKeyProtector {
   availability(): Promise<{
@@ -33,12 +37,40 @@ type StoredDeviceIdentity = {
   createdAt: string;
 };
 
-export type DeviceIdentity = {
-  privateKey: CryptoKey;
-  publicKey: CryptoKey;
-  publicJwk: StoredDeviceIdentity["publicKey"];
+type StoredHardwareDeviceIdentity = {
+  version: 2;
+  algorithm: "ES256";
+  wrappedKey: string;
+  publicKey: Extract<DeviceSigningPublicKey, { kty: "EC" }>;
   protectionBackend: string;
+  createdAt: string;
 };
+
+export interface HardwareDeviceKeyProvider {
+  availability(): Promise<{ available: boolean; backend: string }>;
+  create(): Promise<{
+    wrappedKey: string;
+    publicKey: StoredHardwareDeviceIdentity["publicKey"];
+  }>;
+  publicKey(
+    wrappedKey: string,
+  ): Promise<StoredHardwareDeviceIdentity["publicKey"]>;
+  sign(wrappedKey: string, payload: ArrayBuffer): Promise<ArrayBuffer>;
+}
+
+export type DeviceIdentity =
+  | {
+      signer: DeviceSigner;
+      publicJwk: Extract<DeviceSigningPublicKey, { kty: "EC" }>;
+      protection: "HARDWARE_NON_EXPORTABLE";
+      protectionBackend: string;
+    }
+  | {
+      signer: DeviceSigner;
+      publicJwk: Extract<DeviceSigningPublicKey, { kty: "OKP" }>;
+      protection: "OS_PROTECTED_FALLBACK";
+      protectionBackend: string;
+    };
 
 function encode(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64url");
@@ -54,8 +86,32 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return buffer;
 }
 
-function parseStoredIdentity(value: string): StoredDeviceIdentity {
-  const candidate = JSON.parse(value) as Partial<StoredDeviceIdentity>;
+function parseStoredIdentity(
+  value: string,
+): StoredDeviceIdentity | StoredHardwareDeviceIdentity {
+  const candidate = JSON.parse(value) as
+    Partial<StoredDeviceIdentity> | Partial<StoredHardwareDeviceIdentity>;
+  if (candidate.version === 2) {
+    const hardware = candidate as Partial<StoredHardwareDeviceIdentity>;
+    const publicKey = p256DevicePublicKeySchema.safeParse(hardware.publicKey);
+    if (
+      hardware.algorithm !== "ES256" ||
+      typeof hardware.wrappedKey !== "string" ||
+      hardware.wrappedKey.length < 8 ||
+      hardware.wrappedKey.length > 16_384 ||
+      !publicKey.success ||
+      typeof hardware.protectionBackend !== "string" ||
+      hardware.protectionBackend.length === 0 ||
+      typeof hardware.createdAt !== "string" ||
+      Number.isNaN(Date.parse(hardware.createdAt))
+    ) {
+      throw new Error("DEVICE_IDENTITY_CORRUPT");
+    }
+    return {
+      ...hardware,
+      publicKey: publicKey.data,
+    } as StoredHardwareDeviceIdentity;
+  }
   if (
     candidate.version !== 1 ||
     candidate.algorithm !== "Ed25519" ||
@@ -77,10 +133,10 @@ export class DeviceIdentityVault {
   constructor(
     private readonly path: string,
     private readonly protector: PlatformKeyProtector,
+    private readonly hardware?: HardwareDeviceKeyProvider,
   ) {}
 
   async create(): Promise<DeviceIdentity> {
-    const protection = await this.requireProtection();
     try {
       await lstat(this.path);
       throw new Error("DEVICE_IDENTITY_ALREADY_EXISTS");
@@ -94,6 +150,25 @@ export class DeviceIdentityVault {
       }
     }
 
+    if (this.hardware) {
+      const availability = await this.hardware.availability();
+      if (availability.available) {
+        const created = await this.hardware.create();
+        const publicKey = p256DevicePublicKeySchema.parse(created.publicKey);
+        const stored: StoredHardwareDeviceIdentity = {
+          version: 2,
+          algorithm: "ES256",
+          wrappedKey: created.wrappedKey,
+          publicKey,
+          protectionBackend: availability.backend,
+          createdAt: new Date().toISOString(),
+        };
+        await this.write(stored, true);
+        return this.hardwareIdentity(stored);
+      }
+    }
+
+    const protection = await this.requireProtection();
     const generated = await crypto.subtle.generateKey("Ed25519", true, [
       "sign",
       "verify",
@@ -120,7 +195,6 @@ export class DeviceIdentityVault {
   }
 
   async load(): Promise<DeviceIdentity> {
-    await this.requireProtection();
     const metadata = await lstat(this.path);
     if (metadata.isSymbolicLink() || !metadata.isFile()) {
       throw new Error("DEVICE_IDENTITY_UNSAFE_PATH");
@@ -130,12 +204,28 @@ export class DeviceIdentityVault {
     }
     const raw = await readFile(this.path, "utf8");
     if (raw.length > 32_768) throw new Error("DEVICE_IDENTITY_CORRUPT");
-    let stored: StoredDeviceIdentity;
+    let stored: StoredDeviceIdentity | StoredHardwareDeviceIdentity;
     try {
       stored = parseStoredIdentity(raw);
     } catch {
       throw new Error("DEVICE_IDENTITY_CORRUPT");
     }
+    if (stored.version === 2) {
+      if (!this.hardware) throw new Error("SECURE_ENCLAVE_HELPER_UNAVAILABLE");
+      const availability = await this.hardware.availability();
+      if (!availability.available) {
+        throw new Error("SECURE_ENCLAVE_UNAVAILABLE");
+      }
+      const publicKey = await this.hardware.publicKey(stored.wrappedKey);
+      if (
+        JSON.stringify(p256DevicePublicKeySchema.parse(publicKey)) !==
+        JSON.stringify(stored.publicKey)
+      ) {
+        throw new Error("DEVICE_IDENTITY_CORRUPT");
+      }
+      return this.hardwareIdentity(stored);
+    }
+    await this.requireProtection();
     const decrypted = await this.protector.decrypt(
       decode(stored.encryptedPrivateKey),
     );
@@ -190,23 +280,32 @@ export class DeviceIdentityVault {
       false,
       ["sign"],
     );
-    const publicKey = await crypto.subtle.importKey(
-      "jwk",
-      stored.publicKey,
-      "Ed25519",
-      true,
-      ["verify"],
-    );
     return {
-      privateKey,
-      publicKey,
+      signer: {
+        sign: (payload) => crypto.subtle.sign("Ed25519", privateKey, payload),
+      },
       publicJwk: stored.publicKey,
+      protection: "OS_PROTECTED_FALLBACK",
+      protectionBackend: stored.protectionBackend,
+    };
+  }
+
+  private hardwareIdentity(
+    stored: StoredHardwareDeviceIdentity,
+  ): DeviceIdentity {
+    if (!this.hardware) throw new Error("SECURE_ENCLAVE_HELPER_UNAVAILABLE");
+    return {
+      signer: {
+        sign: (payload) => this.hardware!.sign(stored.wrappedKey, payload),
+      },
+      publicJwk: stored.publicKey,
+      protection: "HARDWARE_NON_EXPORTABLE",
       protectionBackend: stored.protectionBackend,
     };
   }
 
   private async write(
-    stored: StoredDeviceIdentity,
+    stored: StoredDeviceIdentity | StoredHardwareDeviceIdentity,
     createOnly: boolean,
   ): Promise<void> {
     const directory = dirname(this.path);

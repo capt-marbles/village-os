@@ -19,7 +19,7 @@ export async function createRuntimeContinuityMailboxClient(
   const deviceIdentity = await loadPairedDeviceIdentity(options);
   return new ContinuityMailboxClient({
     baseUrl: options.controlPlaneUrl,
-    privateKey: deviceIdentity.privateKey,
+    signingKey: deviceIdentity.signer,
     sequences: new FileProtocolSequenceStore(
       join(options.userDataPath, "continuity", "sequences.json"),
     ),

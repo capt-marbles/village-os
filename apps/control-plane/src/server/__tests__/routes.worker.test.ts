@@ -347,7 +347,7 @@ describe("authenticated pairing routes", () => {
       deviceId: "dev_01J00000000000000000000000",
       deviceDisplayName: "Andrew's Mac",
       publicKey: { kty: "OKP", crv: "Ed25519", x: "cHVibGljX2tleQ" },
-      protection: "HARDWARE_NON_EXPORTABLE",
+      protection: "OS_PROTECTED_FALLBACK",
       secretHash: await hashSecret(pairingSecret),
     });
     const missing = await SELF.fetch(
@@ -544,7 +544,6 @@ describe("authenticated pairing routes", () => {
           deviceId: "dev_01J00000000000000000000000",
           deviceDisplayName: "Andrew's Mac",
           publicKey: { kty: "OKP", crv: "Ed25519", x: "cHVibGljX2tleQ" },
-          protection: "HARDWARE_NON_EXPORTABLE",
           secretHash: await hashSecret(pairingSecret),
         }),
       }),
@@ -610,6 +609,66 @@ describe("authenticated pairing routes", () => {
     await expect(consumedStatus.json()).resolves.toMatchObject({
       ok: true,
       pairing: { state: "CONSUMED" },
+    });
+
+    const rotated = await SELF.fetch(
+      new Request(
+        "https://village.test/api/devices/dev_01J00000000000000000000000/credential",
+        {
+          method: "PUT",
+          headers: ownerHeaders,
+          body: JSON.stringify({
+            publicKey: {
+              kty: "EC",
+              crv: "P-256",
+              x: "a".repeat(43),
+              y: "b".repeat(43),
+            },
+            protection: "HARDWARE_NON_EXPORTABLE",
+          }),
+        },
+      ),
+    );
+    expect(rotated.status).toBe(200);
+    await expect(
+      env.VILLAGE_DB.prepare(
+        `SELECT algorithm, credential_protection AS protection
+         FROM devices WHERE principal_id = ? AND device_id = ?`,
+      )
+        .bind(principalId, "dev_01J00000000000000000000000")
+        .first(),
+    ).resolves.toEqual({
+      algorithm: "ES256",
+      protection: "HARDWARE_NON_EXPORTABLE",
+    });
+
+    const legacyRotation = await SELF.fetch(
+      new Request(
+        "https://village.test/api/devices/dev_01J00000000000000000000000/credential",
+        {
+          method: "PUT",
+          headers: ownerHeaders,
+          body: JSON.stringify({
+            publicKey: {
+              kty: "OKP",
+              crv: "Ed25519",
+              x: "cHVibGljX2tleQ",
+            },
+          }),
+        },
+      ),
+    );
+    expect(legacyRotation.status).toBe(200);
+    await expect(
+      env.VILLAGE_DB.prepare(
+        `SELECT algorithm, credential_protection AS protection
+         FROM devices WHERE principal_id = ? AND device_id = ?`,
+      )
+        .bind(principalId, "dev_01J00000000000000000000000")
+        .first(),
+    ).resolves.toEqual({
+      algorithm: "Ed25519",
+      protection: "OS_PROTECTED_FALLBACK",
     });
 
     const wrongRevoke = await SELF.fetch(

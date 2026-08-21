@@ -8,7 +8,7 @@ import {
   continuityGrantStatusResponseSchema,
   continuityRecipientKeyEnrollmentSchema,
   continuityRecipientKeyRevocationSchema,
-  deviceCredentialSchema,
+  deviceSigningPublicKeySchema,
   encryptedContinuityRevisionSchema,
   principalIdSchema,
   x25519PublicKeySchema,
@@ -832,14 +832,14 @@ function mailbox(
 
 function parseSigningKey(value: string) {
   try {
-    return deviceCredentialSchema.shape.publicKey.parse(JSON.parse(value));
+    return deviceSigningPublicKeySchema.parse(JSON.parse(value));
   } catch {
     return null;
   }
 }
 
 function parseRequiredSigningKey(value: string) {
-  return deviceCredentialSchema.shape.publicKey.parse(JSON.parse(value));
+  return deviceSigningPublicKeySchema.parse(JSON.parse(value));
 }
 
 function parseRequiredEncryptionKey(value: string) {
@@ -847,10 +847,15 @@ function parseRequiredEncryptionKey(value: string) {
 }
 
 function sameSigningKey(
-  left: { kty: "OKP"; crv: "Ed25519"; x: string },
-  right: { kty: "OKP"; crv: "Ed25519"; x: string },
+  left: ReturnType<typeof parseRequiredSigningKey>,
+  right: ReturnType<typeof parseRequiredSigningKey>,
 ) {
-  return left.kty === right.kty && left.crv === right.crv && left.x === right.x;
+  return (
+    left.kty === right.kty &&
+    left.crv === right.crv &&
+    left.x === right.x &&
+    (left.kty !== "EC" || (right.kty === "EC" && left.y === right.y))
+  );
 }
 
 function sameBinding(row: GrantRow, binding: ContinuityBinding) {
