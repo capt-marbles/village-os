@@ -69,6 +69,30 @@ describe("pairing setup client", () => {
     });
   });
 
+  it("accepts only a protection-bound P-256 hardware request", () => {
+    const hardwareRequest = {
+      ...publicRequest,
+      publicKey: {
+        kty: "EC",
+        crv: "P-256",
+        x: "a".repeat(43),
+        y: "b".repeat(43),
+      },
+      protection: "HARDWARE_NON_EXPORTABLE",
+    };
+    expect(parsePublicPairingRequest(JSON.stringify(hardwareRequest))).toEqual(
+      hardwareRequest,
+    );
+    expect(() =>
+      parsePublicPairingRequest(
+        JSON.stringify({
+          ...hardwareRequest,
+          protection: "OS_PROTECTED_FALLBACK",
+        }),
+      ),
+    ).toThrow("PAIRING_REQUEST_INVALID");
+  });
+
   it("begins, confirms, polls, and creates one local LinkedIn session with CSRF", async () => {
     const request = vi
       .fn<typeof fetch>()

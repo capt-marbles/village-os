@@ -6,7 +6,7 @@ import {
   instantSchema,
   principalIdSchema,
 } from "./ids.js";
-import { deviceCredentialSchema } from "./hosts.js";
+import { deviceSigningPublicKeySchema } from "./hosts.js";
 
 export const continuityBindingSchema = z.strictObject({
   principalId: principalIdSchema,
@@ -256,7 +256,7 @@ export const continuityActivationRequestSchema =
 
 const continuityActivationBase = {
   binding: continuityBindingSchema,
-  peerSigningPublicKey: deviceCredentialSchema.shape.publicKey,
+  peerSigningPublicKey: deviceSigningPublicKeySchema,
 };
 
 export const continuityActivationSchema = z.discriminatedUnion("role", [

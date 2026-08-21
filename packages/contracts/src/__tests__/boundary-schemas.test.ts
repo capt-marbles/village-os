@@ -87,6 +87,33 @@ describe("portable trust-boundary schemas", () => {
         .success,
     ).toBe(false);
 
+    const hardwareCredential = {
+      ...credential,
+      algorithm: "ES256",
+      publicKey: {
+        kty: "EC",
+        crv: "P-256",
+        x: "a".repeat(43),
+        y: "b".repeat(43),
+      },
+      protection: "HARDWARE_NON_EXPORTABLE",
+    };
+    expect(deviceCredentialSchema.safeParse(hardwareCredential).success).toBe(
+      true,
+    );
+    expect(
+      deviceCredentialSchema.safeParse({
+        ...hardwareCredential,
+        protection: "OS_PROTECTED_FALLBACK",
+      }).success,
+    ).toBe(false);
+    expect(
+      deviceCredentialSchema.safeParse({
+        ...credential,
+        protection: "HARDWARE_NON_EXPORTABLE",
+      }).success,
+    ).toBe(false);
+
     const operation = {
       authorizationId: "opa_01J00000000000000000000000",
       issuer: "DESKTOP_MAIN",

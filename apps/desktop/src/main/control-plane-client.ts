@@ -11,6 +11,7 @@ import {
   automationSyncResponseSchema,
   workflowOperationResponseSchema,
 } from "@village/contracts";
+import type { DeviceSigningKey } from "./device-identity.js";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
@@ -437,7 +438,7 @@ export class ControlPlaneClient {
   constructor(
     private readonly baseUrl: string,
     private readonly connectionId: string,
-    private readonly privateKey: CryptoKey,
+    private readonly signingKey: DeviceSigningKey,
     private readonly sequences: ProtocolSequenceStore,
     private readonly request: typeof fetch = fetch,
     private readonly requestTimeoutMs = 30_000,
@@ -506,7 +507,7 @@ export class ControlPlaneClient {
         issuedAt: issuedAt.toISOString(),
         expiresAt: new Date(issuedAt.getTime() + 30_000).toISOString(),
       },
-      this.privateKey,
+      this.signingKey,
     );
     return this.send(result.browserSessionId, "results", envelope);
   }
@@ -531,7 +532,7 @@ export class ControlPlaneClient {
         issuedAt: issuedAt.toISOString(),
         expiresAt: new Date(issuedAt.getTime() + 30_000).toISOString(),
       },
-      this.privateKey,
+      this.signingKey,
     );
     const response = await this.requestWithTimeout(
       new URL(
@@ -585,7 +586,7 @@ export class ControlPlaneClient {
         expiresAt: new Date(issuedAt.getTime() + 30_000).toISOString(),
         ...operation,
       },
-      this.privateKey,
+      this.signingKey,
     );
     const response = await this.requestWithTimeout(
       new URL(
@@ -637,7 +638,7 @@ export class ControlPlaneClient {
         expiresAt: new Date(issuedAt.getTime() + 30_000).toISOString(),
         command,
       },
-      this.privateKey,
+      this.signingKey,
     );
   }
 

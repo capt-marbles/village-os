@@ -9,6 +9,7 @@ import {
   continuityFetchEnvelopeSchema,
   continuityRevisionDigestBytes,
   deviceIdSchema,
+  deviceSigningPublicKeySchema,
   encryptedContinuityRevisionSchema,
   instantSchema,
   principalIdSchema,
@@ -17,18 +18,13 @@ import {
 } from "@village/contracts";
 import { z } from "zod";
 import type { Environment } from "../../env.js";
-
-const ed25519PublicKeySchema = z.strictObject({
-  kty: z.literal("OKP"),
-  crv: z.literal("Ed25519"),
-  x: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
-});
+import { verifyDeviceSignature } from "../browser-control/device-credentials.js";
 
 const initializeSchema = z
   .strictObject({
     binding: continuityBindingSchema,
-    sourceSigningPublicKey: ed25519PublicKeySchema,
-    destinationSigningPublicKey: ed25519PublicKeySchema,
+    sourceSigningPublicKey: deviceSigningPublicKeySchema,
+    destinationSigningPublicKey: deviceSigningPublicKeySchema,
     createdAt: instantSchema,
     expiresAt: instantSchema,
   })
@@ -479,18 +475,10 @@ export class SiteSessionMailbox extends DurableObject<Environment> {
     metadata: MetadataRow,
   ): Promise<boolean> {
     try {
-      const key = await crypto.subtle.importKey(
-        "jwk",
-        JSON.parse(metadata.source_public_key_json),
-        "Ed25519",
-        false,
-        ["verify"],
-      );
       const { signature, ...unsigned } = revision;
-      return crypto.subtle.verify(
-        "Ed25519",
-        key,
-        decodeBase64Url(signature),
+      return verifyDeviceSignature(
+        JSON.parse(metadata.source_public_key_json),
+        signature,
         canonicalContinuityRevisionBytes(unsigned),
       );
     } catch {
@@ -606,17 +594,9 @@ async function verifySignedRequest<T extends { signature: string }>(
   canonicalize: (request: Omit<T, "signature">) => ArrayBuffer,
 ): Promise<boolean> {
   try {
-    const key = await crypto.subtle.importKey(
-      "jwk",
+    return verifyDeviceSignature(
       JSON.parse(publicKeyJson),
-      "Ed25519",
-      false,
-      ["verify"],
-    );
-    return crypto.subtle.verify(
-      "Ed25519",
-      key,
-      decodeBase64Url(request.signature),
+      request.signature,
       canonicalize(withoutSignature(request)),
     );
   } catch {

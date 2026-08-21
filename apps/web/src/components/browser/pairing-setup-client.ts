@@ -5,16 +5,12 @@ import {
   jobIdSchema,
   pairingIdSchema,
   principalIdSchema,
+  publicPairingRequestSchema,
   type Site,
+  type PublicPairingRequest,
 } from "@village/contracts";
 
-export interface PublicPairingRequest {
-  deviceId: string;
-  deviceDisplayName: string;
-  publicKey: { kty: "OKP"; crv: "Ed25519"; x: string };
-  protection: "OS_PROTECTED_FALLBACK";
-  secretHash: string;
-}
+export type { PublicPairingRequest } from "@village/contracts";
 
 export interface PairingChallenge {
   principalId: string;
@@ -66,17 +62,6 @@ export function readVillageCsrfCookie(): string | undefined {
   return undefined;
 }
 
-function exactKeys(
-  value: Record<string, unknown>,
-  expected: string[],
-): boolean {
-  const actual = Object.keys(value).toSorted();
-  return (
-    actual.length === expected.length &&
-    actual.every((key, index) => key === expected[index])
-  );
-}
-
 export function parsePublicPairingRequest(text: string): PublicPairingRequest {
   let value: unknown;
   try {
@@ -84,44 +69,9 @@ export function parsePublicPairingRequest(text: string): PublicPairingRequest {
   } catch {
     throw new Error("PAIRING_REQUEST_INVALID");
   }
-  const request = record(value);
-  const publicKey = record(request?.publicKey);
-  if (
-    !request ||
-    !publicKey ||
-    !exactKeys(request, [
-      "deviceDisplayName",
-      "deviceId",
-      "protection",
-      "publicKey",
-      "secretHash",
-    ]) ||
-    !exactKeys(publicKey, ["crv", "kty", "x"]) ||
-    !deviceIdSchema.safeParse(request.deviceId).success ||
-    typeof request.deviceDisplayName !== "string" ||
-    request.deviceDisplayName.trim().length === 0 ||
-    request.deviceDisplayName.length > 80 ||
-    publicKey.kty !== "OKP" ||
-    publicKey.crv !== "Ed25519" ||
-    typeof publicKey.x !== "string" ||
-    !/^[A-Za-z0-9_-]{1,128}$/.test(publicKey.x) ||
-    request.protection !== "OS_PROTECTED_FALLBACK" ||
-    typeof request.secretHash !== "string" ||
-    !/^[A-Za-z0-9_-]{43}$/.test(request.secretHash)
-  ) {
-    throw new Error("PAIRING_REQUEST_INVALID");
-  }
-  return {
-    deviceId: deviceIdSchema.parse(request.deviceId),
-    deviceDisplayName: String(request.deviceDisplayName),
-    publicKey: {
-      kty: "OKP",
-      crv: "Ed25519",
-      x: String(publicKey.x),
-    },
-    protection: "OS_PROTECTED_FALLBACK",
-    secretHash: String(request.secretHash),
-  };
+  const request = publicPairingRequestSchema.safeParse(value);
+  if (!request.success) throw new Error("PAIRING_REQUEST_INVALID");
+  return request.data;
 }
 
 const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";

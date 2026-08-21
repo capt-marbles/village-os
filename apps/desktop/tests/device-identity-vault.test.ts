@@ -1,10 +1,11 @@
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { canonicalCommandEnvelopeBytes } from "@village/contracts";
 import {
   DeviceIdentityVault,
+  type HardwareDeviceKeyProvider,
   type PlatformKeyProtector,
 } from "../src/main/device-identity-vault.js";
 
@@ -57,10 +58,10 @@ describe("OS-protected device identity vault", () => {
     const path = await vaultPath();
     const vault = new DeviceIdentityVault(path, new TestProtector());
     const created = await vault.create();
-    expect(created.privateKey.extractable).toBe(false);
+    expect(created).not.toHaveProperty("privateKey");
     const loaded = await vault.load();
     expect(loaded.publicJwk).toEqual(created.publicJwk);
-    expect(loaded.privateKey.extractable).toBe(false);
+    expect(loaded).not.toHaveProperty("privateKey");
 
     const message = canonicalCommandEnvelopeBytes({
       protocolVersion: 1,
@@ -75,19 +76,88 @@ describe("OS-protected device identity vault", () => {
       expiresAt: "2026-08-12T18:00:30.000Z",
       command: { capability: "OBSERVE", facts: ["AUTH_STATE"] },
     });
-    const signature = await crypto.subtle.sign(
+    const signature = await loaded.signer.sign(message);
+    const publicKey = await crypto.subtle.importKey(
+      "jwk",
+      loaded.publicJwk,
       "Ed25519",
-      loaded.privateKey,
-      message,
+      false,
+      ["verify"],
     );
     expect(
+      await crypto.subtle.verify("Ed25519", publicKey, signature, message),
+    ).toBe(true);
+  });
+
+  it("prefers a hardware-backed signer and never exposes its private key", async () => {
+    const keys = await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"],
+    );
+    const exported = await crypto.subtle.exportKey("jwk", keys.publicKey);
+    const publicKey = {
+      kty: "EC" as const,
+      crv: "P-256" as const,
+      x: exported.x!,
+      y: exported.y!,
+    };
+    const hardware: HardwareDeviceKeyProvider = {
+      availability: vi.fn().mockResolvedValue({
+        available: true,
+        backend: "secure_enclave",
+      }),
+      create: vi.fn().mockResolvedValue({
+        wrappedKey: "device-bound-wrapped-reference",
+        publicKey,
+      }),
+      publicKey: vi.fn().mockResolvedValue(publicKey),
+      sign: vi.fn((_, payload) =>
+        crypto.subtle.sign(
+          { name: "ECDSA", hash: "SHA-256" },
+          keys.privateKey,
+          payload,
+        ),
+      ),
+    };
+    const protector = new TestProtector(false);
+    const protectorAvailability = vi.spyOn(protector, "availability");
+    const path = await vaultPath();
+    const vault = new DeviceIdentityVault(path, protector, hardware);
+
+    const created = await vault.create();
+    const loaded = await vault.load();
+    expect(created).not.toHaveProperty("privateKey");
+    expect(loaded).not.toHaveProperty("privateKey");
+    expect(loaded).toMatchObject({
+      publicJwk: publicKey,
+      protection: "HARDWARE_NON_EXPORTABLE",
+      protectionBackend: "secure_enclave",
+    });
+    const payload = canonicalCommandEnvelopeBytes({
+      protocolVersion: 1,
+      principalId: "prn_01J00000000000000000000000",
+      deviceId: "dev_01J00000000000000000000000",
+      jobId: "job_01J00000000000000000000000",
+      browserSessionId: "brs_01J00000000000000000000000",
+      actionId: "act_01J00000000000000000000000",
+      leaseEpoch: 1,
+      sequence: 1,
+      issuedAt: "2026-08-12T18:00:00.000Z",
+      expiresAt: "2026-08-12T18:00:30.000Z",
+      command: { capability: "OBSERVE", facts: ["AUTH_STATE"] },
+    });
+    const signature = await loaded.signer.sign(payload);
+    expect(
       await crypto.subtle.verify(
-        "Ed25519",
-        loaded.publicKey,
+        { name: "ECDSA", hash: "SHA-256" },
+        keys.publicKey,
         signature,
-        message,
+        payload,
       ),
     ).toBe(true);
+    expect(await readFile(path, "utf8")).not.toContain("privateKey");
+    expect(protectorAvailability).not.toHaveBeenCalled();
   });
 
   it("fails closed for insecure backends and broad file permissions", async () => {

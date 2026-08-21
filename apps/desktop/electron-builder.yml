@@ -4,6 +4,8 @@ electronVersion: 43.2.0
 extraMetadata:
   villageUpdateSignerSha256: ${env.VILLAGE_RELEASE_SIGNER_SHA256}
 asar: true
+asarUnpack:
+  - dist/native/**
 electronFuses:
   resetAdHocDarwinSignature: true
   runAsNode: false

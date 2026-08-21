@@ -86,7 +86,7 @@ describe("runtime fixture continuity activation", () => {
         site: binding.site,
       },
       journalRoot: join(root, "source"),
-      devicePrivateKey: signing.privateKey,
+      deviceSigningKey: signing.privateKey,
       recipientPrivateKey: encryption.privateKey,
       cookieStore: {
         get: vi.fn(async () => [
@@ -132,7 +132,7 @@ describe("runtime fixture continuity activation", () => {
         site: binding.site,
       },
       journalRoot: join(root, "destination"),
-      devicePrivateKey: signing.privateKey,
+      deviceSigningKey: signing.privateKey,
       recipientPrivateKey: encryption.privateKey,
       cookieStore: destinationCookies,
       mailbox: {
@@ -176,7 +176,7 @@ describe("runtime fixture continuity activation", () => {
         site: binding.site,
       },
       journalRoot: "/unused",
-      devicePrivateKey: keys.privateKey,
+      deviceSigningKey: keys.privateKey,
       recipientPrivateKey: keys.privateKey,
       cookieStore: {
         get: vi.fn(),

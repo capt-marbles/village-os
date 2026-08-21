@@ -87,25 +87,82 @@ export const authenticatedQuotaPolicySchema = z.strictObject({
   maxRetainedEventsPerJob: z.number().int().positive().max(1_000_000),
 });
 
-export const deviceCredentialSchema = z.strictObject({
+export const ed25519DevicePublicKeySchema = z.strictObject({
+  kty: z.literal("OKP"),
+  crv: z.literal("Ed25519"),
+  x: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/),
+});
+
+export const p256DevicePublicKeySchema = z.strictObject({
+  kty: z.literal("EC"),
+  crv: z.literal("P-256"),
+  x: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  y: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+});
+
+export const deviceSigningPublicKeySchema = z.union([
+  ed25519DevicePublicKeySchema,
+  p256DevicePublicKeySchema,
+]);
+export type DeviceSigningPublicKey = z.infer<
+  typeof deviceSigningPublicKeySchema
+>;
+
+export const devicePairingMaterialSchema = z.union([
+  z.strictObject({
+    publicKey: p256DevicePublicKeySchema,
+    protection: z.literal("HARDWARE_NON_EXPORTABLE"),
+  }),
+  z.strictObject({
+    publicKey: ed25519DevicePublicKeySchema,
+    protection: z.literal("OS_PROTECTED_FALLBACK"),
+  }),
+]);
+export type DevicePairingMaterial = z.infer<typeof devicePairingMaterialSchema>;
+
+const deviceCredentialFields = {
   principalId: principalIdSchema,
   deviceId: deviceIdSchema,
-  algorithm: z.literal("Ed25519"),
-  publicKey: z.strictObject({
-    kty: z.literal("OKP"),
-    crv: z.literal("Ed25519"),
-    x: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/),
-  }),
-  protection: z.enum(["HARDWARE_NON_EXPORTABLE", "OS_PROTECTED_FALLBACK"]),
   status: z.enum(["ACTIVE", "REVOKED"]),
   createdAt: instantSchema,
-});
+};
+
+export const deviceCredentialSchema = z.union([
+  z.strictObject({
+    ...deviceCredentialFields,
+    ...devicePairingMaterialSchema.options[0].shape,
+    algorithm: z.literal("ES256"),
+  }),
+  z.strictObject({
+    ...deviceCredentialFields,
+    ...devicePairingMaterialSchema.options[1].shape,
+    algorithm: z.literal("Ed25519"),
+  }),
+]);
+
+const publicPairingRequestFields = {
+  deviceId: deviceIdSchema,
+  deviceDisplayName: z.string().trim().min(1).max(80),
+  secretHash: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+};
+
+export const publicPairingRequestSchema = z.union([
+  z.strictObject({
+    ...publicPairingRequestFields,
+    ...devicePairingMaterialSchema.options[0].shape,
+  }),
+  z.strictObject({
+    ...publicPairingRequestFields,
+    ...devicePairingMaterialSchema.options[1].shape,
+  }),
+]);
+export type PublicPairingRequest = z.infer<typeof publicPairingRequestSchema>;
 
 export const pairingChallengeSchema = z.strictObject({
   pairingId: pairingIdSchema,
   principalId: principalIdSchema,
   deviceDisplayName: z.string().min(1).max(80),
-  publicKey: deviceCredentialSchema.shape.publicKey,
+  publicKey: deviceSigningPublicKeySchema,
   expiresAt: instantSchema,
   attemptsRemaining: z.number().int().nonnegative().max(10),
   state: z.enum([

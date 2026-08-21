@@ -51,4 +51,31 @@ describe("device command credentials", () => {
       ),
     ).toBe(false);
   });
+
+  it("verifies an ES256 command from a P-256 device public key", async () => {
+    const keys = await crypto.subtle.generateKey(
+      { name: "ECDSA", namedCurve: "P-256" },
+      true,
+      ["sign", "verify"],
+    );
+    const signature = await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      keys.privateKey,
+      canonicalCommandEnvelopeBytes(unsigned),
+    );
+    const publicKey = await crypto.subtle.exportKey("jwk", keys.publicKey);
+    const signed = signedCommandEnvelopeSchema.parse({
+      ...unsigned,
+      signature: Buffer.from(signature).toString("base64url"),
+    });
+
+    expect(
+      await verifyCommandEnvelope(signed, {
+        kty: "EC",
+        crv: "P-256",
+        x: publicKey.x!,
+        y: publicKey.y!,
+      }),
+    ).toBe(true);
+  });
 });

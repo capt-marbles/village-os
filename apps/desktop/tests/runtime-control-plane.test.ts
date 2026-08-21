@@ -8,6 +8,7 @@ import {
 } from "@village/contracts";
 import { generateDeviceSigningKey } from "../src/main/device-identity.js";
 import { exportPublicDeviceJwk } from "../src/main/device-identity.js";
+import type { DeviceIdentity } from "../src/main/device-identity-vault.js";
 import { deviceIdForPublicKey } from "../src/main/pairing-bootstrap.js";
 import {
   assertDistinctBrowserSessionIdentity,
@@ -20,6 +21,21 @@ import {
   createRuntimeContinuityRecipient,
   createRuntimeFixtureContinuityRecipient,
 } from "../src/main/runtime-continuity-composition.js";
+
+function fallbackIdentity(
+  keys: CryptoKeyPair,
+  publicJwk: { kty: "OKP"; crv: "Ed25519"; x: string },
+): DeviceIdentity {
+  return {
+    signer: {
+      sign: (payload) =>
+        crypto.subtle.sign("Ed25519", keys.privateKey, payload),
+    },
+    publicJwk,
+    protection: "OS_PROTECTED_FALLBACK",
+    protectionBackend: "keychain",
+  };
+}
 
 describe("packaged runtime control-plane composition", () => {
   const temporaryDirectories: string[] = [];
@@ -80,12 +96,7 @@ describe("packaged runtime control-plane composition", () => {
         }),
       );
     const deviceIdentitySource = {
-      load: vi.fn(async () => ({
-        privateKey: keys.privateKey,
-        publicKey: keys.publicKey,
-        publicJwk,
-        protectionBackend: "keychain",
-      })),
+      load: vi.fn(async () => fallbackIdentity(keys, publicJwk)),
     };
 
     const firstProcess = await createRuntimeControlPlaneAutomationFence({
@@ -157,12 +168,7 @@ describe("packaged runtime control-plane composition", () => {
       userDataPath,
       identity,
       deviceIdentitySource: {
-        load: async () => ({
-          privateKey: keys.privateKey,
-          publicKey: keys.publicKey,
-          publicJwk,
-          protectionBackend: "keychain",
-        }),
+        load: async () => fallbackIdentity(keys, publicJwk),
       },
       request,
     });
@@ -231,12 +237,7 @@ describe("packaged runtime control-plane composition", () => {
       userDataPath,
       identity,
       deviceIdentitySource: {
-        load: async () => ({
-          privateKey: signingKeys.privateKey,
-          publicKey: signingKeys.publicKey,
-          publicJwk,
-          protectionBackend: "keychain",
-        }),
+        load: async () => fallbackIdentity(signingKeys, publicJwk),
       },
       recipientKeySource,
       request,
@@ -307,12 +308,7 @@ describe("packaged runtime control-plane composition", () => {
         fixtureBrowserSessionId,
       },
       deviceIdentitySource: {
-        load: async () => ({
-          privateKey: signingKeys.privateKey,
-          publicKey: signingKeys.publicKey,
-          publicJwk,
-          protectionBackend: "keychain",
-        }),
+        load: async () => fallbackIdentity(signingKeys, publicJwk),
       },
       recipientKeySource: {
         load: async () => ({
@@ -350,12 +346,7 @@ describe("packaged runtime control-plane composition", () => {
           browserSessionId: "brs_01J00000000000000000000000",
         },
         deviceIdentitySource: {
-          load: async () => ({
-            privateKey: keys.privateKey,
-            publicKey: keys.publicKey,
-            publicJwk,
-            protectionBackend: "keychain",
-          }),
+          load: async () => fallbackIdentity(keys, publicJwk),
         },
         connectionId: "desktop-mismatch",
       }),
@@ -376,12 +367,7 @@ describe("packaged runtime control-plane composition", () => {
         browserSessionId: "brs_01J00000000000000000000000",
       },
       deviceIdentitySource: {
-        load: async () => ({
-          privateKey: keys.privateKey,
-          publicKey: keys.publicKey,
-          publicJwk,
-          protectionBackend: "keychain",
-        }),
+        load: async () => fallbackIdentity(keys, publicJwk),
       },
       request: vi.fn<typeof fetch>(),
     });
@@ -455,12 +441,7 @@ describe("packaged runtime control-plane composition", () => {
       userDataPath,
       identity,
       deviceIdentitySource: {
-        load: async () => ({
-          privateKey: keys.privateKey,
-          publicKey: keys.publicKey,
-          publicJwk,
-          protectionBackend: "keychain",
-        }),
+        load: async () => fallbackIdentity(keys, publicJwk),
       },
       connectionId: "desktop-paired-workflow",
       request,

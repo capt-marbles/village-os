@@ -10,6 +10,10 @@ import {
   FixtureContinuityDestination,
   FixtureContinuitySource,
 } from "./site-session-continuity.js";
+import {
+  importDeviceVerificationKey,
+  type DeviceSigningKey,
+} from "./device-identity.js";
 
 type ActivationCookieStore = {
   get(filter: CookiesGetFilter): Promise<Cookie[]>;
@@ -36,7 +40,7 @@ type ActivationMailbox = {
 interface RuntimeContinuityActivationOptions {
   identity: ContinuityActivationIdentity;
   journalRoot: string;
-  devicePrivateKey: CryptoKey;
+  deviceSigningKey: DeviceSigningKey;
   recipientPrivateKey: CryptoKey;
   cookieStore: ActivationCookieStore;
   mailbox: ActivationMailbox;
@@ -93,7 +97,7 @@ export class RuntimeContinuityActivation {
         "source",
       ),
       cookieStore: this.options.cookieStore,
-      sourceSigningKey: this.options.devicePrivateKey,
+      sourceSigningKey: this.options.deviceSigningKey,
       destinationEncryptionKey: destinationKey,
       publish: (revision) => this.options.mailbox.publish(revision),
       ...(this.options.now ? { now: this.options.now } : {}),
@@ -109,12 +113,8 @@ export class RuntimeContinuityActivation {
   private async applyDestination(
     activation: Extract<ContinuityActivation, { role: "DESTINATION" }>,
   ): Promise<RuntimeContinuityActivationResult> {
-    const sourceKey = await crypto.subtle.importKey(
-      "jwk",
+    const sourceSigningKey = await importDeviceVerificationKey(
       activation.peerSigningPublicKey,
-      "Ed25519",
-      false,
-      ["verify"],
     );
     const destination = new FixtureContinuityDestination({
       binding: activation.binding,
@@ -124,7 +124,7 @@ export class RuntimeContinuityActivation {
         "destination",
       ),
       cookieStore: this.options.cookieStore,
-      sourceSigningKey: sourceKey,
+      sourceSigningKey,
       destinationEncryptionKey: this.options.recipientPrivateKey,
       ...(this.options.now ? { now: this.options.now } : {}),
     });

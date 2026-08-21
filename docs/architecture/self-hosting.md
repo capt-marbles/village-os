@@ -27,9 +27,11 @@ Production deployments use `cloudflare-access` and must set:
 The Worker verifies the Access assertion signature, issuer, audience, and
 algorithm before mapping its subject to a stable Village principal. Browser
 mutations additionally require an exact allowed origin and a matching
-double-submit CSRF value. Desktop protocol requests carry short-lived Ed25519
-envelopes bound to principal, device, job, session, action, lease epoch,
-sequence, and protocol version.
+double-submit CSRF value. Desktop protocol requests carry short-lived
+device-signed envelopes bound to principal, device, job, session, action,
+lease epoch, sequence, and protocol version. The registered credential records
+its exact algorithm and protection class; the Worker accepts only the matching
+P-256/ES256 hardware path or the Ed25519 OS-protected fallback.
 
 The checked-in Wrangler variables intentionally describe local development.
 Do not deploy them unchanged. Replace the placeholder D1 database identifier,
@@ -54,14 +56,25 @@ HTTP event cursor remains the recovery contract after disconnects or gaps.
 
 ## Desktop device keys
 
-The macOS-first desktop generates its Ed25519 device key in the Electron main
-process. It exports private key material only transiently for encryption by the
-asynchronous Electron `safeStorage` provider, zeroes the temporary byte buffer,
-and persists only a versioned encrypted blob with owner-only file permissions.
-On load, the key is imported as non-exportable before use. Renderers receive
-neither the encrypted blob nor the live key.
+On a packaged Mac, a new desktop identity prefers a P-256 signing key generated
+inside the Secure Enclave. A small bundled Swift helper returns only the public
+JWK, signatures, and CryptoKit's device-bound wrapped representation; raw
+private-key material cannot cross into Electron. The main process stores that
+wrapped representation in an owner-only versioned file and invokes the helper
+through bounded JSON on standard input. Renderers receive neither the wrapped
+representation nor a signing capability.
 
-Village fails closed when an OS-protected provider is unavailable. In
-particular, Linux's `basic_text` fallback is not accepted. Corrupt files,
-symbolic links, and files with group or world permissions are rejected rather
-than silently replaced.
+If the Secure Enclave is genuinely unavailable, Village uses the supported
+Ed25519 fallback. It exports private key material only transiently for
+encryption by Electron `safeStorage`, zeroes the temporary byte buffer, and
+persists only a versioned encrypted blob with owner-only permissions. On load,
+the key is imported as non-exportable before use. An existing version-1
+Ed25519 identity remains on this fallback until the owner re-pairs or rotates
+that device; Village never silently replaces an enrolled credential.
+
+Village fails closed if a stored Secure Enclave identity can no longer be
+opened or if a supposedly available hardware provider fails during creation.
+It also fails closed when the fallback OS-protected provider is unavailable;
+in particular, Linux's `basic_text` backend is not accepted. Corrupt files,
+symbolic links, public-key mismatches, and files with group or world
+permissions are rejected rather than silently replaced.

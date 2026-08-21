@@ -11,6 +11,7 @@ import {
   workflowOperationRequestSchema,
   continuityRecipientKeyEnrollmentSchema,
   continuityActivationRequestSchema,
+  deviceSigningPublicKeySchema,
 } from "@village/contracts";
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
@@ -25,24 +26,12 @@ export async function verifyResultEnvelope(
 ): Promise<boolean> {
   const parsed = signedResultEnvelopeSchema.safeParse(candidate);
   if (!parsed.success) return false;
-  try {
-    const key = await crypto.subtle.importKey(
-      "jwk",
-      publicJwk,
-      "Ed25519",
-      false,
-      ["verify"],
-    );
-    const { signature, ...unsigned } = parsed.data;
-    return crypto.subtle.verify(
-      "Ed25519",
-      key,
-      decodeBase64Url(signature),
-      canonicalResultEnvelopeBytes(unsigned),
-    );
-  } catch {
-    return false;
-  }
+  const { signature, ...unsigned } = parsed.data;
+  return verifyDeviceSignature(
+    publicJwk,
+    signature,
+    canonicalResultEnvelopeBytes(unsigned),
+  );
 }
 
 function decodeBase64Url(value: string): ArrayBuffer {
@@ -60,24 +49,12 @@ export async function verifyCommandEnvelope(
 ): Promise<boolean> {
   const parsed = signedCommandEnvelopeSchema.safeParse(candidate);
   if (!parsed.success) return false;
-  try {
-    const key = await crypto.subtle.importKey(
-      "jwk",
-      publicJwk,
-      "Ed25519",
-      false,
-      ["verify"],
-    );
-    const { signature, ...unsigned } = parsed.data;
-    return crypto.subtle.verify(
-      "Ed25519",
-      key,
-      decodeBase64Url(signature),
-      canonicalCommandEnvelopeBytes(unsigned),
-    );
-  } catch {
-    return false;
-  }
+  const { signature, ...unsigned } = parsed.data;
+  return verifyDeviceSignature(
+    publicJwk,
+    signature,
+    canonicalCommandEnvelopeBytes(unsigned),
+  );
 }
 
 export async function verifyAutomationSyncRequest(
@@ -86,24 +63,12 @@ export async function verifyAutomationSyncRequest(
 ): Promise<boolean> {
   const parsed = automationSyncRequestSchema.safeParse(candidate);
   if (!parsed.success) return false;
-  try {
-    const key = await crypto.subtle.importKey(
-      "jwk",
-      publicJwk,
-      "Ed25519",
-      false,
-      ["verify"],
-    );
-    const { signature, ...unsigned } = parsed.data;
-    return crypto.subtle.verify(
-      "Ed25519",
-      key,
-      decodeBase64Url(signature),
-      canonicalAutomationSyncRequestBytes(unsigned),
-    );
-  } catch {
-    return false;
-  }
+  const { signature, ...unsigned } = parsed.data;
+  return verifyDeviceSignature(
+    publicJwk,
+    signature,
+    canonicalAutomationSyncRequestBytes(unsigned),
+  );
 }
 
 export async function verifyWorkflowOperationRequest(
@@ -112,24 +77,12 @@ export async function verifyWorkflowOperationRequest(
 ): Promise<boolean> {
   const parsed = workflowOperationRequestSchema.safeParse(candidate);
   if (!parsed.success) return false;
-  try {
-    const key = await crypto.subtle.importKey(
-      "jwk",
-      publicJwk,
-      "Ed25519",
-      false,
-      ["verify"],
-    );
-    const { signature, ...unsigned } = parsed.data;
-    return crypto.subtle.verify(
-      "Ed25519",
-      key,
-      decodeBase64Url(signature),
-      canonicalWorkflowOperationRequestBytes(unsigned),
-    );
-  } catch {
-    return false;
-  }
+  const { signature, ...unsigned } = parsed.data;
+  return verifyDeviceSignature(
+    publicJwk,
+    signature,
+    canonicalWorkflowOperationRequestBytes(unsigned),
+  );
 }
 
 export async function verifyContinuityRecipientKeyEnrollment(
@@ -138,24 +91,12 @@ export async function verifyContinuityRecipientKeyEnrollment(
 ): Promise<boolean> {
   const parsed = continuityRecipientKeyEnrollmentSchema.safeParse(candidate);
   if (!parsed.success) return false;
-  try {
-    const key = await crypto.subtle.importKey(
-      "jwk",
-      publicJwk,
-      "Ed25519",
-      false,
-      ["verify"],
-    );
-    const { signature, ...unsigned } = parsed.data;
-    return crypto.subtle.verify(
-      "Ed25519",
-      key,
-      decodeBase64Url(signature),
-      canonicalContinuityRecipientKeyEnrollmentBytes(unsigned),
-    );
-  } catch {
-    return false;
-  }
+  const { signature, ...unsigned } = parsed.data;
+  return verifyDeviceSignature(
+    publicJwk,
+    signature,
+    canonicalContinuityRecipientKeyEnrollmentBytes(unsigned),
+  );
 }
 
 export async function verifyContinuityActivationRequest(
@@ -164,20 +105,43 @@ export async function verifyContinuityActivationRequest(
 ): Promise<boolean> {
   const parsed = continuityActivationRequestSchema.safeParse(candidate);
   if (!parsed.success) return false;
+  const { signature, ...unsigned } = parsed.data;
+  return verifyDeviceSignature(
+    publicJwk,
+    signature,
+    canonicalContinuityActivationRequestBytes(unsigned),
+  );
+}
+
+export async function verifyDeviceSignature(
+  publicJwk: JsonWebKey,
+  signature: string,
+  payload: ArrayBuffer,
+): Promise<boolean> {
   try {
+    const parsedKey = deviceSigningPublicKeySchema.parse(
+      publicJwk.kty === "EC"
+        ? {
+            kty: publicJwk.kty,
+            crv: publicJwk.crv,
+            x: publicJwk.x,
+            y: publicJwk.y,
+          }
+        : { kty: publicJwk.kty, crv: publicJwk.crv, x: publicJwk.x },
+    );
+    const isHardwareKey = parsedKey.kty === "EC";
     const key = await crypto.subtle.importKey(
       "jwk",
-      publicJwk,
-      "Ed25519",
+      parsedKey,
+      isHardwareKey ? { name: "ECDSA", namedCurve: "P-256" } : "Ed25519",
       false,
       ["verify"],
     );
-    const { signature, ...unsigned } = parsed.data;
     return crypto.subtle.verify(
-      "Ed25519",
+      isHardwareKey ? { name: "ECDSA", hash: "SHA-256" } : "Ed25519",
       key,
       decodeBase64Url(signature),
-      canonicalContinuityActivationRequestBytes(unsigned),
+      payload,
     );
   } catch {
     return false;

@@ -8,12 +8,42 @@ const publicJwk = {
 };
 
 describe("pairing bootstrap", () => {
+  it("advertises a Secure Enclave public key as hardware non-exportable", async () => {
+    const hardwarePublicKey = {
+      kty: "EC" as const,
+      crv: "P-256" as const,
+      x: "a".repeat(43),
+      y: "b".repeat(43),
+    };
+    const service = new PairingBootstrapService(
+      {
+        load: vi.fn().mockResolvedValue({
+          publicJwk: hardwarePublicKey,
+          protection: "HARDWARE_NON_EXPORTABLE",
+          protectionBackend: "secure_enclave",
+        }),
+        create: vi.fn(),
+      },
+      { consume: vi.fn() },
+      { store: vi.fn() },
+      () => "dev_01J00000000000000000000000",
+      "Village desktop",
+      () => "a".repeat(43),
+    );
+
+    await expect(service.request()).resolves.toMatchObject({
+      publicKey: hardwarePublicKey,
+      protection: "HARDWARE_NON_EXPORTABLE",
+    });
+  });
+
   it("exposes only public device material and persists confirmed runtime identity", async () => {
     const missing = Object.assign(new Error("missing"), { code: "ENOENT" });
     const identityVault = {
       load: vi.fn().mockRejectedValue(missing),
       create: vi.fn().mockResolvedValue({
         publicJwk,
+        protection: "OS_PROTECTED_FALLBACK",
         protectionBackend: "keychain",
       }),
     };
@@ -66,6 +96,7 @@ describe("pairing bootstrap", () => {
       {
         load: vi.fn().mockResolvedValue({
           publicJwk,
+          protection: "OS_PROTECTED_FALLBACK",
           protectionBackend: "keychain",
         }),
         create: vi.fn(),
@@ -97,6 +128,7 @@ describe("pairing bootstrap", () => {
       {
         load: vi.fn().mockResolvedValue({
           publicJwk,
+          protection: "OS_PROTECTED_FALLBACK",
           protectionBackend: "keychain",
         }),
         create: vi.fn(),
@@ -128,6 +160,7 @@ describe("pairing bootstrap", () => {
       {
         load: vi.fn().mockResolvedValue({
           publicJwk,
+          protection: "OS_PROTECTED_FALLBACK",
           protectionBackend: "keychain",
         }),
         create: vi.fn(),
